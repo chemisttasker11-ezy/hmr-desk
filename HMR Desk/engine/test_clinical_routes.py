@@ -25,6 +25,8 @@ def test_pathology_and_reconciliation_routes_match_numeric_patient_id(tmp_path, 
 
 def test_health_uses_actual_schema_version_and_refuses_unapproved_template(tmp_path, monkeypatch):
     monkeypatch.setattr(api.app_paths, 'engine_assets', lambda: tmp_path)
+    import template_report_builder
+    monkeypatch.setattr(template_report_builder, 'active_template_root', lambda: tmp_path)
     conn = db.connect(str(tmp_path / 'check.db'))
     status, health = api.handle(conn, 'GET', '/api/health', {}, None)
     assert status == 200
