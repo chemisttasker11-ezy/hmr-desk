@@ -13,6 +13,8 @@ npm ci
 if ($LASTEXITCODE -ne 0) { throw 'npm ci failed' }
 npm test
 if ($LASTEXITCODE -ne 0) { throw 'Desktop tests failed' }
+& (Join-Path $root 'scripts\\bundle-libreoffice.ps1')
+if ($LASTEXITCODE -ne 0) { throw 'Portable PDF converter bundling failed' }
 npm run dist
 if ($LASTEXITCODE -ne 0) { throw 'NSIS build failed' }
 Write-Host 'Build complete. Windows clean-machine E2E and clinical template sign-off are still required.'
