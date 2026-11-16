@@ -26,6 +26,7 @@ contextBridge.exposeInMainWorld('hmr', {
   openRoute: (url) => ipcRenderer.invoke('open-route', url),
   config: () => ipcRenderer.invoke('config'),
   storage: action => ipcRenderer.invoke('storage', action),
+  retireRecordCopies: () => ipcRenderer.invoke('records-retire'),
   exportRecords: patientId => ipcRenderer.invoke('records-export', patientId),
   encryptedBackup: (action, passphrase) => ipcRenderer.invoke('encrypted-backup', action, passphrase),
   migrateWorkspace: passphrase => ipcRenderer.invoke('migrate-workspace', passphrase),
