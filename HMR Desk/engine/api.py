@@ -21,11 +21,14 @@ import messaging
 import jobs
 import agents
 import steps
+import app_paths
+import manual_medicine_names
 
 
 
 def helper(filename, stop):
-    path = Path(__file__).resolve().parent.parent.parent / filename
+    path = app_paths.resource_root() / filename
+    if not path.is_file(): return None
     spec = importlib.util.spec_from_file_location('hmr_' + path.stem.replace('-', '_'), path)
     module = importlib.util.module_from_spec(spec)
     tree = ast.parse(path.read_text(encoding='utf-8-sig'), filename=str(path))
@@ -34,12 +37,17 @@ def helper(filename, stop):
     return module
 
 
-MIMS_PATH = Path(__file__).resolve().parent.parent.parent / 'MIMS Interaction Helper' / 'make-lists.py'
+MIMS_PATH = app_paths.resource_root() / 'MIMS Interaction Helper' / 'make-lists.py'
 claims_helper = helper('PPA Claim Helper/make-claims.py', {'claims'})
-mims = helper('MIMS Interaction Helper/make-lists.py', {'lists'})
-# record_report's CLI is guarded, so normal importing has no side effects.
-_record_spec = importlib.util.spec_from_file_location('hmr_record', Path(__file__).resolve().parent.parent.parent / 'PPA Claim Helper' / 'record_report.py')
-record = importlib.util.module_from_spec(_record_spec); _record_spec.loader.exec_module(record)
+mims = helper('MIMS Interaction Helper/make-lists.py', {'lists'}) or manual_medicine_names
+# External portal scripts are optional. A missing proprietary/unsupported
+# helper must NEVER stop the entirely manual, offline clinical HMR application.
+_record_path = app_paths.resource_root() / 'PPA Claim Helper' / 'record_report.py'
+record = None
+if _record_path.is_file():
+    _record_spec = importlib.util.spec_from_file_location('hmr_record', _record_path)
+    record = importlib.util.module_from_spec(_record_spec)
+    _record_spec.loader.exec_module(record)
 
 
 def report_data(p):
@@ -133,6 +141,7 @@ def confirmed_medicines_current(p):
     except (ValueError, KeyError, TypeError): return False
 
 def mims_lists(conn):
+    if not MIMS_PATH.is_file(): return []  # licensed portal integration unavailable
     result = []
     for p in conn.execute("SELECT * FROM patients WHERE archived_at IS NULL AND state IN ('visited','report_drafted') ORDER BY name"):
         folder = jobs.patient_folder(p)
@@ -167,6 +176,7 @@ def mims_lists(conn):
 
 
 def claim_list(conn):
+    if claims_helper is None or record is None: return []  # PPA integration unavailable
     result = []
     for p in conn.execute("SELECT * FROM patients WHERE state='sent' AND is_test=0 AND archived_at IS NULL ORDER BY name"):
         spec = report_data(p) or {}
@@ -537,7 +547,9 @@ def handle(conn, method, path, query, body):
     try:
         if method == 'GET' and path == '/api/health':
             return 200, {'ready': True, 'engine_version': '0.1.0', 'schema_version': 1,
-                         'capabilities': {'manual_hmr': True, 'clinical_ai_optional': True}}
+                         'capabilities': {'manual_hmr': True, 'clinical_ai_optional': True,
+                                          'mims_helper_available': MIMS_PATH.is_file(),
+                                          'ppa_helper_available': bool(claims_helper and record)}}
         if method == 'POST' and path == '/api/auth/proda/start': return 200, proda_sms.start(settings.get(conn, 'proda_auto_sms_login'), body)
         if method == 'POST' and path == '/api/auth/proda/poll': return 200, proda_sms.poll(settings.get(conn, 'proda_auto_sms_login'), body)
         if method == 'POST' and path == '/api/auth/proda/finish': return 200, proda_sms.finish(body)
