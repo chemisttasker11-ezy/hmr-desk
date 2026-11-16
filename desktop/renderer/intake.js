@@ -15,10 +15,13 @@ function renderReferrals() {
   const labels = {name:'Patient name', dob:'Date of birth', gp:'GP', referral_date:'Referral date', medicare:'Medicare', irn:'IRN', ihi:'IHI'};
   const counts = ['review', 'duplicate', 'rejected', 'error', 'added'].map(status => `${status}: ${referralRows.filter(row => row.status === status).length}`).join(' · ');
   target.innerHTML = `${referralRows.length ? `<p>${esc(counts)}</p>` : ''}` + referralRows.map((row, i) => `<article class="card"><h3>${esc(row.file)}</h3><p><strong>${esc(({review:'Ready for review',duplicate:'Possible duplicate',rejected:'Not recognised as a referral',error:'Could not read PDF',added:'Added'})[row.status] || row.status)}</strong>${row.message ? ': ' + esc(row.message) : ''}</p>
-    ${row.status === 'duplicate' ? `<p>${row.duplicate_kind === 'identity' ? 'The extracted name matches another patient or referral. Check and correct the details before adding; an existing name cannot be added twice.' : 'This PDF has already been reviewed or added.'}</p>` : ''}
+    ${row.status === 'duplicate' ? `<p>${row.duplicate_kind === 'identity' ? 'The extracted name matches an existing patient or another referral. Compare date of birth and identifiers before adding. A different person with the same name requires explicit acknowledgement.' : 'This PDF has already been reviewed or added.'}</p>` : ''}
     ${row.flags?.length ? `<p class="flag">${row.flags.map(esc).join('<br>')}</p>` : ''}
     ${row.page_previews?.length ? `<details class="referral-source-preview"><summary>Review extracted PDF pages (${row.page_previews.length} shown)</summary><div class="referral-page-preview">${row.page_previews.map(page => `<section class="card"><h4>Source page ${esc(page.page)} — ${page.method === 'ocr' ? 'OCR (unconfirmed)' : 'PDF text (unconfirmed)'}</h4><pre style="white-space:pre-wrap;overflow-wrap:anywhere">${esc(page.text || 'No readable text; inspect the original PDF')}</pre></section>`).join('')}</div><p>Compare these unconfirmed values to the original PDF before adding the patient. OCR is not evidence of correctness.</p></details>` : ''}
-    ${row.status === 'review' || (row.status === 'duplicate' && row.duplicate_kind === 'identity' && row.kind === 'referral') ? `<form data-referral-commit="${i}" class="form">${['name','dob','gp','referral_date','clinic','phone','address','suburb','sex','medicare','irn','ihi'].map(k => `<label>${esc(labels[k] || k)}<input name="${k}" value="${esc(row.fields?.[k] || '')}"></label>`).join('')}<button class="primary">Confirm and add patient</button><p class="error" role="alert"></p></form>` : ''}
+    ${row.status === 'review' || (row.status === 'duplicate' && row.duplicate_kind === 'identity' && row.kind === 'referral') ? `<form data-referral-commit="${i}" class="form">${['name','dob','gp','referral_date','clinic','phone','address','suburb','sex','medicare','irn','ihi'].map(k => `<label>${esc(labels[k] || k)}<input name="${k}" value="${esc(row.fields?.[k] || '')}"></label>`).join('')}${row.status === 'duplicate' && row.duplicate_kind === 'identity' ? `<fieldset><legend>Same-name patient safety check</legend>
+    ${row.duplicate_candidates?.length ? `<p>Existing local records to compare: ${row.duplicate_candidates.map(candidate => `#${Number(candidate.id)} · ${esc(candidate.name)} · DOB ${esc(candidate.dob || 'unknown')} · GP ${esc(candidate.gp || 'unknown')}`).join('; ')}</p>` : '<p>Another referral in this batch contains this name.</p>'}
+    <label><input type="checkbox" data-distinct-person required> I compared reliable identifiers against the source PDF and confirm this is a different person (not a duplicate document).</label>
+    <p>If the DOB, Medicare number or IHI match, open the existing patient instead. If reliable identifiers are unavailable, gather them before creating another same-name record.</p></fieldset>` : ''}<button class="primary">Confirm and add patient</button><p class="error" role="alert"></p></form>` : ''}
     ${row.patient_id ? `<button data-referral-open="${Number(row.patient_id)}">Open patient</button>` : ''}</article>`).join('');
 }
 
@@ -44,7 +47,7 @@ document.addEventListener('submit', async event => {
   const row = referralRows[Number(form.dataset.referralCommit)], button = form.querySelector('button');
   button.disabled = true;
   try {
-    const result = await hmr.api('POST', '/api/referrals/commit', { token: row.token, fields: Object.fromEntries(new FormData(form)) });
+    const result = await hmr.api('POST', '/api/referrals/commit', { token: row.token, fields: Object.fromEntries(new FormData(form)), distinct_person: !!form.querySelector('[data-distinct-person]')?.checked });
     row.status = 'added'; row.patient_id = result.patient_id;
     row.dirty = false;
     if (page === 'intake') formOpen = referralRows.some(item => item.dirty && item.status !== 'added');
