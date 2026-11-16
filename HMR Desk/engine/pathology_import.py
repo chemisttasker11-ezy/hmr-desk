@@ -69,9 +69,13 @@ def import_pdf(patient, file_path):
             raise ValueError('Maximum pathology source count reached')
         if any(item['sha256'] == digest for item in index['sources']):
             raise ValueError('This exact pathology PDF is already imported')
-        patient_dir = jobs.patient_folder(patient)
+        patient_dir = jobs.patient_folder(patient).resolve()
         target_dir = patient_dir / 'Pathology'
+        if target_dir.is_symlink():
+            raise ValueError('Unsafe pathology folder')
         target_dir.mkdir(exist_ok=True)
+        if target_dir.resolve().parent != patient_dir or not target_dir.is_dir():
+            raise ValueError('Pathology folder must be inside the patient workspace')
         safe = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', source.name).strip(' .')
         if not safe or not safe.lower().endswith('.pdf'):
             safe = 'Pathology source.pdf'
