@@ -2,6 +2,7 @@
 Location: %USERPROFILE%\\HMR-Desk-data\\hmr.db (see DATA_DIR); override with env HMR_DB (tests).
 Run `python db.py` for a self-check."""
 import datetime, json, os, re, sqlite3, unicodedata, tempfile
+from contextlib import closing
 import app_paths
 
 BASE = str(app_paths.workspace_root())
@@ -142,7 +143,7 @@ def preserve_legacy_sqlite(conn):
     fd, target = tempfile.mkstemp(prefix='before-schema-', suffix='.db', dir=root)
     os.close(fd)
     try:
-        with sqlite3.connect(target) as snapshot:
+        with closing(sqlite3.connect(target)) as snapshot:
             conn.backup(snapshot)
             if snapshot.execute('PRAGMA integrity_check').fetchone()[0] != 'ok':
                 raise ValueError('Migration rollback snapshot failed SQLite integrity')
