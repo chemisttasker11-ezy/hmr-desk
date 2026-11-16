@@ -26,6 +26,7 @@ let reportId = '',
 const reportSaver = H.autosaver({
   getRecord: () => reportRecord,
   getId: () => reportId,
+  draftKey: () => `report:${reportId}`,
   endpoint: (id, record) => hmr.api('POST', `/api/patients/${encodeURIComponent(id)}/report`, record),
   status: (message) => {
     reportSaveStatus = message.startsWith('Saved ') ? 'All changes saved' : message === 'Not saved' ? 'Unsaved changes' : message;
