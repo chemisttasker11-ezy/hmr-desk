@@ -14,7 +14,7 @@ VALID_STATES = {"", "unknown", "taking", "not_using"}
 def normalise(name):
     if not isinstance(name, str):
         return ""
-    return re.sub(r"\\s+", " ", name).strip().casefold()
+    return re.sub(r"\s+", " ", name).strip().casefold()
 
 
 def _flag(flags, code, medicine_id, message, severity="review"):
