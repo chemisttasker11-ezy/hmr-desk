@@ -24,8 +24,15 @@ def main(argv=None):
     import app_paths
     app_paths.ensure_writable(app_paths.data_root())
     app_paths.ensure_writable(app_paths.workspace_root())
-    import service
-    service.main()
+    try:
+        import service
+        service.main()
+    except Exception as exc:
+        # Record only exception class, never patient values, raw paths or secrets.
+        from pathlib import Path
+        failure = Path(app_paths.data_root()) / 'startup-failure.txt'
+        failure.write_text(type(exc).__module__ + '.' + type(exc).__name__ + '\\n', encoding='utf-8')
+        raise
     return 0
 
 
