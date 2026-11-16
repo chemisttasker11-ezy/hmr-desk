@@ -8,7 +8,7 @@ const dataDir = path.join(process.env.USERPROFILE || app.getPath('home'), 'HMR-D
 // gets a private redirected AppData, which would hide the saved logins from a normal launch.
 if (!process.env.HMR_SMOKE_DATA) app.setPath('userData', path.join(dataDir, 'app-profile'));
 const defaults = {
-  base: path.join(process.env.USERPROFILE || app.getPath('home'), 'OneDrive', 'Documents', 'Desktop', 'HMR Ongoing'),
+  base: path.join(dataDir, 'workspace'),
   api: 'http://127.0.0.1:8767',
   tokenFile: path.join(dataDir, 'api_token'),
 };
@@ -16,6 +16,8 @@ fs.mkdirSync(dataDir, { recursive: true });
 const configPath = path.join(dataDir, 'app-config.json');
 if (!fs.existsSync(configPath)) fs.writeFileSync(configPath, JSON.stringify(defaults, null, 2));
 const config = { ...defaults, ...JSON.parse(fs.readFileSync(configPath, 'utf8')) };
+let engineOwner = null;
+const { start: startEngine } = require('./src/engine-owner');
 const sites = {
   mhr: {
     url: 'https://proda.humanservices.gov.au/',
@@ -317,7 +319,16 @@ app.on('second-instance', () => {
   }
 });
 if (hasLock)
-  app.whenReady().then(() => {
+  app.whenReady().then(async () => {
+    if (app.isPackaged && !process.env.HMR_API && !process.env.HMR_SMOKE_URL && !process.env.HMR_SHOTS) {
+      try {
+        engineOwner = await startEngine({ resourcesPath: process.resourcesPath, dataDir, workspace: config.base, config });
+      } catch (error) {
+        dialog.showErrorBox('HMR Desk engine unavailable', error.message);
+        app.quit();
+        return;
+      }
+    }
     win = new BrowserWindow({
       width: 1440,
       height: 900,
@@ -383,6 +394,7 @@ if (hasLock)
       win = null;
     });
   });
+app.on('before-quit', () => { if (engineOwner) engineOwner.stop(); });
 app.on('window-all-closed', () => app.quit());
 
 async function captureShots() {
