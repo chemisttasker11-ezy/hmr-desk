@@ -596,6 +596,18 @@ def handle(conn, method, path, query, body):
             if match[2] == 'resolve': return 200, inbox.resolve(conn, row, body)
             return 200, messaging.approve(conn, row, body) if match[2] == 'approve' else messaging.discard(conn, row)
         if path == '/api/agents' and method == 'GET': return 200, agents.public(agents.load())
+        if path == '/api/templates/register' and method == 'POST':
+            import template_report_builder
+            if not isinstance(body, dict) or set(body) != {'source', 'version', 'approved_by', 'owner_authorised'}:
+                raise ValueError('Invalid template registration request')
+            result = template_report_builder.register(
+                body['source'], body['version'], body['approved_by'], body['owner_authorised']
+            )
+            db.log(conn, None, 'template_registered',
+                   {'version': result['version'], 'sha256': result['sha256'],
+                    'approved_by': result['approved_by']}, 'app')
+            conn.commit()
+            return 200, result
         if path == '/api/backups/create' and method == 'POST':
             import backup_bundle
             if not isinstance(body, dict) or set(body) != {'target', 'passphrase'}: raise ValueError('invalid backup input')
