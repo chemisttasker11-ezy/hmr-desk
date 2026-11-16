@@ -274,6 +274,19 @@ def _user_tables(conn):
         "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")]
 
 
+def _replace_retry(source, target, seconds=10):
+    """os.replace that waits briefly when Windows still has the file open (antivirus, indexer, a stale handle)."""
+    deadline = time.time() + seconds
+    while True:
+        try:
+            os.replace(source, target)
+            return
+        except PermissionError:
+            if time.time() > deadline:
+                raise
+            time.sleep(0.3)
+
+
 def encrypt_plain_file(path, key, keep_original=False):
     """Encrypt an unencrypted SQLite file in place and verify it before the original is destroyed.
 
@@ -316,8 +329,8 @@ def encrypt_plain_file(path, key, keep_original=False):
         for suffix in ('-wal', '-shm', '-journal'):
             if os.path.exists(path + suffix):
                 os.unlink(path + suffix)
-        os.replace(path, old)
-        os.replace(tmp, path)
+        _replace_retry(path, old)
+        _replace_retry(tmp, path)
     except Exception:
         for leftover in (tmp, tmp + '-wal', tmp + '-shm', tmp + '-journal'):
             if os.path.exists(leftover):
