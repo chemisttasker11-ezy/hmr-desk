@@ -69,6 +69,30 @@
         "filter": [
           "**/*"
         ]
+      },
+      {
+        "from": "../Pathology Chrome Helper",
+        "to": "browser-helpers/Pathology Chrome Helper",
+        "filter": [
+          "manifest.json",
+          "content.js"
+        ]
+      },
+      {
+        "from": "../MIMS Interaction Helper",
+        "to": "browser-helpers/MIMS Interaction Helper",
+        "filter": [
+          "manifest.json",
+          "content.js"
+        ]
+      },
+      {
+        "from": "../PPA Claim Helper",
+        "to": "browser-helpers/PPA Claim Helper",
+        "filter": [
+          "manifest.json",
+          "content.js"
+        ]
       }
     ]
   },
