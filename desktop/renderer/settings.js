@@ -53,7 +53,7 @@ let agentMessage = '';
 let agentEntries = [];
 let addAgentOpen = false;
 async function settings() {
-  const [c, signIns, data, practice] = await Promise.all([
+  const [c, signIns, data, practice, health] = await Promise.all([
     hmr.config(),
     hmr.signIns('list'),
     hmr.api('GET', '/api/agents'),
@@ -61,6 +61,7 @@ async function settings() {
       .api('GET', '/api/settings')
       .then((result) => ({ result }))
       .catch((error) => ({ error })),
+    hmr.api('GET', '/api/health').catch(error => ({error:errorText(error)})),
   ]);
   practiceError = practice.error ? errorText(practice.error) : '';
   practiceSettings = practice.result?.settings || [];
@@ -70,7 +71,25 @@ async function settings() {
       .filter((a) => a.enabled)
       .map((a) => `<option value="${esc(a.name)}" ${a.name === selected ? 'selected' : ''}>${esc(a.name)}</option>`)
       .join('');
+  const caps = health?.capabilities || {};
+  const aiDisabled = !practiceSettings.some(item =>
+    (item.key === 'ai_interview_assist' || item.key === 'ai_report_assist') &&
+    item.value !== 'off' && item.value !== false);
+  const ready = health?.ready === true;
   $('screen').innerHTML = `<h2>Settings</h2>${practiceFields()}
+    <section class="card" aria-label="Offline and external service capabilities">
+      <h2>Standalone capabilities and online services</h2>
+      <p role="status">Local engine: ${ready ? 'Ready and authenticated' : 'Unavailable — ' + esc(health?.error || 'check the engine')}.
+      PDF converter: ${caps.pdf_converter_available ? 'bundled and detected' : 'not available; Word drafts remain available'}.
+      Owner-approved report layout: ${caps.approved_template_available ? 'registered (visual acceptance still required)' : 'not yet registered; output is provisional'}.</p>
+      <p>Manual HMR: ${ready && caps.manual_hmr ? 'available independently of online services' : 'not currently available'}.
+      Clinical AI: ${aiDisabled ? 'off in interview and report settings' : 'optional assisted mode enabled; check privacy controls'}.
+      OCR: ${caps.ocr_component_bundled ? 'Windows helper bundled; scanned text requires visual confirmation' : 'unavailable; source/manual review remains available'}.</p>
+      <p>External optional MIMS, AMH, PRODA/My Health Record, PPA and SMS each require internet and separate authorised accounts/licences.
+      ${!navigator.onLine ? 'This device currently reports offline. Online services are unavailable.' :
+        'The device reports possible network connectivity; portal authentication and licences have not been verified.'}
+      Their unavailability must not block the manual HMR workflow. Authorised identifying SMS remains separate from clinical AI.</p>
+    </section>
     <section class="card"><h2>Encrypted patient-data backup</h2><p>Back up the database and all files in the configured patient workspace. Store the backup outside that workspace and keep your passphrase safely: it cannot be recovered.</p><div class="actions"><button type="button" data-hmr-backup="create">Back up now</button><button type="button" data-hmr-backup="preview">Verify and preview a backup</button><button type="button" data-hmr-backup="restore">Restore into a separate folder</button><button type="button" data-restored-activate>Activate a verified isolated restored dataset (with rollback)</button></div><p id="backup-result" role="status"></p></section>
     <section class="card"><h2>Owner-approved HMR report template</h2>
       <p>The full layout must be approved by the owner, have matching short and long example reports, and include named HMR placeholders. Brainstorming PDFs and patient case reports are not a substitute.</p>
