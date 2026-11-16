@@ -2,7 +2,7 @@ let referralRows = [];
 const REFERRAL_IDENTITY_KEYS = ['name','dob','gp','referral_date','clinic','phone',
   'address','suburb','sex','medicare','irn','ihi'];
 function referralReviewFields(form) {
-  const data = new FormData(form);
+  const data = new Map(new FormData(form));
   return {
     fields: Object.fromEntries(REFERRAL_IDENTITY_KEYS.map(key => [key, String(data.get(key) || '')])),
     clinical: {
