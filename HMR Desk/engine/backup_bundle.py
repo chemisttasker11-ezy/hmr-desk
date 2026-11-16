@@ -224,6 +224,11 @@ def restore(source, destination, password, preview_only=False):
                         'workspace_files': sum(name.startswith('workspace/') for name in files),
                         'will_activate': False,
                     }
+            # The independently restored directory carries the authenticated
+            # manifest for a later explicit, hash-checked activation. It never
+            # affects the live workspace or SQLite database during restore.
+            (stage / 'restore-manifest.json').write_text(
+                json.dumps(manifest, sort_keys=True), encoding='utf-8')
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(stage), str(destination))
     return {'restored': True, 'destination': str(destination)}
