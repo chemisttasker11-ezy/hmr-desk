@@ -42,6 +42,21 @@ def source_snapshot(patient):
     return dict(sorted(result.items()))
 
 
+def clinical_snapshot_hash(conn, patient):
+    """Canonical read-only source snapshot. Never edits legacy JSON."""
+    import clinical_snapshot
+    folder = jobs.patient_folder(patient)
+    report = jobs.report_spec_path(patient)
+    spec = json.loads(report.read_text(encoding='utf-8')) if report.is_file() else {}
+    source = folder / 'referral_source.json'
+    provenance = json.loads(source.read_text(encoding='utf-8')) if source.is_file() else {}
+    canonical = clinical_snapshot.canonical(
+        dict(patient), interview.load(conn, patient),
+        pathology_records.load(patient), spec, provenance, source_snapshot(patient)
+    )
+    return clinical_snapshot.digest(canonical)
+
+
 def generated_versions(conn, patient):
     """Only job-generated, auditable files in the patient's own folder."""
     root = jobs.patient_folder(patient).resolve()
@@ -109,6 +124,8 @@ def check_approval(conn, patient, body):
         raise ValueError('Approved template changed since report generation; rebuild first')
     if detail.get('source_files_sha256') != source_snapshot(patient):
         raise ValueError('Original referral or pathology source changed since report generation')
+    if detail.get('clinical_snapshot_sha256') != clinical_snapshot_hash(conn, patient):
+        raise ValueError('Clinical source contract changed since report generation; rebuild')
     root = jobs.patient_folder(patient).resolve()
     file = (root / filename).resolve()
     if file.parent != root or not file.is_file() or digest(file) != sha or sha != detail.get('sha256'):
@@ -140,6 +157,7 @@ def check_approval(conn, patient, body):
         'template_sha256': detail['template_sha256'],
         'template_version': detail['template_version'],
         'source_files_sha256': detail['source_files_sha256'],
+        'clinical_snapshot_sha256': detail['clinical_snapshot_sha256'],
         'reviewer': reviewer.strip(),
         'medicine_review_hash': review_status['source_hash'],
         'clinical_reviewed': True,
@@ -170,6 +188,8 @@ def check_sent(conn, patient):
         raise ValueError('Pathology was edited after sign-off')
     if evidence.get('source_files_sha256') != source_snapshot(patient):
         raise ValueError('Original source files changed after sign-off')
+    if evidence.get('clinical_snapshot_sha256') != clinical_snapshot_hash(conn, patient):
+        raise ValueError('Clinical source contract was changed after signing')
     import reconciliation
     current = reconciliation.digest(interview.load(conn, patient))
     if not evidence.get('medicine_review_hash') or current != evidence['medicine_review_hash']:
