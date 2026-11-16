@@ -745,14 +745,23 @@ def handle(conn, method, path, query, body):
                     conn.rollback(); return 409, {'error': 'interview conflict'}
                 return 200, result
         match = re.fullmatch(r'/api/patients/(\\d+)/reconciliation', path)
-        if match and method == 'GET':
+        if match and method in ('GET', 'POST'):
             import interview
             import reconciliation
             p = conn.execute('SELECT * FROM patients WHERE id=?', (int(match[1]),)).fetchone()
             if not p: return 404, {'error': 'patient not found'}
             record = interview.load(conn, p)
+            review_file = jobs.patient_folder(p) / 'reconciliation_review.json'
+            saved_review = json.loads(review_file.read_text(encoding='utf-8')) if review_file.is_file() else {}
+            if method == 'POST':
+                if not isinstance(body, dict) or set(body) != {'source_hash', 'reviewed_by'}: raise ValueError('invalid reconciliation review')
+                review = reconciliation.acknowledge(record, body['source_hash'], body['reviewed_by'])
+                jobs.atomic_json(review_file, review)
+                db.log(conn, p['id'], 'reconciliation_reviewed', {'source_hash': review['source_hash']}, 'api')
+                conn.commit()
+                return 200, reconciliation.review_status(record, review)
             result = reconciliation.audit(record)
-            result['source_hash'] = reconciliation.digest(record)
+            result.update(reconciliation.review_status(record, saved_review))
             return 200, result
         match = re.fullmatch(r'/api/patients/(\d+)/interview', path)
         if match:
