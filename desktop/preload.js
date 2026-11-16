@@ -21,6 +21,7 @@ contextBridge.exposeInMainWorld('hmr', {
   },
   signIns: (action, site, mode) => ipcRenderer.invoke('sign-ins', action, site, mode),
   onSignIn: (fn) => ipcRenderer.on('sign-in-state', (_e, r) => fn(r)),
+  onEngineState: fn => ipcRenderer.on('engine-state', (_event, state) => fn(state)),
   tab: (action, site, url) => ipcRenderer.invoke('tab', action, site, url),
   openRoute: (url) => ipcRenderer.invoke('open-route', url),
   config: () => ipcRenderer.invoke('config'),
