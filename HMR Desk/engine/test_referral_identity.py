@@ -46,3 +46,37 @@ def test_same_name_requires_explicit_different_identifiers(tmp_path, monkeypatch
     assert people[0]['dob'] != people[1]['dob']
     assert (workspace / people[1]['folder'] / 'referral.pdf').read_bytes() == payload
     conn.close()
+
+
+def test_unrecognised_scan_retained_for_explicit_manual_pharmacist_intake(tmp_path, monkeypatch):
+    import fitz
+    workspace = tmp_path / 'workspace'
+    data = tmp_path / 'data'
+    workspace.mkdir()
+    data.mkdir()
+    monkeypatch.setattr(db, 'BASE', str(workspace))
+    monkeypatch.setattr(db, 'DATA_DIR', str(data))
+    doc = fitz.open()
+    doc.new_page()
+    source = tmp_path / 'scanned-referral.pdf'
+    doc.save(source)
+    doc.close()
+
+    class SyntheticOfflineOcr:
+        def ocr_pdfs(self, sources): return {}
+        def classify(self, text): return 'other', '', ['No machine-readable referral text']
+        def extract_fields(self, text): return {}, []
+
+    monkeypatch.setattr(referral_entry, 'parser', lambda: SyntheticOfflineOcr())
+    conn = db.connect(str(data / 'hmr.db'))
+    reviewed = referral_entry.review(conn, [str(source)])['rows'][0]
+    assert reviewed['status'] == 'manual'
+    assert 'OCR unavailable' in ' '.join(reviewed['flags'])
+    assert reviewed['fields'] == {}
+    with pytest.raises(ValueError, match='explicit pharmacist confirmation'):
+        referral_entry.commit(conn, reviewed['token'], {'name': 'Synthetic Patient'})
+    accepted = referral_entry.commit(conn, reviewed['token'], {'name': 'Synthetic Patient'}, manual_referral=True)
+    assert accepted['patient_id'] > 0
+    p = conn.execute('SELECT folder FROM patients WHERE id=?', (accepted['patient_id'],)).fetchone()
+    assert (workspace / p['folder'] / 'referral.pdf').read_bytes() == source.read_bytes()
+    conn.close()
