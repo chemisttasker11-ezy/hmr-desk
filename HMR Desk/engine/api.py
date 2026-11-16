@@ -562,6 +562,15 @@ def handle(conn, method, path, query, body):
             if match[2] == 'resolve': return 200, inbox.resolve(conn, row, body)
             return 200, messaging.approve(conn, row, body) if match[2] == 'approve' else messaging.discard(conn, row)
         if path == '/api/agents' and method == 'GET': return 200, agents.public(agents.load())
+        if path == '/api/backups/create' and method == 'POST':
+            import backup_bundle
+            if not isinstance(body, dict) or set(body) != {'target', 'passphrase'}: raise ValueError('invalid backup input')
+            return 200, backup_bundle.create(conn, db.BASE, body['target'], body['passphrase'])
+        if path == '/api/backups/restore' and method == 'POST':
+            import backup_bundle
+            if not isinstance(body, dict) or set(body) != {'source', 'destination', 'passphrase'}: raise ValueError('invalid restore input')
+            # Restore into a new, isolated directory; NEVER replace an active database.
+            return 200, backup_bundle.restore(body['source'], body['destination'], body['passphrase'])
         if path == '/api/settings' and method == 'GET': return 200, {'settings': settings.listing(conn)}
         if path == '/api/settings' and method == 'POST':
             settings.update(conn, body); db.log(conn, None, 'settings_updated', {'keys': list(body)}, 'api'); conn.commit()
