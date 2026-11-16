@@ -434,7 +434,7 @@ def _action(conn, p, body, moved_items):
         rec_name = stem + (f' ({n})' if n > 1 else '') + '.txt'
         records.put(conn, pid, rec_name, ('Checked by hand by ' + settings.get(conn, 'pharmacist_name') + ' on ' + today.strftime('%d/%m/%Y') + '\n' + text).encode('utf-8'))
         db.log(conn, pid, name, {'file': rec_name}, 'app')
-        conn.execute("UPDATE tasks SET state='done',output=?,finished=? WHERE patient_id=? AND step='interactions' AND state IN ('queued','waiting')", (path.name, db.now(), pid))
+        conn.execute("UPDATE tasks SET state='done',output=?,finished=? WHERE patient_id=? AND step='interactions' AND state IN ('queued','waiting')", (rec_name, db.now(), pid))
     elif name in ('archive', 'unarchive'):
         if name == 'archive' and p['state'] not in ('claimed', 'declined', 'expired'):
             raise ValueError('Cannot archive this patient')
@@ -601,6 +601,23 @@ def handle(conn, method, path, query, body):
                     'approved_by': result['approved_by']}, 'app')
             conn.commit()
             return 200, result
+        if path == '/api/records/status' and method == 'GET':
+            return 200, records.status(conn, lambda row: jobs.patient_folder(row))
+        if path == '/api/records/migrate' and method == 'POST':
+            return 200, records.migrate_all(conn, lambda row: jobs.patient_folder(row))
+        if path == '/api/records/export' and method == 'POST':
+            if not isinstance(body, dict) or set(body) != {'patient_id', 'destination'} or not isinstance(body['patient_id'], int): raise ValueError('invalid export input')
+            row = conn.execute('SELECT * FROM patients WHERE id=?', (body['patient_id'],)).fetchone()
+            if not row: raise ValueError('patient not found')
+            dest = Path(body['destination']) if isinstance(body['destination'], str) else None
+            if not dest or not dest.is_absolute() or dest.is_symlink(): raise ValueError('choose an export folder')
+            resolved = dest.resolve()
+            for guarded in (Path(db.DATA_DIR).resolve(), Path(db.BASE).resolve()):
+                if resolved == guarded or guarded in resolved.parents: raise ValueError('export outside the app data and the patient workspace')
+            result = records.export_folder(conn, row['id'], resolved)
+            db.log(conn, row['id'], 'records_exported', {'count': len(result)}, 'api')
+            conn.commit()
+            return 200, {'files': result, 'folder': str(resolved), 'warning': 'This copy is outside the encryption HMR Desk applies to its own storage.'}
         if path == '/api/backups/create' and method == 'POST':
             import backup_bundle
             if not isinstance(body, dict) or set(body) != {'target', 'passphrase'}: raise ValueError('invalid backup input')
@@ -727,6 +744,7 @@ def handle(conn, method, path, query, body):
             patient = conn.execute('SELECT * FROM patients WHERE id=?', (row['patient_id'],)).fetchone() if row['step'] == 'interactions' and body['state'] == 'done' else None
             with interview.record_lock(patient) if patient else nullcontext():
                 if row['step'] == 'interactions' and body['state'] == 'done':
+                    if patient: steps.ingest_generated(conn, patient, body.get('mims_result'))
                     if not patient or not steps.interactions_result_current(conn, patient, body.get('mims_result')):
                         body = {**body, 'state': 'failed', 'output': 'Medicine list changed or result could not be verified; run the interaction check again.'}
                 if row['step'] == 'pathology' and body.get('output', '').strip().lower() == 'no report to read':
