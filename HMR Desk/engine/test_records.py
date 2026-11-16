@@ -153,3 +153,62 @@ def test_backup_bundle_carries_records(conn, tmp_path):
             c2 = db.connect(str(p)); found = records.get(c2, pid, 'interview.json'); c2.close()
         except Exception: pass
     assert found == b'{"notes":"synthetic backup"}'
+
+
+def test_files_outside_patient_folders_migrate_and_are_read_from_the_store(conn, tmp_path):
+    import json, jobs, importer
+    pid, folder = _patient(conn, tmp_path)
+    sorting = tmp_path / 'workspace' / 'TO SORT'; sorting.mkdir(parents=True, exist_ok=True)
+    (sorting / 'intake_corrections.json').write_text(json.dumps({'a.pdf': {'suburb': 'Sampleton'}}), encoding='utf-8')
+    (tmp_path / 'userdata' / 'history-import-plan.json').write_text('[]', encoding='utf-8')
+    spec = jobs.interview_spec_path(dict(conn.execute('SELECT * FROM patients WHERE id=?', (pid,)).fetchone()))
+    spec.parent.mkdir(parents=True, exist_ok=True); spec.write_text('{"notes":"synthetic"}', encoding='utf-8')
+    folder_for = lambda row: jobs.patient_folder(row)
+    first = records.migrate_all(conn, folder_for, jobs.outside_files)
+    assert first['imported'] == 3 and first['conflict'] == 0
+    assert records.get_json(conn, records.GLOBAL_PATIENT, 'intake_corrections.json') == {'a.pdf': {'suburb': 'Sampleton'}}
+    assert records.get_json(conn, pid, 'interview_spec.json') == {'notes': 'synthetic'}
+    # a repeat is safe and a newer stored record is never overwritten by the stale plain file
+    records.put_json(conn, records.GLOBAL_PATIENT, 'intake_corrections.json', {'a.pdf': {'suburb': 'Newer'}}); conn.commit()
+    again = records.migrate_all(conn, folder_for, jobs.outside_files)
+    assert again['imported'] == 0 and again['conflict'] == 1 and again['already'] == 2
+    assert records.get_json(conn, records.GLOBAL_PATIENT, 'intake_corrections.json')['a.pdf']['suburb'] == 'Newer'
+    assert 'Sampleton' in (sorting / 'intake_corrections.json').read_text(encoding='utf-8')  # plain file untouched
+    st = records.status(conn, folder_for, jobs.outside_files)
+    assert st['saved_records_protected'] is False and st['plain_files_differing_or_not_stored'] == 1
+
+
+def test_global_names_only_for_the_shared_slot_and_never_import_from_patient_folders(conn, tmp_path):
+    import jobs
+    pid, folder = _patient(conn, tmp_path)
+    with pytest.raises(ValueError):
+        records.put(conn, pid, 'history-import-plan.json', b'[]')
+    (folder / 'intake_corrections.json').write_text('{}', encoding='utf-8')
+    assert 'intake_corrections.json' not in records.import_folder(conn, pid, folder)
+    records.put(conn, records.GLOBAL_PATIENT, 'history-import-plan.json', b'[]')
+    with pytest.raises(ValueError):
+        records.put(conn, records.GLOBAL_PATIENT, 'other.json', b'[]')
+
+
+def test_corrections_write_to_the_store_not_the_plain_file(conn, tmp_path):
+    import json, jobs
+    sorting = tmp_path / 'workspace' / 'TO SORT'; sorting.mkdir(parents=True, exist_ok=True)
+    plain = sorting / 'intake_corrections.json'; plain.write_text(json.dumps({'a.pdf': {'suburb': 'Old'}}), encoding='utf-8')
+    conn.close()
+    jobs.correction('a.pdf', {'suburb': 'New'})
+    assert json.loads(plain.read_text(encoding='utf-8')) == {'a.pdf': {'suburb': 'Old'}}
+    with contextlib.closing(db.connect()) as c2:
+        assert records.get_json(c2, records.GLOBAL_PATIENT, 'intake_corrections.json') == {'a.pdf': {'suburb': 'New'}}
+
+
+def test_shared_export_api_includes_shared_records_only(conn, tmp_path):
+    import api
+    pid, _ = _patient(conn, tmp_path)
+    records.put_json(conn, records.GLOBAL_PATIENT, 'intake_corrections.json', {'synthetic': True})
+    records.put_json(conn, pid, 'interview.json', {'private': 'synthetic'})
+    conn.commit()
+    out = tmp_path / 'shared-export'
+    status, body = api.handle(conn, 'POST', '/api/records/export', {}, {'patient_id': 0, 'destination': str(out)})
+    assert status == 200 and body['files'] == {'intake_corrections.json': 'written'}
+    assert not (out / 'interview.json').exists()
+    assert (out / records.EXPORT_NOTE).exists()
