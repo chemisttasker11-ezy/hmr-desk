@@ -77,6 +77,17 @@ const sites = {
 let win;
 const state = { active: null };
 const results = [];
+const reviewedReferrals = new Map(); // Ephemeral, token-bound source paths, never renderer-provided paths
+async function rememberReviewedReferrals(paths, response) {
+  for (let i = 0; i < (response?.rows || []).length; i++) {
+    const row = response.rows[i];
+    if (/^[a-f0-9]{32}$/.test(row.token || '') && /^[a-f0-9]{64}$/.test(row.sha256 || ''))
+      reviewedReferrals.set(row.token, { path: paths[i], sha256: row.sha256, timestamp: Date.now() });
+  }
+  for (const [token, record] of reviewedReferrals) {
+    if (Date.now() - record.timestamp > 30 * 60 * 1000) reviewedReferrals.delete(token);
+  }
+}
 const views = {},
   armed = {},
   queues = {},
@@ -193,11 +204,32 @@ ipcMain.handle('referral-pick', async (e, kind) => {
     .map(entry => path.join(picked.filePaths[0], entry.name));
   if (!paths.length) return { rows: [{ file: 'Folder', status: 'rejected', message: 'No PDFs found in this folder.' }] };
   if (paths.length > 100) throw Error(`Folder contains ${paths.length} PDFs. Choose up to 100 files at a time.`);
-  return api('POST', '/api/referrals/review', { paths });
+  const response = await api('POST', '/api/referrals/review', { paths });
+  await rememberReviewedReferrals(paths, response);
+  return response;
 });
 ipcMain.handle('referral-drop', async (e, paths) => {
   if (e.sender !== win.webContents || !Array.isArray(paths) || !paths.length || paths.length > 100 || paths.some(p => typeof p !== 'string' || !p)) throw Error('Invalid files');
-  return api('POST', '/api/referrals/review', { paths });
+  const response = await api('POST', '/api/referrals/review', { paths });
+  await rememberReviewedReferrals(paths, response);
+  return response;
+});
+ipcMain.handle('open-reviewed-referral', async (e, token) => {
+  if (e.sender !== win.webContents || typeof token !== 'string' || !/^[a-f0-9]{32}$/.test(token)) throw Error('Forbidden');
+  const record = reviewedReferrals.get(token);
+  if (!record || Date.now() - record.timestamp > 30 * 60 * 1000) throw Error('Referral review expired; choose the PDF again');
+  const file = record.path;
+  const stat = await fsp.lstat(file);
+  if (!stat.isFile() || stat.isSymbolicLink() || path.extname(file).toLowerCase() !== '.pdf' || stat.size > 25 * 1024 * 1024)
+    throw Error('The original referral is not a valid regular PDF');
+  const crypto = require('node:crypto');
+  const hash = crypto.createHash('sha256');
+  const bytes = await fsp.readFile(file);
+  hash.update(bytes);
+  if (hash.digest('hex') !== record.sha256) throw Error('Original referral changed; please review the new version');
+  const error = await shell.openPath(file); // Uses the OS PDF viewer, never serves patient files over HTTP.
+  if (error) throw Error('Could not open original PDF in the installed PDF viewer');
+  return { opened: true };
 });
 ipcMain.handle('open-route', async (e, url) => {
   if (e.sender !== win.webContents) throw Error('Forbidden');
