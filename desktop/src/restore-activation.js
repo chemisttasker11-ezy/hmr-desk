@@ -78,7 +78,7 @@ async function recoverInterruptedRestore(dataDir,configPath) {
   try {
     await fs.access(saved);
     await fs.rm(active,{force:true});
-    for (const suffix of ('','-wal','-shm')) {
+    for (const suffix of ['', '-wal', '-shm']) {
       const old = path.join(rollback,'hmr.db'+suffix);
       await moveIfExists(old,path.join(dataDir,'hmr.db'+suffix));
     }
@@ -115,7 +115,7 @@ async function activateRestored(restoredDir,dataDir,configPath) {
   await fs.writeFile(journalPath,JSON.stringify({rollback,originalConfig:previousConfig,
     newWorkspace:targetWorkspace}),{flag:'wx',mode:0o600});
   try {
-    for (const suffix of ('','-wal','-shm')) {
+    for (const suffix of ['', '-wal', '-shm']) {
       await moveIfExists(path.join(data,'hmr.db'+suffix),path.join(rollback,'hmr.db'+suffix));
     }
     await fs.rename(staged,path.join(data,'hmr.db'));
