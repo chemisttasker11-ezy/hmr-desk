@@ -48,3 +48,28 @@ def export(conn, patient, number):
             with target.open('xb') as out: doc.save(out)
             return str(target)
         except FileExistsError: n += 1
+
+
+def medicine_context(conn, patient):
+    """Read-only context from the saved interview, never a current-medication confirmation.
+
+    No parsing of source documents, terminology lookup, status promotion or follow-up changes. A saved
+    reference remains visible even when its separately licensed catalog is missing or updated.
+    """
+    import interview
+    content = records.get(conn, patient['id'], 'interview.json')
+    if content is None:
+        return {'available': False, 'revision': 'missing', 'medicines': []}
+    saved = json.loads(content)
+    interview.validate(saved)
+    result = []
+    for key, origin in (('meds', 'Referral'), ('other_meds', 'Found during interview')):
+        details = saved.get('details', {}).get(key, [])
+        for i, row in enumerate(saved.get(key, [])):
+            meta = details[i] if i < len(details) else {}
+            result.append({'origin': origin, 'name': row[0],
+                           'listed_directions': row[1] if key == 'meds' else '',
+                           'interview_directions': row[2] if key == 'meds' else row[1],
+                           'use': interview.use_text(meta) or 'Not recorded',
+                           'reference': dict(meta['reference']) if interview.valid_reference(meta.get('reference')) else None})
+    return {'available': True, 'revision': records.digest(content), 'medicines': result}
