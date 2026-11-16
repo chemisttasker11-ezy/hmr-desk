@@ -145,6 +145,31 @@ def blank(conn, patient):
     record['details']['meds'] = [{'packed': '', 'as_instructed': False} for _ in record['meds']]
     if found is not None:
         for i in ceased: record['details']['meds'][i].update(use_status='not_using', use_reason='', use_details='Ceased per referral')
+    # Clinical fields entered at intake are not automatically promoted unless
+    # a named pharmacist confirmed them against an exact original PDF page.
+    reviewed_source = folder / 'referral_source.json'
+    if reviewed_source.is_file():
+        reviewed = json.loads(reviewed_source.read_text(encoding='utf-8')).get('clinical_review', {})
+        if reviewed.get('confirmed') is True and reviewed.get('source_page', 0) >= 1:
+            origin = 'referral.pdf page ' + str(reviewed['source_page'])
+            reviewer = reviewed.get('reviewed_by', '')
+            if reviewed.get('conditions'):
+                record['conditions'] = reviewed['conditions']
+                record['sources'].append('Conditions confirmed: ' + origin + '; ' + reviewer)
+            allergy_state = reviewed.get('allergies_status', 'unknown')
+            if allergy_state == 'explicit_none':
+                record['allergies'] = 'No known allergies — explicitly documented in ' + origin
+                record['sources'].append('Allergy negative confirmed: ' + origin + '; ' + reviewer)
+            elif allergy_state == 'listed' and reviewed.get('allergies'):
+                record['allergies'] = reviewed['allergies']
+                record['sources'].append('Allergies confirmed: ' + origin + '; ' + reviewer)
+            if reviewed.get('medicines'):
+                record['clarify'].append('Confirmed prescribed referral list from ' + origin +
+                                         ' (actual use still to reconcile): ' + reviewed['medicines'][:9000])
+            if reviewed.get('observations'):
+                record['obs'].append(['Referral observation', reviewed['observations'], origin])
+        elif any(reviewed.get(k) for k in ('conditions','medicines','observations','allergies')):
+            record['clarify'].append('Unconfirmed source material was entered during intake; review original PDF')
     return record
 
 class Conflict(Exception):
