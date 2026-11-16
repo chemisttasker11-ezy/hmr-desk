@@ -791,6 +791,33 @@ async function captureShots() {
       }
       const image = await win.webContents.capturePage();
       await fsp.writeFile(path.join(output, (page === 'to_book' ? 'book' : page) + '.png'), image.toPNG());
+      if (['interview', 'settings', 'intake'].includes(page)) {
+        // Visual layout QA only. These are synthetic mock screenshots, NOT an
+        // installed clinical E2E or accessibility sign-off.
+        const viewEvidence = [];
+        for (const zoom of [1.25, 1.5]) {
+          win.webContents.setZoomFactor(zoom);
+          await new Promise(resolve => setTimeout(resolve, 350));
+          const audit = await win.webContents.executeJavaScript(`(() => {
+            const visible = element => element.getClientRects().length > 0;
+            const controls = [...document.querySelectorAll('button, input, select, textarea, a[href]')]
+              .filter(element => visible(element) && !element.disabled);
+            const nameless = controls.filter(element =>
+              !element.getAttribute('aria-label') && !element.getAttribute('title') &&
+              !element.labels?.length && !element.textContent.trim() && !element.getAttribute('placeholder'));
+            return {
+              controls: controls.length, missing_names: nameless.length,
+              horizontal_document_overflow: document.documentElement.scrollWidth > innerWidth + 5,
+              focusable: !!controls.find(element => element.tabIndex >= 0),
+            };
+          })()`);
+          viewEvidence.push({zoom, ...audit});
+          await shot(page + '-scale-' + Math.round(zoom * 100));
+        }
+        win.webContents.setZoomFactor(1);
+        await fsp.writeFile(path.join(output, page + '-accessibility-audit.json'),
+          JSON.stringify({synthetic_mock_only:true,page,views:viewEvidence},null,2));
+      }
       if (page === 'patients') {
         for (const stage of ['booking', 'ready', 'report']) {
           await win.webContents.executeJavaScript(`showPatient(patients.find(p => p.stage === '${stage}').id)`);
