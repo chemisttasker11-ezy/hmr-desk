@@ -23,7 +23,7 @@ CI hosts are GitHub-hosted Windows Server runners, not a clean Windows 11 standa
 | --- | --- | --- |
 | Provenance | Clinical review v2 stores a source page per field (conditions, allergies, medicines, observations); the legacy single `source_page` is still read | `test_clinical_review_pages.py` |
 | Backup | Approved template folder and history are included in the encrypted backup; settings are in `hmr.db`; `app-config.json` and the API token are excluded on purpose | `test_backup_template.py`, `restore-activation.test.js` |
-| PDF review | Report PDFs and referral original PDFs open in a sandboxed bundled viewer window, with no Word or file association needed; Word stays optional. Pathology source PDFs still open in the system default PDF viewer | `report-preview-bundled.test.js` (static check of `main.js`) |
+| PDF review | Report PDFs, referral originals and pathology source PDFs open in a sandboxed bundled viewer window, with no Word or file association needed; Word stays optional | `report-preview-bundled.test.js` (static check of `main.js`) |
 | Rollback | Restore activation records a pending-health state; automatic rollback after repeated unhealthy launches, a prompt on engine start failure, and a Settings rollback button | `restore-activation.test.js` |
 | Template tables | Generated tables copy the approved template table formatting; generic grid only when the template has no table | `test_template_table_format.py` |
 | Release traceability | `installer-manifest.json` records `git_sha` (checkout), `checkout_merge_sha` and `pull_request_head_sha` | CI manifest step |
