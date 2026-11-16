@@ -53,3 +53,26 @@ jobs:
         run: |
           npm ci
           npm test
+
+
+  ui-visual-synthetic:
+    runs-on: windows-2022
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install locked Electron dev tools
+        working-directory: desktop
+        run: npm ci
+      - name: Exercise synthetic desktop screens and 125/150 percent layout
+        working-directory: desktop
+        run: npm run shots
+      - name: Upload synthetic-only visual/accessibility audit
+        uses: actions/upload-artifact@v4
+        with:
+          name: hmr-m2-synthetic-ui-layout-audit
+          path: desktop/shots/
+          if-no-files-found: error
+          retention-days: 7
