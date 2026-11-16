@@ -34,6 +34,9 @@ def load(conn, patient, ai=False):
     data = json.loads(target.read_text(encoding='utf-8'))
     validate(data)
     if not ai: data['interview_newer'] = 'interview_revision' in data and interview.revision(jobs.patient_folder(patient) / 'interview.json') != data['interview_revision']
+    if not ai:
+        import pathology_records
+        data['pathology_newer'] = 'pathology_revision' in data and pathology_records.revision(pathology_records.file_for(patient)) != data['pathology_revision']
     return data
 
 def save(conn, patient, data):
@@ -41,7 +44,7 @@ def save(conn, patient, data):
 
 def _save(conn, patient, data):
     validate(data)
-    data = {k: v for k, v in data.items() if k != 'interview_newer'}
+    data = {k: v for k, v in data.items() if k not in ('interview_newer', 'pathology_newer')}
     target = jobs.report_spec_path(patient)
     if target.exists():
         fd, temp = tempfile.mkstemp(dir=target.parent); os.close(fd)
@@ -127,8 +130,29 @@ def _derived(conn, patient):
         return ' | '.join(filter(None, [*r[2:], interview.use_text(m)]))
     def referral_note(r, m):
         return '\n'.join(filter(None, (r[4], 'DAA: ' + m['packed'] if m['packed'] else '')))
-    dates = list(dict.fromkeys(r[2] for r in record['pathology'] if r[2]))
-    return record, dict(conditions=record['conditions'], allergies=record['allergies'], obs=observations(record), meds=[[r[0], actual(r, m), referral_note(r, m), ''] for r, m in zip(referral_rows, referral_meta) if any(r) and m.get('use_status') != 'not_using'] + [[r[0], other_actual(r, m), ' | '.join(filter(None, r[2:])), ''] for r, m in zip(other_rows, other_meta) if any(r) and m.get('use_status') != 'not_using' and m.get('kind') not in ('otc', 'complementary')], otc=[[r[0], other_actual(r, m), ' | '.join(filter(None, r[2:]))] for r, m in zip(other_rows, other_meta) if any(r) and m.get('use_status') != 'not_using' and m.get('kind') in ('otc', 'complementary')], ceased=[[r[0], r[1], ' | '.join(filter(None, ['Referral medicine', r[2], '\n'.join(filter(None, (referral_note(r, m), interview.use_text(m))))]))] for r, m in zip(referral_rows, referral_meta) if any(r) and m.get('use_status') == 'not_using'] + [[r[0], r[1], ' | '.join(filter(None, ['Found during interview', other_note(r, m)]))] for r, m in zip(other_rows, other_meta) if any(r) and m.get('use_status') == 'not_using'], path=[[r[0], r[1], '', '', ' '.join(filter(None, (r[3], ('Date: ' + r[2]) if r[2] else '')))] for r in record['pathology'] if any(r)]), ', '.join(dates)
+    import pathology_records
+    verified_pathology = pathology_records.load(patient)['records']
+    pathology_table = [[r[0], r[1], '', '',
+                        ' '.join(filter(None, (r[3], ('Date: ' + r[2]) if r[2] else '')))]
+                       for r in record['pathology'] if any(r)]
+    for result in verified_pathology:
+        if not result['test'].strip(): continue
+        pathology_table.append([
+            result['test'],
+            ' '.join(filter(None, (result['value'], result['unit']))),
+            result['reference_interval'], '',
+            ' | '.join(filter(None, (
+                'Verified by pharmacist' if result['verified'] else 'UNVERIFIED — check original source',
+                'Sample: ' + result['sample_date'] if result['sample_date'] else '',
+                'Source: ' + result['source'] if result['source'] else '',
+                result['comment'],
+            )))
+        ])
+    dates = list(dict.fromkeys(
+        [r[2] for r in record['pathology'] if r[2]] +
+        [r['sample_date'] for r in verified_pathology if r['sample_date']]
+    ))
+    return record, dict(conditions=record['conditions'], allergies=record['allergies'], obs=observations(record), meds=[[r[0], actual(r, m), referral_note(r, m), ''] for r, m in zip(referral_rows, referral_meta) if any(r) and m.get('use_status') != 'not_using'] + [[r[0], other_actual(r, m), ' | '.join(filter(None, r[2:])), ''] for r, m in zip(other_rows, other_meta) if any(r) and m.get('use_status') != 'not_using' and m.get('kind') not in ('otc', 'complementary')], otc=[[r[0], other_actual(r, m), ' | '.join(filter(None, r[2:]))] for r, m in zip(other_rows, other_meta) if any(r) and m.get('use_status') != 'not_using' and m.get('kind') in ('otc', 'complementary')], ceased=[[r[0], r[1], ' | '.join(filter(None, ['Referral medicine', r[2], '\n'.join(filter(None, (referral_note(r, m), interview.use_text(m))))]))] for r, m in zip(referral_rows, referral_meta) if any(r) and m.get('use_status') == 'not_using'] + [[r[0], r[1], ' | '.join(filter(None, ['Found during interview', other_note(r, m)]))] for r, m in zip(other_rows, other_meta) if any(r) and m.get('use_status') == 'not_using'], path=pathology_table), ', '.join(dates)
 
 def start(conn, patient):
     folder = jobs.patient_folder(patient); target = jobs.report_spec_path(patient)
@@ -142,7 +166,7 @@ def start(conn, patient):
     import steps
     visit = steps.event_date(conn, patient, 'visited') or p.get('visit_date') or h['visit'].split(' ')[0]
     data.update(out=str(folder / ('HMR ' + re.sub(r'[<>:"/\\|?*]', '', name).rstrip(' .') + '.docx')), name=name, assess_date=visit, report_date=dt.date.today().strftime('%d/%m/%Y'), patient='\n'.join(patient_lines), doctor='\n'.join(filter(None, doctor_lines)), dear='Dear ' + gp + ',', path_date=dates, issues=[], needs_review=REVIEW.copy())
-    data.update(derived, interview_revision=record['revision'], interview_reason=record['details']['reason'])
+    data.update(derived, interview_revision=record['revision'], interview_reason=record['details']['reason'], pathology_revision=__import__('pathology_records').revision(__import__('pathology_records').file_for(patient)))
     intro = intro_text(record, name, visit)
     if intro: data['intro'] = intro
     if record['details']['reason'].strip():
