@@ -45,6 +45,10 @@ def test_same_name_requires_explicit_different_identifiers(tmp_path, monkeypatch
     assert people[1]['key'].startswith('sam example @')
     assert people[0]['dob'] != people[1]['dob']
     assert (workspace / people[1]['folder'] / 'referral.pdf').read_bytes() == payload
+    provenance = json.loads((workspace / people[1]['folder'] / 'referral_source.json').read_text())
+    assert provenance['sha256'] == hashlib.sha256(payload).hexdigest()
+    assert provenance['confirmed_identity_fields']['name'] == 'Sam Example'
+    assert provenance['schema_version'] == 1
     conn.close()
 
 
