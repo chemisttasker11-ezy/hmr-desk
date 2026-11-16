@@ -40,6 +40,29 @@ try {
   $result = Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/health" -Headers @{ 'X-HMR-Token' = $token } -TimeoutSec 5
   if (-not $result.ready -or -not $result.capabilities.manual_hmr) { throw 'Packaged engine health rejected' }
   if (-not (Test-Path (Join-Path $data 'workspace'))) { throw 'Patient workspace not created' }
+  # Deliberately terminate the owned clinical engine. Electron must start a
+  # fresh authenticated instance without asking the user to install Python.
+  $initialPid = $engine.ProcessId
+  $initialToken = $token
+  Stop-Process -Id $initialPid -Force
+  $recovered = $null
+  $deadline = (Get-Date).AddSeconds(60)
+  while ((Get-Date) -lt $deadline) {
+    Start-Sleep -Milliseconds 500
+    $engines = @(Get-CimInstance Win32_Process -Filter "Name='hmr-engine.exe'" |
+      Where-Object { $_.CommandLine -like "*$isolated*" -and $_.ProcessId -ne $initialPid })
+    if ($engines.Count -eq 1 -and (Test-Path (Join-Path $data 'api_token'))) {
+      $fresh = (Get-Content -Raw (Join-Path $data 'api_token')).Trim()
+      if ($fresh -ne $initialToken) { $recovered = $engines[0]; break }
+    }
+  }
+  if (-not $recovered) { throw 'Owned engine did not recover after simulated crash' }
+  $engine = $recovered
+  if ($engine.CommandLine -notmatch '--port\s+(\d+)') { throw 'Recovered engine has no assigned port' }
+  $port = [int]$Matches[1]
+  $token = (Get-Content -Raw (Join-Path $data 'api_token')).Trim()
+  $result = Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/health" -Headers @{ 'X-HMR-Token' = $token } -TimeoutSec 5
+  if (-not $result.ready) { throw 'Recovered engine failed authenticated health' }
   Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
@@ -54,7 +77,7 @@ public static class HmrWin32 {
   $orphan = @(Get-CimInstance Win32_Process -Filter "Name='hmr-engine.exe'" |
     Where-Object { $_.CommandLine -like "*$isolated*" })
   if ($orphan.Count) { throw 'Bundled clinical engine remained running after UI close' }
-  Write-Host 'PASS: packaged UI and owned engine launch without Node/Python on PATH; authenticated health; graceful shutdown; isolated synthetic patient workspace'
+  Write-Host 'PASS: packaged UI without system Python/Node, authenticated engine, real crash recovery, graceful exit, isolated synthetic workspace'
 }
 finally {
   $env:USERPROFILE = $originalHome
