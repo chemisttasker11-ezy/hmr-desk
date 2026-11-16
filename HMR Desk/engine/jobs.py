@@ -50,10 +50,21 @@ def correction(file, fields):
     if not isinstance(fields, dict) or not fields or not fields.keys() <= FIELDS or any(not isinstance(v, str) for v in fields.values()):
         raise ValueError('invalid fields')
     path = Path(db.BASE) / 'TO SORT' / 'intake_corrections.json'
-    with _lock:
-        data = importer.read(path) if path.exists() else {}
+    with _lock, connection() as conn:
+        data = record_store.get_json(conn, record_store.GLOBAL_PATIENT, 'intake_corrections.json')
+        if data is None:
+            data = importer.read(path) if path.exists() else {}
         data.setdefault(file, {}).update(fields)
-        atomic_json(path, data)
+        record_store.put_json(conn, record_store.GLOBAL_PATIENT, 'intake_corrections.json', data)
+
+
+def outside_files(conn):
+    """Record files that are not in a patient folder: (patient id, record name, plain path)."""
+    items = [(record_store.GLOBAL_PATIENT, 'intake_corrections.json', Path(db.BASE) / 'TO SORT' / 'intake_corrections.json'),
+             (record_store.GLOBAL_PATIENT, 'history-import-plan.json', Path(db.DATA_DIR) / 'history-import-plan.json')]
+    for p in conn.execute('SELECT * FROM patients').fetchall():
+        items.append((p['id'], 'interview_spec.json', interview_spec_path(p)))
+    return items
 
 
 def atomic_json(path, data):
@@ -424,15 +435,19 @@ def report_assist(patient_id):
 
 def import_history(patient_id):
     if patient_id is not None: raise ValueError('batch job takes no patient')
-    with connection() as conn: records = history.plan(conn)
-    atomic_json(Path(db.DATA_DIR) / 'history-import-plan.json', records)
-    return json.dumps(history.summary(records), ensure_ascii=False)
+    with connection() as conn:
+        plan = history.plan(conn)
+        record_store.put_json(conn, record_store.GLOBAL_PATIENT, 'history-import-plan.json', plan)
+    return json.dumps(history.summary(plan), ensure_ascii=False)
 
 
 def import_history_apply(patient_id):
     if patient_id is not None: raise ValueError('batch job takes no patient')
-    records = json.loads((Path(db.DATA_DIR) / 'history-import-plan.json').read_text(encoding='utf-8'))
-    with connection() as conn: count = history.apply(conn, records)
+    with connection() as conn:
+        plan = record_store.get_json(conn, record_store.GLOBAL_PATIENT, 'history-import-plan.json')
+        if plan is None:
+            plan = json.loads((Path(db.DATA_DIR) / 'history-import-plan.json').read_text(encoding='utf-8'))
+        count = history.apply(conn, plan)
     return json.dumps({'visits_added': count})
 
 
