@@ -128,12 +128,45 @@ async function settings() {
     <label><span>Enabled <input type="checkbox" name="enabled" checked></span></label>
     <p class="error" role="alert"></p><button class="primary">Add agent</button></form><details><summary>Technical details</summary><p>Base folder: ${esc(c.base)}</p><p>Engine API: ${esc(c.api)}</p></details>`;
 }
+function askEncryptedBackupPassphrase(action) {
+  // A browser prompt exposes its value as visible plaintext. Use an actual
+  // masked, accessible password input and clear the DOM immediately on submit.
+  return new Promise(resolve => {
+    const panel = document.createElement('dialog');
+    panel.setAttribute('aria-label', 'Encrypted HMR backup passphrase');
+    panel.innerHTML = `<form method="dialog" class="form">
+      <h2>${action === 'create' ? 'Encrypt patient-data backup' : 'Unlock encrypted backup'}</h2>
+      <p>Enter a passphrase of at least 12 characters. It is not stored by HMR Desk and cannot be recovered if lost.</p>
+      <label>Backup passphrase <input type="password" name="passphrase" autocomplete="off" minlength="12" maxlength="512" required></label>
+      <div class="actions"><button class="primary" type="submit">Continue securely</button><button type="button" data-backup-cancel>Cancel</button></div>
+    </form>`;
+    document.body.appendChild(panel);
+    const form = panel.querySelector('form');
+    const input = form.elements.namedItem('passphrase');
+    let finished = false;
+    const finish = value => {
+      if (finished) return;
+      finished = true;
+      input.value = '';
+      if (panel.open) panel.close();
+      panel.remove();
+      resolve(value);
+    };
+    form.addEventListener('submit', e => {
+      e.preventDefault();
+      finish(input.value);
+    });
+    panel.querySelector('[data-backup-cancel]').addEventListener('click', () => finish(null));
+    panel.addEventListener('cancel', e => { e.preventDefault(); finish(null); });
+    panel.showModal();
+    input.focus();
+  });
+}
+
 async function agentClick(b) {
   if (b.dataset.hmrBackup) {
     const action = b.dataset.hmrBackup;
-    const password = prompt(action === 'create'
-      ? 'Enter a new backup passphrase (at least 12 characters). Keep it safe.'
-      : 'Enter the passphrase for the selected encrypted backup.');
+    const password = await askEncryptedBackupPassphrase(action);
     if (password == null) return true;
     const output = $('backup-result');
     b.disabled = true;
