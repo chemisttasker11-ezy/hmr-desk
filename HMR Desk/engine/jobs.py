@@ -269,7 +269,7 @@ def report_build(patient_id, pdf=False):
         import local_report_builder
         import template_report_builder
         import pdf_export
-        template_root = APP_ASSETS / 'templates'
+        template_root = template_report_builder.active_template_root()
         approved = None
         try:
             approved = template_report_builder.approved_template(template_root)
