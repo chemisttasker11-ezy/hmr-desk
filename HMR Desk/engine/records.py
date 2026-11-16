@@ -1,4 +1,4 @@
-"""Encrypted clinical record store (stage 1: store, import, export; nothing calls it yet).
+"""Encrypted clinical record store: import, save and explicit readable export.
 
 Saved clinical records (interview, report spec, confirmed medicines) move from plain files in the patient
 folder into the SQLCipher database, keyed by patient id so a folder move does not matter.
@@ -23,8 +23,12 @@ RECORD_PATTERNS = (
     r'pathology_sources\.json',
     r'pathology_records\.json',
     r'reconciliation_review\.json',
+    r'interview_spec\.json',
     r'MIMS interactions[^/\\]{0,200}\.txt',
 )
+# Not in any patient folder: shared files kept under patient id 0.
+GLOBAL_PATIENT = 0
+GLOBAL_NAMES = ('history-import-plan.json', 'intake_corrections.json')
 _RECORD_RE = re.compile('(?:' + '|'.join(RECORD_PATTERNS) + ')')
 EXPORT_NOTE = 'README - exported records.txt'
 EXPORT_NOTE_TEXT = (
@@ -57,7 +61,9 @@ def is_record_name(name):
     return isinstance(name, str) and _RECORD_RE.fullmatch(name) is not None
 
 
-def _check(name):
+def _check(name, patient_id=None):
+    if patient_id == GLOBAL_PATIENT and name in GLOBAL_NAMES:
+        return name
     if not is_record_name(name):
         raise ValueError('not a record name')
     return name
@@ -74,7 +80,7 @@ def ensure(conn):
 
 def get(conn, patient_id, name):
     ensure(conn)
-    row = conn.execute('SELECT body FROM records WHERE patient_id=? AND name=?', (patient_id, _check(name))).fetchone()
+    row = conn.execute('SELECT body FROM records WHERE patient_id=? AND name=?', (patient_id, _check(name, patient_id))).fetchone()
     return bytes(row[0]) if row else None
 
 
@@ -97,13 +103,13 @@ def put(conn, patient_id, name, body, expected_revision=None):
     conn.execute(
         'INSERT INTO records(patient_id,name,body,revision,updated_at) VALUES(?,?,?,?,?) '
         'ON CONFLICT(patient_id,name) DO UPDATE SET body=excluded.body, revision=excluded.revision, updated_at=excluded.updated_at',
-        (patient_id, _check(name), body, digest(body), _now()))
+        (patient_id, _check(name, patient_id), body, digest(body), _now()))
     return digest(body)
 
 
 def delete(conn, patient_id, name):
     ensure(conn)
-    conn.execute('DELETE FROM records WHERE patient_id=? AND name=?', (patient_id, _check(name)))
+    conn.execute('DELETE FROM records WHERE patient_id=? AND name=?', (patient_id, _check(name, patient_id)))
 
 
 def names(conn, patient_id):
@@ -171,7 +177,7 @@ def removable_files(conn, patient_id, folder):
 def stamp(conn, patient_id, name):
     """When the record was last written (sortable text), or None. Replaces file modification times."""
     ensure(conn)
-    row = conn.execute('SELECT updated_at FROM records WHERE patient_id=? AND name=?', (patient_id, _check(name))).fetchone()
+    row = conn.execute('SELECT updated_at FROM records WHERE patient_id=? AND name=?', (patient_id, _check(name, patient_id))).fetchone()
     return row[0] if row else None
 
 
@@ -194,7 +200,24 @@ def put_json(conn, patient_id, name, data):
     return put(conn, patient_id, name, dumps(data))
 
 
-def migrate_all(conn, folder_for):
+def import_file(conn, patient_id, name, path):
+    """Copy one plain file into the store, verified by read-back. Same rules as import_folder."""
+    ensure(conn)
+    path = Path(path)
+    if not path.is_file():
+        return None
+    body = path.read_bytes()
+    current = get(conn, patient_id, name)
+    if current is None:
+        put(conn, patient_id, name, body)
+        conn.commit()
+        if get(conn, patient_id, name) != body:
+            raise RuntimeError('record import did not verify: ' + name)
+        return 'imported'
+    return 'already' if current == body else 'conflict'
+
+
+def migrate_all(conn, folder_for, extra=None):
     """Copy every patient's plain record files into the encrypted store (verify-then-keep).
 
     folder_for(patient_row) returns the patient's folder or None. A repeat is safe: an existing database record is
@@ -216,10 +239,19 @@ def migrate_all(conn, folder_for):
                 summary[outcome] += 1
         except Exception:
             summary['errors'] += 1
+    # Files that live outside patient folders (shared plans, interview specs).
+    for patient_id, name, path in (extra(conn) if extra else ()):
+        try:
+            outcome = import_file(conn, patient_id, name, path)
+        except Exception:
+            summary['errors'] += 1
+            continue
+        if outcome:
+            summary[outcome] += 1
     return summary
 
 
-def status(conn, folder_for):
+def status(conn, folder_for, extra=None):
     """Where saved records live right now. Plain copies count as unprotected until they are retired."""
     ensure(conn)
     stored = conn.execute('SELECT COUNT(*) FROM records').fetchone()[0]
@@ -235,6 +267,12 @@ def status(conn, folder_for):
             if not is_record_name(name) or not (Path(folder) / name).is_file():
                 continue
             if get(conn, patient['id'], name) == (Path(folder) / name).read_bytes():
+                plain_same += 1
+            else:
+                plain_other += 1
+    for patient_id, name, path in (extra(conn) if extra else ()):
+        if Path(path).is_file():
+            if get(conn, patient_id, name) == Path(path).read_bytes():
                 plain_same += 1
             else:
                 plain_other += 1
