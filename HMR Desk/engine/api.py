@@ -741,6 +741,16 @@ def handle(conn, method, path, query, body):
                 except interview.Conflict:
                     conn.rollback(); return 409, {'error': 'interview conflict'}
                 return 200, result
+        match = re.fullmatch(r'/api/patients/(\\d+)/reconciliation', path)
+        if match and method == 'GET':
+            import interview
+            import reconciliation
+            p = conn.execute('SELECT * FROM patients WHERE id=?', (int(match[1]),)).fetchone()
+            if not p: return 404, {'error': 'patient not found'}
+            record = interview.load(conn, p)
+            result = reconciliation.audit(record)
+            result['source_hash'] = reconciliation.digest(record)
+            return 200, result
         match = re.fullmatch(r'/api/patients/(\d+)/interview', path)
         if match:
             import interview
