@@ -65,6 +65,20 @@ def test_chosen_reference_is_validated_and_carried_into_report_rows():
     plain = interview.medicine_rows({'meds': [['Free text', '', '', '', '']], 'details': {'meds': [{'packed': '', 'as_instructed': False}]}})
     assert 'Reference' not in plain[0][4]
 
+def test_reconciliation_flags_same_concept_under_different_names():
+    import reconciliation
+    ref = {'source': 'amt', 'code': '1001', 'display': 'Examplestatin 20 mg tablet', 'release': '20260101'}
+    meta = lambda r=None: {'packed': '', 'as_instructed': False, 'checked': False, 'priority': 0, **({'reference': r} if r else {})}
+    record = {'meds': [['Examplestatin', '', '', '', ''], ['Brandex', '', '', '', '']], 'other_meds': [],
+              'details': {'meds': [meta(ref), meta(ref)], 'other_meds': []}}
+    codes = [(f['code'], f['medicine_id']) for f in reconciliation.audit(record)['flags']]
+    assert ('possible_duplicate_concept', 'meds:0') in codes and ('possible_duplicate_concept', 'meds:1') in codes
+    record['details']['meds'][1] = meta()
+    assert not [f for f in reconciliation.audit(record)['flags'] if f['code'] == 'possible_duplicate_concept']
+    # linking or unlinking changes the reviewed digest, so a prior acknowledgement goes stale
+    linked = {**record, 'details': {'meds': [meta(ref), meta(ref)], 'other_meds': []}}
+    assert reconciliation.digest(record) != reconciliation.digest(linked)
+
 if __name__ == '__main__':
     for n, f in list(globals().items()):
         if n.startswith('test_'): f()
