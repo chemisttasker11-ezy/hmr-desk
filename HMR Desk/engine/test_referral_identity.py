@@ -113,3 +113,10 @@ def test_unrecognised_scan_retained_for_explicit_manual_pharmacist_intake(tmp_pa
     p = conn.execute('SELECT folder FROM patients WHERE id=?', (accepted['patient_id'],)).fetchone()
     assert (workspace / p['folder'] / 'referral.pdf').read_bytes() == source.read_bytes()
     conn.close()
+
+
+def test_unicode_patient_names_are_normalised_without_losing_non_latin_letters():
+    assert db.patient_key('Dr Álvaro Núñez') == 'álvaro núñez'
+    assert db.patient_key('李 明') == '李 明'
+    assert db.patient_key("Patricia D'Agostino") == "patricia d'agostino"
+    assert db.patient_key('Mr Alex Quinn Example') == db.patient_key('Alex Example')
