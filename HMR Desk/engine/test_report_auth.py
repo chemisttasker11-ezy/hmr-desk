@@ -53,6 +53,7 @@ def case(tmp_path, monkeypatch):
             'template_approved': True, 'template_sha256': thash,
             'template_version': 'synthetic-test',
             'source_files_sha256': report_auth.source_snapshot({'folder': 'TO SORT/Synthetic'}),
+            'clinical_snapshot_sha256': '',
         }
         db.log(conn, pid, 'report_build', evidence, 'job')
     patient = conn.execute('SELECT * FROM patients WHERE id=?', (pid,)).fetchone()
@@ -62,6 +63,14 @@ def case(tmp_path, monkeypatch):
     monkeypatch.setattr(report_auth.interview, 'load', lambda conn, patient: record)
     review = reconciliation.acknowledge(record, reconciliation.digest(record), 'Synthetic Pharmacist')
     (folder / 'reconciliation_review.json').write_text(json.dumps(review))
+    # Existing report event was recorded before the synthetic interview fixture
+    # was mounted; bring its canonical digest into the test's immutable evidence.
+    source_contract_hash = report_auth.clinical_snapshot_hash(conn, patient)
+    latest = conn.execute("SELECT id,detail FROM events WHERE patient_id=? AND type='report_build' ORDER BY id DESC LIMIT 1",(pid,)).fetchone()
+    event_detail = json.loads(latest['detail'])
+    event_detail['clinical_snapshot_sha256'] = source_contract_hash
+    with conn:
+        conn.execute('UPDATE events SET detail=? WHERE id=?',(json.dumps(event_detail),latest['id']))
     request = {'action':'signed_off', 'report_file':word.name,
                'report_sha256':evidence['sha256'], 'reviewer':'Synthetic Pharmacist',
                'clinical_reviewed':True}
