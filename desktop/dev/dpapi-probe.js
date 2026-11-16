@@ -28,7 +28,13 @@ app.whenReady().then(async()=>{
     if (ciphertext.includes(Buffer.from(marker))) throw Error('Plaintext draft on disk');
     const recovered=safeStorage.decryptString(ciphertext);
     if (recovered!==marker) throw Error('Protected draft did not survive process kill');
+    // Electron is a GUI-subsystem binary on Windows, so stdout capture is
+    // unreliable. Write the result to a file the smoke script reads.
+    fs.writeFileSync(path.join(base,'reader-result.txt'),'SYNTHETIC_DPAPI_RECOVERY_PASS');
     process.stdout.write('SYNTHETIC_DPAPI_RECOVERY_PASS\n');
-    app.quit();
+    app.exit(0);
   }
-}).catch(error=>{process.stderr.write(error.message+'\n');app.exit(1);});
+}).catch(error=>{
+  try{fs.writeFileSync(path.join(base,'reader-error.txt'),String(error&&error.stack||error));}catch{}
+  process.stderr.write(error.message+'\n');app.exit(1);
+});
