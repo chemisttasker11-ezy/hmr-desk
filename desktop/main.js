@@ -14,10 +14,12 @@ const defaults = {
 };
 fs.mkdirSync(dataDir, { recursive: true });
 const configPath = path.join(dataDir, 'app-config.json');
-if (!fs.existsSync(configPath)) fs.writeFileSync(configPath, JSON.stringify(defaults, null, 2));
+const isFirstRun = !fs.existsSync(configPath);
+if (isFirstRun) fs.writeFileSync(configPath, JSON.stringify(defaults, null, 2));
 const config = { ...defaults, ...JSON.parse(fs.readFileSync(configPath, 'utf8')) };
 let engineOwner = null;
 const { start: startEngine } = require('./src/engine-owner');
+const { verifyWorkspace } = require('./src/storage-choice');
 const sites = {
   mhr: {
     url: 'https://proda.humanservices.gov.au/',
@@ -341,6 +343,32 @@ app.on('second-instance', () => {
 });
 if (hasLock)
   app.whenReady().then(async () => {
+    if (isFirstRun && app.isPackaged && !process.env.HMR_SMOKE_DATA && !process.env.HMR_API) {
+      const choice = await dialog.showMessageBox({
+        type: 'question', title: 'HMR Desk — first-run storage',
+        message: 'Choose where HMR patient files are kept',
+        detail: 'The recommended folder is on this Windows account. You may select a different writable local folder. Existing patient data is never imported or moved without a separate confirmed migration.',
+        buttons: ['Use recommended folder', 'Choose a different folder', 'Exit'],
+        defaultId: 0, cancelId: 2, noLink: true,
+      });
+      if (choice.response === 2) { app.quit(); return; }
+      if (choice.response === 1) {
+        const picked = await dialog.showOpenDialog({
+          title: 'Select patient workspace', properties: ['openDirectory', 'createDirectory'],
+          defaultPath: app.getPath('documents'),
+        });
+        if (picked.canceled || !picked.filePaths[0]) { app.quit(); return; }
+        config.base = picked.filePaths[0];
+      }
+      try {
+        config.base = verifyWorkspace(config.base);
+        fs.writeFileSync(configPath, JSON.stringify(config, null, 2), { mode: 0o600 });
+      } catch (error) {
+        dialog.showErrorBox('Patient workspace unavailable', String(error.message).slice(0, 250));
+        app.quit();
+        return;
+      }
+    }
     if (app.isPackaged && !process.env.HMR_API && !process.env.HMR_SMOKE_URL && !process.env.HMR_SHOTS) {
       try {
         engineOwner = await startEngine({ resourcesPath: process.resourcesPath, dataDir, workspace: config.base, config });
