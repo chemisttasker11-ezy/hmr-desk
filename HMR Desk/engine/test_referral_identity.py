@@ -120,3 +120,14 @@ def test_unicode_patient_names_are_normalised_without_losing_non_latin_letters()
     assert db.patient_key('李 明') == '李 明'
     assert db.patient_key("Patricia D'Agostino") == "patricia d'agostino"
     assert db.patient_key('Mr Alex Quinn Example') == db.patient_key('Alex Example')
+
+
+def test_referral_identity_rejects_impossible_or_future_dates():
+    assert referral_entry._validate_date('01/01/1940', 'dob') is None
+    assert referral_entry._validate_date('2026-11-16', 'referral_date') is None
+    with pytest.raises(ValueError, match='date of birth'):
+        referral_entry._validate_date('31/02/1940', 'dob')
+    with pytest.raises(ValueError, match='referral date'):
+        referral_entry._validate_date('2026-13-01', 'referral_date')
+    with pytest.raises(ValueError, match='future'):
+        referral_entry._validate_date('2090-01-01', 'dob')
