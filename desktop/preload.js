@@ -25,6 +25,7 @@ contextBridge.exposeInMainWorld('hmr', {
   tab: (action, site, url) => ipcRenderer.invoke('tab', action, site, url),
   openRoute: (url) => ipcRenderer.invoke('open-route', url),
   config: () => ipcRenderer.invoke('config'),
+  storage: action => ipcRenderer.invoke('storage', action),
   encryptedBackup: (action, passphrase) => ipcRenderer.invoke('encrypted-backup', action, passphrase),
   migrateWorkspace: passphrase => ipcRenderer.invoke('migrate-workspace', passphrase),
   rollbackLastActivation: () => ipcRenderer.invoke('rollback-last-activation'),
