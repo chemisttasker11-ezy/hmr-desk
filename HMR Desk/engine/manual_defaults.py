@@ -13,7 +13,14 @@ DEFAULTS = {
 
 def initial_text(patient_name, gp_name):
     # Identity is inserted locally and never sent to a clinical agent.
-    return dict(DEFAULTS)
+    data = dict(DEFAULTS)
+    name = (patient_name or '').strip()
+    if name:
+        # The owner's standard administrative sentences name the patient.
+        data["thanks"] = "Thank you for referring " + name + " for a Home Medicines Review."
+        data["followup"] = ("If you have no objections, I will see " + name + " again in a few months to follow up "
+                            "on any ongoing issues. A repeat HMR is recommended if clinical condition changes in 12 months' time.")
+    return data
 
 
 def unresolved(data):
