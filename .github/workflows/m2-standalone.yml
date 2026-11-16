@@ -60,6 +60,9 @@ jobs:
           if (-not (Test-Path $converter)) { throw 'NSIS application missing offline DOCX-PDF converter' }
           Get-FileHash $engine -Algorithm SHA256 | Format-List
           Get-FileHash $converter -Algorithm SHA256 | Format-List
+      - name: Smoke packaged desktop and owned engine with Python and Node absent from PATH
+        shell: pwsh
+        run: ./scripts/smoke-packaged-desktop.ps1
       - name: Upload unsigned engineering artifact (not clinical release)
         uses: actions/upload-artifact@v4
         with:
