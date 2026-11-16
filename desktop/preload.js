@@ -27,6 +27,7 @@ contextBridge.exposeInMainWorld('hmr', {
   config: () => ipcRenderer.invoke('config'),
   encryptedBackup: (action, passphrase) => ipcRenderer.invoke('encrypted-backup', action, passphrase),
   migrateWorkspace: passphrase => ipcRenderer.invoke('migrate-workspace', passphrase),
+  rollbackLastActivation: () => ipcRenderer.invoke('rollback-last-activation'),
   activateRestored: passphrase => ipcRenderer.invoke('activate-restored', passphrase),
   openPatientFolder: (id, file) => ipcRenderer.invoke('open-patient-folder', id, file),
   openReportVersion: (id, file, format) => ipcRenderer.invoke('open-report-version', id, file, format),
