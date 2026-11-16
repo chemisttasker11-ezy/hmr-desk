@@ -1,49 +1,39 @@
-# Milestone 2 acceptance matrix — standalone manual HMR
+# HMR Desk Milestone 2 — live evidence-backed acceptance matrix
 
-Updated: 2026-11-16 (Australia/Brisbane). PR: https://github.com/chemisttasker11-ezy/hmr-desk/pull/1 (draft). Branch: `security/clinical-agent-privacy-boundary`.
+Updated 2026-11-16 (Australia/Brisbane). Release platform: **Windows 11 x64, standard user, AI OFF**. Private [draft PR #1](https://github.com/chemisttasker11-ezy/hmr-desk/pull/1), branch `security/clinical-agent-privacy-boundary`.
 
-## Baseline and evidence discipline
+**Release is NOT ACCEPTED until every P0/P1 requirement, owner/pharmacist approval and clean Windows 11 E2E is proven.** No failing gate is silently waived. Continue independent engineering work despite blocked approvals.
 
-**Last fully passing baseline:** `860a3b689a3c19ea9594969c0410721f9a52891f`. The head has subsequently changed through targeted Wave 0 hardening commits. **Do not transplant green CI statuses to the new head.** Re-run both workflows and record results at the new SHA.
+## Verification evidence
 
-- [Windows standalone engineering run](https://github.com/chemisttasker11-ezy/hmr-desk/actions/runs/43796030183): SUCCESS at baseline SHA. Windows Server 2022 runner; frozen engine auth smoke; packaged desktop process/crash smoke; bundled LibreOffice real synthetic DOCX-to-PDF smoke; NSIS packaging; Electron unit tests (204 reported by reviewer).
-- [Clinical privacy contract run](https://github.com/chemisttasker11-ezy/hmr-desk/actions/runs/43796030164): SUCCESS at baseline SHA.
-- Engineering artifact ID `14193659931`, name `hmr-m2-windows-unsigned-engineering-build`, ZIP reported size `530385241` bytes; GitHub artifact digest `sha256:05d049100ed086c09b560e7bc8f7e8f25f424cadaea252fd9f96b056793a8abe`; expires 2026-11-23 03:14:20 UTC. The artifact digest is **not** proof of the EXE's SHA-256. An installer checksum must be computed separately after download.
-- Current runtime package: desktop version `0.1.0`; Windows workflow uses Python 3.12 and Node 22; `requirements.txt` pins PyMuPDF 1.26.5, openpyxl 3.1.5, python-docx 1.2.0, cryptography 46.0.3; `requirements-build.txt` pins PyInstaller 6.16.0 and pytest 8.4.2. Lockfile in `desktop/package-lock.json`; supply-chain integrity and full machine inventory remain open.
-- No approved editable HMR report DOCX or two owner-approved short/long report references in reviewed repository tree. `brainstorm V2.0.pdf` is a writing/clinical reference, **not** an approved Word layout. Its medication guidance must not be converted to automated prescribing rules without verification.
+- Original engineering baseline: `860a3b689a3c19ea9594969c0410721f9a52891f`, Windows Server 2022 engineering [run 43796030183](https://github.com/chemisttasker11-ezy/hmr-desk/actions/runs/43796030183) PASS; clinical privacy [run 43796030164](https://github.com/chemisttasker11-ezy/hmr-desk/actions/runs/43796030164) PASS. Neither is a clean Windows 11 release.
+- Expanded fast Windows backend+desktop clinical regression and privacy [runs 43806054197](https://github.com/chemisttasker11-ezy/hmr-desk/actions/runs/43806054197) and [43806054099](https://github.com/chemisttasker11-ezy/hmr-desk/actions/runs/43806054099) PASS at `eccf1c7daeecd60c87ca59e0bbf995ee286344bc`.
+- Expanded fast clinical regression and privacy [runs 43806523988](https://github.com/chemisttasker11-ezy/hmr-desk/actions/runs/43806523988) and [43806524004](https://github.com/chemisttasker11-ezy/hmr-desk/actions/runs/43806524004) PASS at `53060ef706e34a4e58028e952ab2f327fa889a55`.
+- Latest template-import code test run [43806946766](https://github.com/chemisttasker11-ezy/hmr-desk/actions/runs/43806946766), Windows packaging [43806946704](https://github.com/chemisttasker11-ezy/hmr-desk/actions/runs/43806946704) and privacy [43806946735](https://github.com/chemisttasker11-ezy/hmr-desk/actions/runs/43806946735) target `058050deed9a124b25b95c5e1ba72913d187a206`. **Check the Actions outcome; pending at last documentation update except privacy PASS.** Subsequent documentation-only commits do not imply the application tests were rerun.
+- Baseline unsigned ZIP `14193659931` had manifest digest `05d049100ed086c09b560e7bc8f7e8f25f424cadaea252fd9f96b056793a8abe`; this is **not** the EXE SHA. The new Windows workflow writes `SHA256SUMS.txt` and `installer-manifest.json` into the engineering artifact if successful.
 
-**Status labels:** CI VERIFIED (specified baseline checks only); BUILT / NEEDS E2E; PARTIAL; BLOCKED (ASSET); NOT ACCEPTED. No inferred PASS from source-file existence.
+## Scope: implementation versus acceptance
 
-| Gate | Current status | Evidence at verified baseline | Outstanding acceptance |
+| Contract / ID | Implemented and regression-covered | Remaining release gate | Acceptance |
 | --- | --- | --- | --- |
-| M2-00 Inventory, synthetic fixtures | BUILT / NEEDS E2E | Inventory, fixture register, synthetic regressions in repo | Fresh inventory, complete fixture provenance and scenario runs |
-| M2-01 Bundled engine, secure lifecycle | CI VERIFIED (smoke only) | PyInstaller frozen engine, authenticated health, crash recovery, packaged smoke | True clean Windows 11 x64 VM, standard user, ACLs, upgrades, migration, failure matrix |
-| M2-02 Offline referral extraction/confirmation | PARTIAL | PyMuPDF, WinRT OCR path, source hash, field review/duplicate candidate flow | Packaged OCR, rotated/scanned/mixed fixtures, source-page image preview, complete provenance |
-| M2-03 Actual-use reconciliation, pathology | BUILT / NEEDS E2E | Review persistence and invalidation, pathology API/UI, synthetic tests | Whole-case UI, legacy adapters, conflict handling, stale downstream checks |
-| M2-04A Approved template DOCX | BLOCKED (ASSET) | Generic `local_report_builder.py` still uses a new document | Owner-approved DOCX + signed-off short and long examples, visual/clinical checks |
-| M2-04B Bundled PDF export | CI VERIFIED (generic DOCX only) | Checksum-verified portable LibreOffice, actual synthetic conversion | Exact HMR fidelity, long case, fonts, isolated Windows 11 non-admin run |
-| M2-05 Full manual UI | PARTIAL | Intake, interview, reconciliation, pathology, backup Settings surfaces | Real packaged screen-to-screen offline workflow, preview, accessibility |
-| M2-06 Backup, privacy, migration | BUILT / NEEDS E2E for backup; PARTIAL for migration | AES-GCM encrypted workspace/SQLite archive, isolated restore, privacy CI | Backup scope, concurrent edit, real Windows DPAPI/ACL, schema migrations, rollback/restore activation |
-| M2-07 Windows standalone installer | CI VERIFIED (engineering build only) | Unsigned NSIS installer and resource checks | Fresh Windows 11 VM install/upgrade/uninstall, signed EXE, EXE SHA-256, complete offline HMR |
-| M2-08 Pharmacist and owner acceptance | NOT ACCEPTED | No sign-off evidence | Owner template approval, clinical scenarios, security sign-off and PR review |
+| M2-00 inventory, evidence, synthetic cases | Baseline, issue register, two Windows test workflows; clinical model, intake, backup and report tests | Current-head package evidence, full scenario fixture registry | PARTIAL |
+| M2-01 engine, packaging, local workspace | Frozen PyInstaller engine and Electron owner, session token, crash recovery, config recovery, versioned SQLite and rollback snapshot | Windows 11 non-admin clean install, ACL, real offline recovery/lifecycle | ENGINEERING CI VERIFIED ONLY |
+| M2-02 text/scanned/rotated intake | Original hashes and page excerpts, source PDF viewer, conservative duplicate/identity/date checks, explicit pharmacist clinical field/allergy review, source-linked interview preparation | Actual packaged Windows OCR and clinical page visual comparison, large/handwritten fixtures | BUILT / NEEDS E2E |
+| M2-03 canonical clinical reconciliation/pathology | Canonical snapshot, 10+ medication scenarios, review hash invalidation, structured pathology v2 amendments, source PDF import, verified reviewer/time, legacy de-duplication | Full pharmacist-reviewed whole-case UI and historic compatibility acceptance | BUILT / NEEDS E2E |
+| M2-04 approved DOCX template | Template-bound renderer, checksum manifest, explicit local owner import, old revision history, immutable document/source hash and approval guard | **Owner-supplied approved editable DOCX, short+long approved references, visual fidelity and clinical sign-off** | BLOCKED — EXTERNAL OWNER ASSET |
+| M2-04 bundled PDF | Portable checksum-verified LibreOffice, no host Office requirement; synthetic short/long template PDF test in workflow | Passing workflow at final SHA, approved short/long layout page images, real Windows 11 | BUILT / NEEDS E2E |
+| M2-05 complete AI-off screens | Source viewers, actual-use/path edit, findings/report editor, hash-bound sign-off modal, template import, backup/activation controls | Full packaged screen-to-screen keyboard/scaling E2E | PARTIAL |
+| M2-06 privacy, backup and recovery | Encrypted archive preview, private staging, checksum restore, isolated SQLite validation, explicit activation and old-data rollback journal, legacy workspace migration, real-DPAPI smoke scripted | Windows 11 account ACL/DPAPI, forced-kill test, off-device/cross-user recovery and full user-run drill | BUILT / NEEDS E2E |
+| M2-07 release installer | Windows engineering NSIS, versioned packaging with converter, planned installer and resource SHA256 manifest | Actual candidate hashes at release SHA, licence audit, Windows 11 install/upgrade/uninstall and code-sign decision | ENGINEERING ONLY |
+| M2-08 owner/pharmacist approval | Software requires explicit named clinical authorisation; no silent prescribing/transmission | Ten clinician-reviewed synthetic cases, approved template, owner/clinical/security certificate | NOT ACCEPTED |
 
-## Release stop conditions
+## Hard release prohibitions
 
-1. No merging or production release while any P0/P1 or clinical acceptance gate is open.
-2. No clean VM PASS from Windows Server 2022 runner with Node/Python removed from PATH.
-3. No template PASS from generic DOCX/PDF conversion.
-4. No silent patient merging, inferred clinical assertions, automatic medication changes, PRODA/PPA submissions, or unauthorised transmission.
-5. Do not put PHI, credentials or clinical narratives in repository, logs, screenshots or synthetic fixtures; authorised identifying SMS remains separate from optional default-OFF clinical AI.
+1. **Do not mark the milestone DONE, merge PR, or call an unsigned engineering EXE a clinical release** until the owner-approved template and clean Windows 11 synthetic HMR chain are accepted together at the same code SHA.
+2. Never conflate Windows Server 2022 Actions, even with Python/Node absent from PATH, with a fresh Windows 11 machine without those runtimes installed.
+3. Keep missing allergies/medicines/results unconfirmed. Pathology units and dates must have explicit sources. No automatic prescription, medication change, PPA claim or report transmission.
+4. Do not put PHI, actual template reports containing patient data, saved sign-ins or secrets into public CI logs/artifacts.
+5. Authorised SMS replies may include identifiers as an independently authorised communications pathway. General clinical AI is opt-in and off by default; clinical-agent de-identification remains separate.
+6. A synthetic test manifest signed by “Synthetic QA” demonstrates the renderer only; it is **not owner approval**.
 
-## Follow-on verification log
-
-| Item | Result | Evidence |
-| --- | --- | --- |
-| PR #1 status and SHA | Verified live at `860a3b6` before Wave 0 edits | GitHub PR metadata |
-| Windows baseline | SUCCESS | Run `43796030183` |
-| Privacy baseline | SUCCESS | Run `43796030164` |
-| Artifact metadata | Retrieved, not downloaded or locally hashed | Artifact `14193659931` |
-| Formatted identity comparison | Code fix plus synthetic regression committed after baseline; **CI pending** | `referral_entry.py`, `test_referral_identity.py` |
-| Clean Windows 11 VM | NOT RUN | Requires fresh non-admin VM and installation |
-| Exact owner template | BLOCKED (ASSET) | Approved DOCX and examples absent |
-| Clinical sign-off | NOT ACCEPTED | Owner/pharmacist approval required |
+See `docs/m2/issues.md`, `docs/m2/evidence/index.md`, `docs/m2-operations.md` and `docs/m2-release-decision.md` for the closure log.
