@@ -40,6 +40,23 @@ def _within(parent, child):
         return False
 
 
+
+def _private_stage_root():
+    """Keep plaintext backup/restore intermediates in the per-user app data area.
+
+    The default shared OS temp directory is not an acceptable place for clinical
+    SQLite snapshots, decrypted ZIPs, or patient files. Windows ACL inheritance
+    from the application's per-user data root still needs an installed-VM audit.
+    """
+    root = Path(db.DATA_DIR).resolve() / '.protected-backup-staging'
+    root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if root.is_symlink():
+        raise ValueError('Unsafe staging directory')
+    if os.name != 'nt':
+        root.chmod(0o700)
+    return root
+
+
 def create(conn, workspace, output, password):
     """Snapshot SQLite via backup API; add all non-symlink workspace files, then encrypt."""
     workspace = Path(workspace).resolve()
@@ -56,7 +73,7 @@ def create(conn, workspace, output, password):
     output.parent.mkdir(parents=True, exist_ok=True)
     data_version = conn.execute('PRAGMA data_version').fetchone()[0]
     total_changes = conn.total_changes
-    with tempfile.TemporaryDirectory(prefix='hmr-backup-') as directory:
+    with tempfile.TemporaryDirectory(prefix='hmr-backup-', dir=_private_stage_root()) as directory:
         root = Path(directory)
         database = root / 'hmr.db'
         with closing(sqlite3.connect(database)) as snapshot:
@@ -140,7 +157,7 @@ def restore(source, destination, password):
         tag = raw.read(16)
         raw.seek(len(prefix))
         remaining = length - len(prefix) - 16
-        with tempfile.TemporaryDirectory(prefix='hmr-restore-') as directory:
+        with tempfile.TemporaryDirectory(prefix='hmr-restore-', dir=_private_stage_root()) as directory:
             temp = Path(directory)
             zipped = temp / 'data.zip'
             decryptor = Cipher(algorithms.AES(key), modes.GCM(nonce, tag)).decryptor()
