@@ -37,6 +37,7 @@ let interviewId = '',
 let interviewSaveStatus = 'Ready', interviewConflict = false, interviewProgressFilter = 'all';
 let interviewReconciliation = null;
 let interviewPathology = null, interviewPathologyDirty = false, interviewPathologyError = '';
+let pathologySourceIndex = {sources: []};
 let interviewRequest = 0;
 const interviewExpanded = new WeakSet();
 function interviewEquivalent(a, b) {
@@ -160,7 +161,15 @@ async function interviewScreen() {
   interviewOutput = '';
   interviewReconciliation = null;
   interviewPathology = null; interviewPathologyDirty = false; interviewPathologyError = '';
-  if (!offline) { try { interviewPathology = await hmr.api('GET', `/api/patients/${encodeURIComponent(interviewId)}/pathology-records`); } catch(e) { interviewPathologyError = errorText(e); } if (page !== 'interview' || request !== interviewRequest) return; }
+  if (!offline) {
+    try {
+      [interviewPathology, pathologySourceIndex] = await Promise.all([
+        hmr.api('GET', `/api/patients/${encodeURIComponent(interviewId)}/pathology-records`),
+        hmr.api('GET', `/api/patients/${encodeURIComponent(interviewId)}/pathology/sources`),
+      ]);
+    } catch(e) { interviewPathologyError = errorText(e); }
+    if (page !== 'interview' || request !== interviewRequest) return;
+  }
   if (!offline && !recovery.recovered && !recovery.conflict && !recovery.storageError) interviewSaveStatus = interviewRecord.saved ? 'Saved' : 'Ready';
   renderInterview();
   $('interview-notes')?.focus();
@@ -377,6 +386,13 @@ function renderInterview() {
     ['sample_date','Sample date'],['source','Source document/page'],['comment','Notes']];
   const pathologyView = `<section class="interview-section" id="section-pathology-verified">
     <h2>Pathology provenance and verification</h2><p>Units, sample dates and source are entered explicitly. A result cannot be marked verified without all required details.</p>
+    <div class="actions"><button type="button" data-pathology-import>Import a local pathology PDF (unconfirmed)</button><button type="button" data-pathology-reload-sources>Reload sources</button></div>
+    ${(pathologySourceIndex?.sources || []).map(source => `<details class="card"><summary>${esc(source.name)} — ${source.page_count} page(s), unconfirmed</summary>
+      <button type="button" data-pathology-open-source="${esc(source.id)}">Open original PDF</button>
+      ${source.pages.map(page => `<section><h4>Page ${page.page} — ${esc(page.method)}</h4>
+      <pre style="white-space:pre-wrap;overflow-wrap:anywhere">${esc(page.unconfirmed_excerpt || 'No machine-readable text; review original image')}</pre>
+      <button type="button" data-pathology-use-source="${esc(source.id)}" data-source-page="${page.page}">Add blank unverified result linked to this page</button></section>`).join('')}
+      </details>`).join('')}
     ${interviewPathologyError ? `<p class="error" role="alert">${esc(interviewPathologyError)}</p>` : ''}
     ${interviewPathology ? `<div class="table-scroll"><table><thead><tr>${pathologyCols.map(([,label])=>`<th>${esc(label)}</th>`).join('')}<th>Verified</th><th>Remove</th></tr></thead><tbody>${interviewPathology.records.map((r,i)=>`<tr>${pathologyCols.map(([key,label])=>`<td><input aria-label="${esc(label)} row ${i+1}" type="${key==='sample_date'?'date':'text'}" data-pathology-entry="${i}" data-pathology-field="${key}" value="${esc(r[key])}"></td>`).join('')}<td><input aria-label="Verify row ${i+1}" type="checkbox" data-pathology-entry="${i}" data-pathology-field="verified" ${r.verified?'checked':''}></td><td><button type="button" data-pathology-remove="${i}">Remove</button></td></tr>`).join('')}</tbody></table></div>
     <div class="actions"><button type="button" data-pathology-add>Add pathology result</button><button type="button" data-pathology-save>Save pathology</button><span>${interviewPathologyDirty?'Unsaved changes':'Saved'}</span></div>` : '<p>Pathology records unavailable until engine reconnects.</p>'}
@@ -633,6 +649,36 @@ document.addEventListener('input', event => {
 });
 
 async function interviewClick(b) {
+  if (b.dataset.pathologyImport !== undefined) {
+    try {
+      const result = await hmr.pickPathologySource(Number(interviewId));
+      if (!result.cancelled) {
+        pathologySourceIndex = await hmr.api('GET', `/api/patients/${encodeURIComponent(interviewId)}/pathology/sources`);
+        interviewPathologyError = '';
+      }
+    } catch (error) { interviewPathologyError = errorText(error); }
+    renderInterview(); return true;
+  }
+  if (b.dataset.pathologyReloadSources !== undefined) {
+    try { pathologySourceIndex = await hmr.api('GET', `/api/patients/${encodeURIComponent(interviewId)}/pathology/sources`); }
+    catch (error) { interviewPathologyError = errorText(error); }
+    renderInterview(); return true;
+  }
+  if (b.dataset.pathologyOpenSource !== undefined) {
+    try { await hmr.openPathologySource(Number(interviewId), b.dataset.pathologyOpenSource); }
+    catch (error) { interviewPathologyError = errorText(error); renderInterview(); }
+    return true;
+  }
+  if (b.dataset.pathologyUseSource !== undefined && interviewPathology) {
+    const source = pathologySourceIndex.sources.find(item => item.id === b.dataset.pathologyUseSource);
+    const page = Number(b.dataset.sourcePage);
+    if (!source || !Number.isInteger(page) || page < 1 || page > source.page_count) return true;
+    interviewPathology.records.push({id:crypto.randomUUID().replace(/-/g,''),test:'',value:'',
+      unit:'',reference_interval:'',sample_date:'',source:source.name + ' page ' + page +
+      ' sha256:' + source.sha256,verified:false,comment:'UNVERIFIED — compare source PDF before confirming'});
+    interviewPathologyDirty = true;
+    renderInterview(); return true;
+  }
   if (b.dataset.pathologyAdd !== undefined && interviewPathology) {
     interviewPathology.records.push({id: crypto.randomUUID().replace(/-/g,''),test:'',value:'',unit:'',
       reference_interval:'',sample_date:'',source:'',verified:false,comment:''});
