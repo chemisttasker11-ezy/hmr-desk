@@ -287,91 +287,70 @@ def json_object(reply):
     raise ValueError('Agent reply does not contain a valid JSON object')
 
 def agent_step(patient_id, name, output_path=None):
-    # Legacy full-report prompts and skill routes expose identifiable patient files.
-    # Keep them unavailable until a clinical-only adapter is implemented.
+    # Legacy skill routes require patient-folder read/write access and raw case.txt.
+    # They must not be used for identifiable clinical records.
     import clinical_privacy
-    raise clinical_privacy.PrivacyBlocked('Legacy patient-folder AI generation is disabled; use the manual report editor')
-    import agents
-    with connection() as conn:
-        p = get_patient(conn, patient_id)
-        folder = patient_folder(p)
-        target = output_path or (interview_spec_path(p) if name == 'interview_spec' else report_spec_path(p))
-        if target.exists(): raise FileExistsError('Spec already exists: ' + str(target))
-    agent = agents.selected('report_assist' if output_path is not None and name == 'report_draft' else name)
-    selected = agents.get(agent)
-    route = selected['route']
-    keys = INTERVIEW_KEYS if name == 'interview_spec' else REPORT_KEYS
-    if route == 'skill':
-        template = (Path(__file__).parent / 'prompts' / (name + '_skill.txt')).read_text(encoding='utf-8')
-        prompt = template.format(folder=str(folder), target=str(target), keys=', '.join(sorted(keys)))
-        target.parent.mkdir(parents=True, exist_ok=True)
-        reply = agents.skill_run(selected, prompt, Path(db.BASE) if name == 'interview_spec' else folder)
-        statuses = [line.strip()[len('HMR-STATUS:'):].strip() for line in reply.splitlines() if line.strip().startswith('HMR-STATUS:')]
-        status = statuses[-1] if statuses else ''
-        if status != 'success':
-            if target.is_file(): target.unlink()
-            reason = status[len('blocked - '):].strip() if status.startswith('blocked - ') else 'agent gave no status'
-            raise ValueError((reason or 'agent gave no status') + '\n' + '\n'.join(reply.splitlines()[-199:]))
-        try:
-            spec = json.loads(target.read_text(encoding='utf-8'))
-            if not isinstance(spec, dict) or not keys <= spec.keys(): raise ValueError('Spec missing required top-level keys')
-        except (OSError, ValueError, TypeError) as exc:
-            raise ValueError('Invalid or missing spec: ' + str(exc) + '\n' + '\n'.join(reply.splitlines()[-199:])) from None
-        with connection() as conn: db.log(conn, patient_id, name, {'agent': agent, 'route': route, 'file': str(target)}, 'job')
-        return 'Spec created by ' + agent + ' (' + route + ')'
-    template = (Path(__file__).parent / 'prompts' / (name + '.txt')).read_text(encoding='utf-8')
-    rules = '\n\n'.join((SKILL / f).read_text(encoding='utf-8') for f in ('SKILL.md', 'references/report-runbook.md'))
-    if name == 'interview_spec':
-        source = referral_text(folder)
-        pathology = folder / 'Pathology'
-        if pathology.is_dir():
-            for file in sorted(pathology.iterdir()):
-                if file.is_file() and file.suffix.lower() == '.txt':
-                    source += '\n\nPathology ' + file.name + ':\n' + file.read_text(encoding='utf-8')
-                elif file.is_file() and file.suffix.lower() == '.pdf':
-                    result = subprocess.run(['pdftotext', '-layout', str(file), '-'], capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=120)
-                    if not result.returncode and result.stdout.strip(): source += '\n\nPathology ' + file.name + ':\n' + result.stdout
-        keys = INTERVIEW_KEYS
-    else:
-        source = (folder / 'case.txt').read_text(encoding='utf-8')
-        keys = REPORT_KEYS
-        # Search using frequent words, without passing the full patient extract as command arguments.
-        import re
-        terms = list(dict.fromkeys(re.findall(r'(?i)\b[a-z]{6,}\b', source)))[:12]
-        if terms:
-            try: source += '\n\nSimilar cases:\n' + run_script(SKILL / 'scripts' / 'find_cases.py', *terms)
-            except (OSError, subprocess.SubprocessError, RuntimeError): pass
-    shape = (SKILL / 'scripts' / 'example-spec.json').read_text(encoding='utf-8') if name == 'report_draft' else json.dumps({k: ([] if k in ('meds', 'pathology', 'clarify') else 0 if k == 'age' else '') for k in sorted(keys)})
-    prompt = template + '\n\nSpec shape: ' + shape + '\n\nRequired top-level keys: ' + ', '.join(sorted(keys)) + '\nOutput path: ' + str(target) + '\n\nSkill rules:\n' + rules + '\n\nCase source:\n' + source
-    reply = agents.run(agent, prompt)
-    try:
-        spec = json_object(reply)
-        if not keys <= spec.keys(): raise ValueError('Agent reply missing required keys: ' + ', '.join(sorted(keys - spec.keys())))
-    except (ValueError, TypeError):
-        directory = Path(db.DATA_DIR) / 'agent-replies'; directory.mkdir(parents=True, exist_ok=True)
-        with (directory / (uuid.uuid4().hex + '.txt')).open('x', encoding='utf-8') as f: f.write(reply)
-        raise
-    target.parent.mkdir(parents=True, exist_ok=True)
-    with target.open('x', encoding='utf-8') as f: json.dump(spec, f, ensure_ascii=False, indent=2)
-    with connection() as conn: db.log(conn, patient_id, name, {'agent': agent, 'route': route, 'file': str(target)}, 'job')
-    return 'Spec created by ' + agent
+    raise clinical_privacy.PrivacyBlocked(
+        'Legacy patient-folder agent route disabled. Use manual report or clinical-only report assist.')
 
 
-def interview_spec(patient_id): return agent_step(patient_id, 'interview_spec')
-def report_draft(patient_id): return agent_step(patient_id, 'report_draft')
+def interview_spec(patient_id):
+    return agent_step(patient_id, 'interview_spec')
+
+
+def report_draft(patient_id):
+    return agent_step(patient_id, 'report_draft')
+
 
 def report_assist(patient_id):
+    """AI clinical findings only; patient identifiers are added by local report code."""
+    import agents
+    import clinical_privacy
+    import interview
     import report
-    with connection() as conn: folder = patient_folder(get_patient(conn, patient_id))
-    target = folder / ('report-assist-' + uuid.uuid4().hex + '.json')
-    try:
-        output = agent_step(patient_id, 'report_draft', target)
-        report.validate(json.loads(target.read_text(encoding='utf-8')))
-        os.replace(target, folder / 'report_spec.ai.json')
-        with connection() as conn: db.log(conn, patient_id, 'report_assist', {'file': str(folder / 'report_spec.ai.json')}, 'job')
-        return output
-    finally:
-        if target.exists(): target.unlink()
+    with connection() as conn:
+        patient = get_patient(conn, patient_id)
+        folder = patient_folder(patient)
+        record = interview.load(conn, patient)
+        clinical = clinical_privacy.project(record, sex=patient['sex'] or '')
+        source_revision = record['revision']
+        source_hash = clinical_privacy.fingerprint(clinical)
+        selected_name = agents.selected('report_assist')
+        selected = agents.get(selected_name)
+        if selected['type'] != 'api':
+            raise clinical_privacy.PrivacyBlocked(
+                'Clinical AI requires a restricted API agent; CLI agents are disabled for patient data')
+    prompt = ('You are assisting an Australian HMR pharmacist. Use only the clinical JSON. '
+              'Return ONLY JSON with exactly one key: findings, an array of up to 15 objects '
+              'each containing exactly title, recommendation, rationale, evidence_ids. '
+              'Evidence IDs must be drawn from the input. Do not invent missing clinical facts. '
+              'Recommendations are suggestions for pharmacist review, not prescribing decisions. '
+              'Do not include names, dates of birth, contact details, provider details or identifiers. '
+              'Clinical JSON: ' + json.dumps(clinical, ensure_ascii=False))
+    reply = json_object(agents.run(selected_name, prompt))
+    findings = clinical_privacy.validate_findings(reply, clinical)
+    with connection() as conn:
+        patient = get_patient(conn, patient_id)
+        latest = interview.load(conn, patient)
+        if latest['revision'] != source_revision or clinical_privacy.fingerprint(
+                clinical_privacy.project(latest, sex=patient['sex'] or '')) != source_hash:
+            raise ValueError('Clinical interview changed during AI analysis; rerun assistance')
+        folder = patient_folder(patient)
+        target = folder / 'report_spec.ai.json'
+        if target.exists():
+            raise FileExistsError('Existing AI draft must be reviewed or removed before rerunning')
+        manual = report.load(conn, patient)
+        if not manual.get('saved'):
+            # Start the manual report locally using the existing deterministic composer.
+            manual = report.start(conn, patient)
+        candidate = {k: v for k, v in manual.items() if k not in ('saved', 'interview_newer')}
+        candidate['issues'] = findings
+        report.validate(candidate)
+        atomic_json(target, candidate)
+        db.log(conn, patient_id, 'report_assist', {
+            'agent': selected_name, 'clinical_snapshot': source_hash,
+            'finding_count': len(findings)}, 'job')
+    return 'Clinical-only AI findings ready for pharmacist review'
 
 def import_history(patient_id):
     if patient_id is not None: raise ValueError('batch job takes no patient')
