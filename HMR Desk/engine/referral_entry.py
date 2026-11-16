@@ -1,4 +1,5 @@
 import hashlib
+import datetime as dt
 import importlib.util
 import json
 import os
@@ -98,10 +99,28 @@ def review(conn, paths):
     return {'rows': result}
 
 
+def _validate_date(value, field):
+    value = (value or '').strip()
+    if not value:
+        return
+    for fmt in ('%Y-%m-%d', '%d/%m/%Y', '%d-%m-%Y', '%d %b %Y', '%d %B %Y'):
+        try:
+            parsed = dt.datetime.strptime(value, fmt).date()
+        except ValueError:
+            continue
+        if field == 'dob' and parsed > dt.date.today():
+            raise ValueError('Date of birth cannot be in the future')
+        return
+    raise ValueError('Invalid ' + ('date of birth' if field == 'dob' else 'referral date') +
+                     '; confirm the exact date from the original PDF')
+
+
 def commit(conn, token, fields, distinct_person=False, manual_referral=False):
     if not isinstance(token, str) or not re.fullmatch('[0-9a-f]{32}', token): raise ValueError('Invalid review')
     if type(distinct_person) is not bool or type(manual_referral) is not bool: raise ValueError('Invalid pharmacist acknowledgement')
     if not isinstance(fields, dict) or not fields.keys() <= set(FIELDS) or any(not isinstance(v, str) for v in fields.values()): raise ValueError('Invalid fields')
+    for key in ('dob', 'referral_date'):
+        _validate_date(fields.get(key), key)
     record = conn.execute('SELECT value FROM meta WHERE key=?', ('referral_review_' + token,)).fetchone()
     if not record: raise ValueError('Review expired; review the PDF again')
     item = json.loads(record['value'])
