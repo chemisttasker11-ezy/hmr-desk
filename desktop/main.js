@@ -335,6 +335,27 @@ ipcMain.handle('one-off', async (e, action, site, value) => {
   }
   return oneOffs[site].map((p) => p.folder);
 });
+ipcMain.handle('open-report-version', async (e, patientId, reportFile, format) => {
+  if (e.sender !== win.webContents || !Number.isSafeInteger(patientId) || patientId < 1 ||
+      typeof reportFile !== 'string' || path.basename(reportFile) !== reportFile ||
+      !/^[^<>:"/\\|?*]+\.docx$/i.test(reportFile) || !['docx', 'pdf'].includes(format))
+    throw Error('Invalid report preview request');
+  const versions = await api('GET', `/api/patients/${patientId}/report-versions`);
+  const version = versions.versions?.find(row => row.file === reportFile && row.document_matches_build &&
+    (format === 'docx' || row.pdf_exists_and_matches));
+  if (!version) throw Error('Report version is not a verified HMR Desk output');
+  const patient = await api('GET', `/api/patients/${patientId}`);
+  const base = await fsp.realpath(config.base);
+  const patientFolder = await fsp.realpath(path.resolve(base, patient.folder_path || patient.folder));
+  if (!require('./src/folder').inside(base, patientFolder)) throw Error('Patient path outside workspace');
+  const name = format === 'pdf' ? reportFile.replace(/\.docx$/i, '.pdf') : reportFile;
+  const selected = await fsp.realpath(path.join(patientFolder, name));
+  if (path.dirname(selected) !== patientFolder || !(await fsp.stat(selected)).isFile())
+    throw Error('Report file is not inside this patient folder');
+  const openError = await shell.openPath(selected);
+  if (openError) throw Error('Windows could not open this file; use an installed compatible viewer');
+  return {opened:true};
+});
 ipcMain.handle('open-patient-folder', async (e, id, file) => {
   if (e.sender !== win.webContents || !Number.isSafeInteger(id) || id < 1) throw Error('Forbidden');
   const patient = await api('GET', `/api/patients/${id}`);
