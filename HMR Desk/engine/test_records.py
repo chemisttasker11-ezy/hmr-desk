@@ -83,3 +83,73 @@ def test_record_name_patterns(conn):
         assert records.is_record_name(ok), ok
     for bad in ('followup3.json', 'drug_classes.json', 'clinics.json', 'report.docx', 'MIMS interactions/../x.txt', 'a/interview.json', 'HMR Interview x.docx'):
         assert not records.is_record_name(bad), bad
+
+
+def _patient(conn, tmp_path, folder_name='A'):
+    folder = tmp_path / 'workspace' / 'Scheduled' / folder_name
+    folder.mkdir(parents=True)
+    pid = conn.execute("INSERT INTO patients(key,name,state,folder) VALUES (?,?,?,?)",
+                       ('k' + folder_name, 'Synthetic ' + folder_name, 'visited', 'Scheduled/' + folder_name)).lastrowid
+    conn.commit()
+    return pid, folder
+
+
+def test_migrate_all_is_repeat_safe_and_never_overwrites(conn, tmp_path):
+    import jobs
+    pid, folder = _patient(conn, tmp_path)
+    (folder / 'interview.json').write_bytes(b'{"notes":"old"}')
+    (folder / 'confirmed_meds.json').write_bytes(b'{"meds":[]}')
+    (folder / 'referral.pdf').write_bytes(b'%PDF-1.4 synthetic')
+    folder_for = lambda row: jobs.patient_folder(row)
+    first = records.migrate_all(conn, folder_for)
+    assert first['imported'] == 2 and first['conflict'] == 0
+    records.put(conn, pid, 'interview.json', b'{"notes":"newer"}'); conn.commit()
+    again = records.migrate_all(conn, folder_for)
+    assert again['imported'] == 0 and again['conflict'] == 1 and again['already'] == 1
+    assert records.get(conn, pid, 'interview.json') == b'{"notes":"newer"}'
+    assert (folder / 'interview.json').read_bytes() == b'{"notes":"old"}'  # plain file left alone
+    assert (folder / 'referral.pdf').exists() and records.names(conn, pid) == ['confirmed_meds.json', 'interview.json']
+
+
+def test_status_never_claims_protection_while_plain_files_remain(conn, tmp_path):
+    import jobs
+    pid, folder = _patient(conn, tmp_path)
+    (folder / 'interview.json').write_bytes(b'{"a":1}')
+    folder_for = lambda row: jobs.patient_folder(row)
+    before = records.status(conn, folder_for)
+    assert before['plain_files_differing_or_not_stored'] == 1 and before['saved_records_protected'] is False
+    records.migrate_all(conn, folder_for)
+    after = records.status(conn, folder_for)
+    assert after['plain_copies_matching_store'] == 1 and after['records_in_encrypted_store'] == 1
+    assert after['saved_records_protected'] is False
+
+
+def test_export_api_writes_labelled_copy_and_refuses_app_folders(conn, tmp_path):
+    import api
+    pid, folder = _patient(conn, tmp_path)
+    records.put(conn, pid, 'interview.json', b'{"a":1}'); records.put(conn, pid, 'MIMS interactions x.txt', b'synthetic'); conn.commit()
+    out = tmp_path / 'export'
+    status, body = api.handle(conn, 'POST', '/api/records/export', {}, {'patient_id': pid, 'destination': str(out)})
+    assert status == 200 and (out / 'interview.json').read_bytes() == b'{"a":1}'
+    assert 'OUTSIDE' in (out / records.EXPORT_NOTE).read_text(encoding='utf-8') and 'licence' in (out / records.EXPORT_NOTE).read_text(encoding='utf-8')
+    assert 'outside the encryption' in body['warning']
+    for bad in (str(tmp_path / 'workspace' / 'Scheduled' / 'A'), str(tmp_path / 'userdata'), 'relative'):
+        status, _ = api.handle(conn, 'POST', '/api/records/export', {}, {'patient_id': pid, 'destination': bad})
+        assert status == 400
+
+
+def test_backup_bundle_carries_records(conn, tmp_path):
+    import backup_bundle
+    pid, folder = _patient(conn, tmp_path)
+    records.put(conn, pid, 'interview.json', b'{"notes":"synthetic backup"}'); conn.commit()
+    out = tmp_path / 'bk' / 'b.hmrbackup'
+    backup_bundle.create(conn, tmp_path / 'workspace', out, 'synthetic-pass-123')
+    dest = tmp_path / 'restored'
+    backup_bundle.restore(out, dest, 'synthetic-pass-123')
+    import sqlite3
+    found = None
+    for p in dest.rglob('hmr.db'):
+        try:
+            c2 = db.connect(str(p)); found = records.get(c2, pid, 'interview.json'); c2.close()
+        except Exception: pass
+    assert found == b'{"notes":"synthetic backup"}'
