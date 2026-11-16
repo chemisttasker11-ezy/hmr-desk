@@ -21,6 +21,7 @@ import messaging
 import jobs
 import agents
 import records
+import medicine_reference
 import steps
 import app_paths
 import manual_medicine_names
@@ -601,6 +602,12 @@ def handle(conn, method, path, query, body):
                     'approved_by': result['approved_by']}, 'app')
             conn.commit()
             return 200, result
+        if path == '/api/medicines/status' and method == 'GET':
+            return 200, medicine_reference.status()
+        if path == '/api/medicines/search' and method == 'GET':
+            q = query.get('q', ''); q = q[0] if isinstance(q, list) and q else q
+            if not isinstance(q, str): raise ValueError('invalid search')
+            return 200, medicine_reference.search(q)
         if path == '/api/records/status' and method == 'GET':
             return 200, records.status(conn, lambda row: jobs.patient_folder(row))
         if path == '/api/records/migrate' and method == 'POST':
