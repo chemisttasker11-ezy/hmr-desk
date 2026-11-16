@@ -72,6 +72,14 @@ async function settings() {
       .join('');
   $('screen').innerHTML = `<h2>Settings</h2>${practiceFields()}
     <section class="card"><h2>Encrypted patient-data backup</h2><p>Back up the database and all files in the configured patient workspace. Store the backup outside that workspace and keep your passphrase safely: it cannot be recovered.</p><div class="actions"><button type="button" data-hmr-backup="create">Back up now</button><button type="button" data-hmr-backup="preview">Verify and preview a backup</button><button type="button" data-hmr-backup="restore">Restore into a separate folder</button><button type="button" data-restored-activate>Activate a verified isolated restored dataset (with rollback)</button></div><p id="backup-result" role="status"></p></section>
+    <section class="card"><h2>Owner-approved HMR report template</h2>
+      <p>The full layout must be approved by the owner, have matching short and long example reports, and include named HMR placeholders. Brainstorming PDFs and patient case reports are not a substitute.</p>
+      <label>Template version<input id="hmr-template-version" maxlength="80" placeholder="Owner release version"></label>
+      <label>Approving owner<input id="hmr-template-owner" maxlength="150" placeholder="Person explicitly authorising layout"></label>
+      <label><input id="hmr-template-authorised" type="checkbox"> I have the owner's permission to use this editable DOCX and its fonts/letterhead for HMR Desk.</label>
+      <button type="button" data-template-register>Choose and register approved Word template</button>
+      <p id="template-register-status" role="status"></p>
+    </section>
     <section class="card"><h2>Migrate existing patient workspace</h2><p>Move to a different local drive or folder without losing the originals. The clinical engine is stopped for the verified copy, an encrypted recovery backup is created first, and HMR Desk restarts after updating its workspace.</p><button type="button" data-workspace-migrate>Migrate current workspace safely</button><p role="status" id="migration-result"></p></section>
     <section id="saved-sign-ins"><h2>Saved sign-ins</h2><p>Sign-ins save by themselves.</p>
     <p>Stored encrypted for your Windows account on this PC only. Anyone who can use your Windows account can use them.</p>
@@ -165,6 +173,29 @@ function askEncryptedBackupPassphrase(action) {
 }
 
 async function agentClick(b) {
+  if (b.dataset.templateRegister !== undefined) {
+    const output = $('template-register-status');
+    const version = $('hmr-template-version')?.value?.trim() || '';
+    const approved_by = $('hmr-template-owner')?.value?.trim() || '';
+    if (!version || approved_by.length < 3 || !$('hmr-template-authorised')?.checked) {
+      if (output) output.textContent = 'Enter the version and approving owner, then confirm permission to use the editable layout.';
+      return true;
+    }
+    b.disabled = true;
+    if (output) output.textContent = 'Validating approved DOCX structure and exact checksum...';
+    try {
+      const response = await hmr.registerOwnerTemplate({
+        version,approved_by,owner_authorised:true
+      });
+      if (output) output.textContent = response.cancelled
+        ? 'Template registration cancelled'
+        : 'Approved template version ' + response.version + ' registered. SHA256: ' +
+          response.sha256 + '. Previous registered version retained.';
+    } catch(error) {
+      if (output) output.textContent = errorText(error);
+    } finally { b.disabled = false; }
+    return true;
+  }
   if (b.dataset.restoredActivate !== undefined) {
     const passphrase = await askEncryptedBackupPassphrase('create');
     if (passphrase == null) return true;
