@@ -51,9 +51,11 @@ def seed_visit(conn):
          'Synthetic dev seed. Not a real patient.', 'Visited (dev seed)', db.now()))
     conn.commit()
     patient = conn.execute('SELECT * FROM patients WHERE key=?', ('dev-seed-%d' % n,)).fetchone()
-    (path / 'confirmed_meds.json').write_text(json.dumps({
+    import records
+    records.put_json(conn, patient['id'], 'confirmed_meds.json', {
         'meds': [['Synthetic medicine A 10 mg tablet', 'Brand A'], ['Synthetic medicine B 5 mg tablet', '']],
-        'allergies': ['No known allergies (synthetic)']}), encoding='utf-8')
+        'allergies': ['No known allergies (synthetic)']})
+    conn.commit()
     api.action(conn, patient, {'action': 'interactions_manual', 'text': 'Synthetic dev seed: no interactions reviewed.'})
     db.log(conn, patient['id'], 'dev_seed', {'synthetic': True}, 'dev')
     conn.commit()
