@@ -613,6 +613,12 @@ def handle(conn, method, path, query, body):
             return 200, records.status(conn, lambda row: jobs.patient_folder(row), jobs.outside_files)
         if path == '/api/records/migrate' and method == 'POST':
             return 200, records.migrate_all(conn, lambda row: jobs.patient_folder(row), jobs.outside_files)
+        if path == '/api/records/retire' and method == 'POST':
+            if body != {'confirmed': True}: raise ValueError('Confirmation required')
+            result = records.retire_matching(conn, lambda row: jobs.patient_folder(row), jobs.outside_files)
+            db.log(conn, None, 'record_plain_copies_removed', result, 'api')
+            conn.commit()
+            return 200, result
         if path == '/api/records/export' and method == 'POST':
             if not isinstance(body, dict) or set(body) != {'patient_id', 'destination'} or not isinstance(body['patient_id'], int): raise ValueError('invalid export input')
             row = conn.execute('SELECT * FROM patients WHERE id=?', (body['patient_id'],)).fetchone()
