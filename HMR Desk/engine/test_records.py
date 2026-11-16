@@ -212,3 +212,113 @@ def test_shared_export_api_includes_shared_records_only(conn, tmp_path):
     assert status == 200 and body['files'] == {'intake_corrections.json': 'written'}
     assert not (out / 'interview.json').exists()
     assert (out / records.EXPORT_NOTE).exists()
+
+
+def test_retire_only_committed_matching_records_and_restart_export(conn, tmp_path):
+    import jobs
+    pid, folder = _patient(conn, tmp_path)
+    (folder / 'interview.json').write_bytes(b'{"synthetic":true}')
+    (folder / 'report_spec.json').write_bytes(b'{"older":true}')
+    (folder / 'source.pdf').write_bytes(b'%PDF synthetic')
+    records.import_folder(conn, pid, folder)
+    records.put(conn, pid, 'report_spec.json', b'{"newer":true}'); conn.commit()
+    result = records.retire_matching(conn, jobs.patient_folder)
+    assert result == {'removed': 1, 'different_or_missing': 1, 'skipped': 0, 'errors': 0}
+    assert not (folder / 'interview.json').exists()
+    assert (folder / 'report_spec.json').read_bytes() == b'{"older":true}'
+    assert (folder / 'source.pdf').exists()
+    dbfile = conn.execute('PRAGMA database_list').fetchone()[2]
+    with contextlib.closing(db.open_encrypted(dbfile, key=conn.hmr_key)) as reopened:
+        assert records.get(reopened, pid, 'interview.json') == b'{"synthetic":true}'
+        records.export_folder(reopened, pid, tmp_path / 'after-removal-export')
+    assert (tmp_path / 'after-removal-export' / 'interview.json').read_bytes() == b'{"synthetic":true}'
+
+
+def test_retire_shared_copies_and_interview_spec(conn, tmp_path):
+    import jobs
+    pid, folder = _patient(conn, tmp_path)
+    correction = tmp_path / 'workspace' / 'TO SORT' / 'intake_corrections.json'
+    correction.parent.mkdir(); correction.write_bytes(b'{}')
+    spec = jobs.interview_spec_path(conn.execute('SELECT * FROM patients WHERE id=?', (pid,)).fetchone())
+    spec.parent.mkdir(parents=True, exist_ok=True); spec.write_bytes(b'{"meds":[]}')
+    records.migrate_all(conn, jobs.patient_folder, jobs.outside_files)
+    result = records.retire_matching(conn, jobs.patient_folder, jobs.outside_files)
+    assert result['removed'] == 2
+    assert not correction.exists() and not spec.exists()
+    assert records.get(conn, 0, 'intake_corrections.json') == b'{}'
+    assert records.get(conn, pid, 'interview_spec.json') == b'{"meds":[]}'
+    assert records.retire_matching(conn, jobs.patient_folder, jobs.outside_files)['removed'] == 0
+    assert records.status(conn, jobs.patient_folder, jobs.outside_files)['saved_records_protected'] is False
+
+
+def test_retire_refuses_unsaved_transaction(conn, tmp_path):
+    import jobs
+    pid, folder = _patient(conn, tmp_path)
+    (folder / 'interview.json').write_bytes(b'{}')
+    records.put(conn, pid, 'interview.json', b'{}')
+    with pytest.raises(ValueError, match='Save changes'):
+        records.retire_matching(conn, jobs.patient_folder)
+    assert (folder / 'interview.json').exists()
+
+
+def test_retire_refuses_unencrypted_database(tmp_path):
+    with contextlib.closing(db.plain_connect(tmp_path / 'plain.db')) as plain:
+        records.ensure(plain); plain.commit()
+        with pytest.raises(ValueError, match='persisted encrypted'):
+            records.retire_matching(plain, lambda _: None)
+
+
+def test_retire_verification_failure_never_deletes(conn, tmp_path, monkeypatch):
+    import jobs
+    pid, folder = _patient(conn, tmp_path)
+    (folder / 'interview.json').write_bytes(b'{}')
+    records.import_folder(conn, pid, folder)
+    def fail(*args, **kwargs): raise ValueError('synthetic reopen failure')
+    monkeypatch.setattr(db, 'open_encrypted', fail)
+    with pytest.raises(ValueError, match='reopen failure'):
+        records.retire_matching(conn, jobs.patient_folder)
+    assert (folder / 'interview.json').exists() and not conn.in_transaction
+
+
+def test_retire_skips_symlink_and_concurrent_file_change(conn, tmp_path, monkeypatch):
+    from pathlib import Path
+    import jobs
+    pid, folder = _patient(conn, tmp_path)
+    target = folder / 'interview.json'; target.write_bytes(b'{}')
+    other = tmp_path / 'outside.json'; other.write_bytes(b'{}')
+    try: (folder / 'report_spec.json').symlink_to(other)
+    except OSError: pytest.skip('symlinks unavailable')
+    records.import_folder(conn, pid, folder)
+    original = Path.read_bytes
+    calls = []
+    def changing(path):
+        body = original(path)
+        if path == target:
+            calls.append(1)
+            if len(calls) == 1: path.write_bytes(b'{"changed":true}')
+        return body
+    monkeypatch.setattr(Path, 'read_bytes', changing)
+    result = records.retire_matching(conn, jobs.patient_folder)
+    assert result['removed'] == 0 and result['skipped'] == 2
+    assert target.exists() and other.exists()
+
+
+def test_retire_api_requires_confirmation(conn, tmp_path):
+    import api, jobs
+    pid, folder = _patient(conn, tmp_path)
+    (folder / 'interview.json').write_bytes(b'{}'); records.import_folder(conn, pid, folder)
+    status, _ = api.handle(conn, 'POST', '/api/records/retire', {}, {})
+    assert status == 400 and (folder / 'interview.json').exists()
+    status, result = api.handle(conn, 'POST', '/api/records/retire', {}, {'confirmed': True})
+    assert status == 200 and result['removed'] == 1 and not (folder / 'interview.json').exists()
+
+
+def test_retire_refuses_active_task(conn, tmp_path):
+    import jobs
+    pid, folder = _patient(conn, tmp_path)
+    (folder / 'interview.json').write_bytes(b'{}'); records.import_folder(conn, pid, folder)
+    conn.execute("INSERT INTO tasks(id,step,patient_id,state,created) VALUES(?,?,?,?,?)", ('synthetic-task', 'report_build', pid, 'running', '2026-01-01'))
+    conn.commit()
+    with pytest.raises(ValueError, match='active tasks'):
+        records.retire_matching(conn, jobs.patient_folder)
+    assert (folder / 'interview.json').exists()
