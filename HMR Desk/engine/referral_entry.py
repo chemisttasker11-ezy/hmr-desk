@@ -49,7 +49,8 @@ def review(conn, paths):
                 if doc.needs_pass: raise ValueError('PDF is password protected')
                 pages = [p.get_text() for p in doc]
             if not pages: raise ValueError('PDF has no pages')
-            if any(len(page.strip()) < 200 for page in pages):
+            methods = ['text' if len(page.strip()) >= 200 else 'ocr' for page in pages]
+            if 'ocr' in methods:
                 ocr = module.ocr_pdfs([Path(source)]).get(str(Path(source)), [])
                 if len(ocr) != len(pages): raise ValueError('OCR did not return every page')
                 pages = [page if len(page.strip()) >= 200 else ocr[i] for i, page in enumerate(pages)]
@@ -68,6 +69,8 @@ def review(conn, paths):
             item = {'source': source, 'sha256': digest, 'fields': fields, 'kind': kind}
             conn.execute('INSERT INTO meta(key,value) VALUES (?,?)', ('referral_review_' + token, json.dumps(item)))
             row.update(token=token, kind=kind, fields=fields, flags=flags,
+                       page_previews=[{'page': i + 1, 'method': methods[i],
+                                       'text': text[:1200]} for i, text in enumerate(pages[:20])],
                        status='duplicate' if duplicate or content_dup or batch_dup else ('review' if kind == 'referral' else 'rejected'),
                        duplicate_kind='content' if content_dup or digest in {x.get('sha256') for x in result} else ('identity' if duplicate or batch_dup else None),
                        sha256=digest,
