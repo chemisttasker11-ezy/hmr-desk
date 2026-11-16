@@ -1,0 +1,18 @@
+{
+  "validated_on": "2026-11-16",
+  "python_dependencies": "standard library only",
+  "pbs": {
+    "publication_url": "https://pbs.gov.au/browse/publications",
+    "download_url": "https://pbs.gov.au/publication/schedule/2026/11/2026-11-01-PBS-API-CSV-files.zip?variant=3",
+    "effective_date": "2026-11-01",
+    "schedule_code": "4753",
+    "zip_bytes": 4521523,
+    "sha256": "3631dd5f3d593f1cb99f8be77a669e03972e65cd9e4c91e9076c63d480b12dbe",
+    "imported_listing_count": 15365,
+    "validation": "New downloader and importer both run on official public ZIP; brand and generic search checked",
+    "source_dataset_committed": false
+  },
+  "amt": {"validation": "Synthetic RF2 Snapshot only; owner NCTS licence and real release validation still required"},
+  "artg": {"validation": "Synthetic CSV only; live export validation and commercial permissions still required"},
+  "clinical_acceptance": false
+}
