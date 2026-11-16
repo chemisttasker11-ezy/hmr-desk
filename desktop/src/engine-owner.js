@@ -55,7 +55,20 @@ async function start({ resourcesPath, dataDir, workspace, config, timeoutMs = 20
             throw Error('Engine version mismatch. Reinstall the matching application version.');
           config.api = url;
           config.tokenFile = tokenFile;
-          return { child, url, status, stop: () => { if (!exited) child.kill(); } };
+          return { child, url, status, stop: async () => {
+            if (exited) return;
+            try {
+              await fetch(url + '/api/engine/stop', {
+                method: 'POST', headers: { 'X-HMR-Token': session, 'Content-Type': 'application/json' },
+                body: '{}', signal: AbortSignal.timeout(1500),
+              });
+              await Promise.race([
+                new Promise(resolve => child.once('exit', resolve)),
+                new Promise(resolve => setTimeout(resolve, 2500)),
+              ]);
+            } catch {}
+            if (!exited) child.kill();
+          } };
         }
       } catch (error) {
         if (error.message.startsWith('Engine version mismatch')) throw error;
