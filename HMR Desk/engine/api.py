@@ -916,6 +916,12 @@ def handle(conn, method, path, query, body):
                 except interview.Conflict:
                     conn.rollback(); return 409, {'error': 'interview conflict'}
                 return 200, result
+        match = re.fullmatch(r'/api/patients/(\d+)/medicine-context', path)
+        if match and method == 'GET':
+            p = conn.execute('SELECT * FROM patients WHERE id=?', (int(match[1]),)).fetchone()
+            if not p: return 404, {'error': 'patient not found'}
+            import followup
+            return 200, followup.medicine_context(conn, p)
         match = re.fullmatch(r'/api/patients/(\d+)/(timeline|followup/([12])(/export)?)', path)
         if match:
             p = conn.execute('SELECT * FROM patients WHERE id=?', (int(match[1]),)).fetchone()
