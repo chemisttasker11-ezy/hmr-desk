@@ -165,3 +165,18 @@ def test_isolated_restore_integrity_check_before_activation(tmp_path, monkeypatc
     with pytest.raises(ValueError, match='active clinical storage'):
         backup_bundle.verify_isolated(workspace)
     conn.close()
+
+
+def test_empty_workspace_backup_restores_a_workspace_folder(tmp_path, monkeypatch):
+    workspace = tmp_path / 'active workspace'
+    workspace.mkdir()
+    monkeypatch.setattr(db, 'BASE', str(workspace))
+    monkeypatch.setattr(db, 'DATA_DIR', str(tmp_path / 'active data'))
+    conn = db.connect(str(tmp_path / 'active data' / 'hmr.db'))
+    output = tmp_path / 'backups' / 'empty.hmrbak'
+    backup_bundle.create(conn, workspace, output, 'a-long-local-passphrase-for-backup')
+    conn.close()
+    location = tmp_path / 'recovered'
+    backup_bundle.restore(output, location, 'a-long-local-passphrase-for-backup')
+    assert (location / 'workspace').is_dir()
+    assert backup_bundle.verify_isolated(location)['verified'] is True
