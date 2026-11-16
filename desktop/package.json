@@ -8,7 +8,8 @@
     "test": "node --test",
     "smoke": "node dev/smoke.js",
     "shots": "node dev/shots.js",
-    "dist": "electron-builder --win nsis --x64"
+    "dist": "electron-builder --win nsis --x64",
+    "build:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File ../scripts/build-windows.ps1"
   },
   "devDependencies": {
     "electron": "^45.3.0",
@@ -46,7 +47,23 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "HMR Desk"
-    }
+    },
+    "extraResources": [
+      {
+        "from": "../HMR Desk/engine/dist/hmr-engine",
+        "to": "engine/hmr-engine",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "../scripts/intake",
+        "to": "scripts/intake",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ]
   },
   "dependencies": {
     "leaflet": "^1.9.4"
