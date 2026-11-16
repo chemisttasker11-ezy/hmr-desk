@@ -267,16 +267,27 @@ def report_build(patient_id, pdf=False):
             if not target.exists() and (not pdf or not pdf_target.exists()): break
         else: raise FileExistsError('Report revision limit exceeded')
         import local_report_builder
+        import template_report_builder
         import pdf_export
-        # The current renderer remains provisional until the owner-approved DOCX
-        # template is supplied and the template fidelity gate has passed.
+        template_root = APP_ASSETS / 'templates'
+        approved = None
+        try:
+            approved = template_report_builder.approved_template(template_root)
+        except FileNotFoundError:
+            pass
+        # Missing owner approval always means provisional, never a final layout.
+        # An installed but invalid manifest must fail closed (do not downgrade).
         with tempfile.TemporaryDirectory(prefix='.hmr-docx-', dir=folder) as directory:
             draft = Path(directory) / target.name
-            local_report_builder.render(data, draft)
+            if approved:
+                template_report_builder.render(data, draft, approved[0])
+            else:
+                local_report_builder.render(data, draft)
             if not draft.is_file(): raise RuntimeError('Draft Word report failed to render')
             if target.exists(): raise FileExistsError('Output appeared during report rendering')
             os.replace(draft, target)
-        output = 'Built a provisional local Word report'
+        output = ('Built approved-layout Word draft ' + approved[1]['version']
+                  if approved else 'Built a provisional local Word report (not owner-approved)')
         if pdf:
             try:
                 pdf_export.convert(target, pdf_target)
