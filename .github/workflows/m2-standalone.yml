@@ -38,6 +38,21 @@ jobs:
         run: |
           npm ci
           npm test
+      - name: Ensure Electron binary is installed
+        working-directory: desktop
+        shell: pwsh
+        run: |
+          $exe = 'node_modules/electron/dist/electron.exe'
+          if (-not (Test-Path $exe)) {
+            Write-Host 'Electron binary missing after npm ci; running electron install script'
+            node node_modules/electron/install.js
+            if ($LASTEXITCODE -ne 0) { throw 'Electron install script failed' }
+          }
+          if (-not (Test-Path $exe)) {
+            Get-ChildItem node_modules/electron -Force | Format-Table Name
+            throw 'Electron binary still not installed'
+          }
+          & $exe --version
       - name: Real Windows DPAPI protected synthetic draft crash/restart
         shell: pwsh
         run: ./scripts/smoke-dpapi.ps1
