@@ -1,4 +1,5 @@
 ﻿import datetime as dt
+import records
 import os, tempfile
 from pathlib import Path
 import db, api, lifecycle
@@ -87,8 +88,8 @@ with tempfile.TemporaryDirectory() as tmp:
     # Notes, date boundary, test exclusion, and one backup for a multi-patient run.
     import json
     from unittest.mock import patch
-    (folder/'interview.json').write_text(json.dumps({'notes': '  useful notes  '}), encoding='utf-8')
     noted = patient('sheet_ready', folder='folder', visit_date=str(today-dt.timedelta(days=2)))
+    records.put(c, noted['id'], 'interview.json', json.dumps({'notes': '  useful notes  '}).encode('utf-8')); c.commit()
     blank = patient('pathology_ready', visit_date=str(today-dt.timedelta(days=3)))
     patient('confirmed', visit_date=str(today), folder='folder')
     patient('confirmed', visit_date=str(today-dt.timedelta(days=1)), is_test=1)
