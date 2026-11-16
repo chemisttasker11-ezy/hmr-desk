@@ -43,6 +43,20 @@ def exists(conn, p, name):
     f = folder(p)
     return bool(f and (f / name).is_file())
 
+def ingest_generated(conn, p, name):
+    """The desktop helper saves a MIMS result file in the patient folder. Copy it into the record store
+    when its name and bytes match; the plain file is left for the verified-retirement step."""
+    if not isinstance(name, str) or not re.fullmatch(r'MIMS interactions generated [0-9a-f]{64} [0-9a-f]{64}\.txt', name): return False
+    if records.exists(conn, p['id'], name): return True
+    f = folder(p)
+    source = f / name if f else None
+    if not source or source.is_symlink() or not source.is_file(): return False
+    body = source.read_bytes()
+    if hashlib.sha256(body).hexdigest() != name.split(' ')[-1][:-4]: return False
+    records.put(conn, p['id'], name, body)
+    conn.commit()
+    return True
+
 def interactions_result_current(conn, p, name):
     if not isinstance(name, str): return False
     match = re.fullmatch(r'MIMS interactions generated ([0-9a-f]{64}) ([0-9a-f]{64})\.txt', name)
