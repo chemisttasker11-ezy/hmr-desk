@@ -58,7 +58,7 @@ async function recordsCardLoad() {
   try {
     const status = await hmr.api('GET', '/api/records/status');
     const list = await hmr.api('GET', '/api/patients');
-    if (pick) pick.replaceChildren(...[{id: 0, name: 'Shared records (all patients)'}, ...(list.patients || [])].map(p => { const o = document.createElement('option'); o.value = String(p.id); o.textContent = p.name; return o; }));
+    if (pick) pick.replaceChildren(...[{id: '', name: 'Choose records to export'}, ...(list.patients || []), {id: 0, name: 'Shared records (all patients)'}].map(p => { const o = document.createElement('option'); o.value = String(p.id); o.textContent = p.name; return o; }));
     output.textContent = status.records_in_encrypted_store + ' records in the encrypted store. ' +
       status.plain_copies_matching_store + ' plain copies still on disk match them and ' + status.plain_files_differing_or_not_stored +
       ' plain files differ or are not stored yet. Saved records are not protected while plain copies remain.';
@@ -103,7 +103,7 @@ async function settings() {
       Their unavailability must not block the manual HMR workflow. Authorised identifying SMS remains separate from clinical AI.</p>
     </section>
     <section class="card"><h2>Data protection</h2><p>The patient database is encrypted on this PC. Its key is tied to your Windows user. The recovery key lets you open the database on a new PC after restoring a backup. Store it somewhere safe and separate, such as a password manager or a printed copy.</p><div class="actions"><button type="button" data-storage="reveal">Show recovery key</button><button type="button" data-storage="confirm">I have stored the recovery key</button><button type="button" data-storage="rotate">Make a new recovery key</button></div><p id="storage-result" role="status"></p></section>
-    <section class="card"><h2>Saved clinical records</h2><p>Saved interview, report, medicine, follow-up and pathology records are being moved into the encrypted database. Until the plain copies in patient folders are removed they are NOT protected, and Word, PDF and source documents are not encrypted by the app. You can export a readable copy of one patient's records or the shared corrections and history plan (which may cover several patients). The exported copy is outside the app's encryption.</p><div class="actions"><button type="button" data-records-refresh>Check record storage</button><select id="records-patient" aria-label="Patient to export"></select><button type="button" data-records-export>Export records...</button></div><p id="records-result" role="status"></p></section>
+    <section class="card"><h2>Saved clinical records</h2><p>Saved interview, report, medicine, follow-up and pathology records are being moved into the encrypted database. Until the tracked plain copies in patient folders and shared storage are removed they are NOT protected, and Word, PDF and source documents are not encrypted by the app. You can export a readable copy of one patient's records or the shared corrections and history plan (which may cover several patients). The exported copy is outside the app's encryption.</p><div class="actions"><button type="button" data-records-refresh>Check record storage</button><select id="records-patient" aria-label="Patient to export"></select><button type="button" data-records-export>Export records...</button><button type="button" data-records-retire>Remove verified plain copies...</button></div><p id="records-result" role="status"></p></section>
     <section class="card"><h2>Encrypted patient-data backup</h2><p>Back up the database and all files in the configured patient workspace. Store the backup outside that workspace and keep your passphrase safely: it cannot be recovered.</p><div class="actions"><button type="button" data-hmr-backup="create">Back up now</button><button type="button" data-hmr-backup="preview">Verify and preview a backup</button><button type="button" data-hmr-backup="restore">Restore into a separate folder</button><button type="button" data-restored-activate>Activate a verified isolated restored dataset (with rollback)</button><button type="button" data-restored-rollback>Roll back to previous data</button></div><p id="backup-result" role="status"></p></section>
     <section class="card"><h2>Owner-approved HMR report template</h2>
       <p>The full layout must be approved by the owner, have matching short and long example reports, and include named HMR placeholders. Brainstorming PDFs and patient case reports are not a substitute.</p>
@@ -294,11 +294,18 @@ async function agentClick(b) {
     }
     return true;
   }
-  if (b.dataset.recordsRefresh !== undefined || b.dataset.recordsExport !== undefined) {
+  if (b.dataset.recordsRefresh !== undefined || b.dataset.recordsExport !== undefined || b.dataset.recordsRetire !== undefined) {
     const output = $('records-result'); const pick = $('records-patient');
     b.disabled = true;
     try {
-      if (b.dataset.recordsRefresh !== undefined) {
+      if (b.dataset.recordsRetire !== undefined) {
+        const result = await hmr.retireRecordCopies();
+        await recordsCardLoad();
+        if (output) output.textContent = result.cancelled ? 'Removal cancelled' : result.removed +
+          ' verified plain copies removed. ' + result.different_or_missing + ' different or unstored files, ' +
+          result.skipped + ' skipped files and ' + result.errors + ' errors remain. This was not secure erasure. ' +
+          'Word, PDF, source/import documents and other copies are unchanged. Windows verification is still required.';
+      } else if (b.dataset.recordsRefresh !== undefined) {
         await recordsCardLoad();
       } else {
         const id = pick && pick.value !== '' ? Number(pick.value) : NaN;
@@ -397,4 +404,4 @@ async function agentSubmit(form) {
   } catch (error) {
     (form.querySelector('.error') || $('agent-message')).textContent = errorText(error);
   }
-}
+      }
