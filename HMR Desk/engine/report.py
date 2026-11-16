@@ -89,9 +89,10 @@ def observations(record):
 def intro_text(record, name, visit):
     d = record['details']
     if not any(d.get(k) for k in ('present', 'lives', 'manager', 'daa')): return ''
-    text = 'I visited ' + name + (' on ' + visit if visit else '')
+    # Owner's reports are third person: "<name> was interviewed at home, ...".
+    text = name + ' was interviewed at home' + (' on ' + visit if visit else '')
     if d.get('present') == 'with_other': text += ', with ' + (d.get('present_details') or 'a carer or family member') + ' present'
-    elif d.get('present') == 'alone': text += ' and saw the patient alone'
+    elif d.get('present') == 'alone': text += ', alone'
     sentences = [text + '.']
     if d.get('lives'): sentences.append(name + ' lives ' + {'alone': 'alone', 'partner': 'with a partner', 'family': 'with family', 'other': 'in another living arrangement'}[d['lives']] + '.')
     manager = {'self': 'the patient', 'other': d.get('manager_details') or 'someone else'}.get(d.get('manager'))
