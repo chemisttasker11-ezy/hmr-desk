@@ -54,6 +54,8 @@ def create(conn, workspace, output, password):
     salt, nonce = secrets.token_bytes(16), secrets.token_bytes(12)
     key = key_for(password, salt)
     output.parent.mkdir(parents=True, exist_ok=True)
+    data_version = conn.execute('PRAGMA data_version').fetchone()[0]
+    total_changes = conn.total_changes
     with tempfile.TemporaryDirectory(prefix='hmr-backup-') as directory:
         root = Path(directory)
         database = root / 'hmr.db'
@@ -62,11 +64,16 @@ def create(conn, workspace, output, password):
         zipped = root / 'snapshot.zip'
         index = {}
         paths = [('data/hmr.db', database)]
-        for item in workspace.rglob('*'):
+        for item in sorted(workspace.rglob('*')):
             if item.is_symlink():
                 raise ValueError('Workspace contains a symlink; remove it before backup')
             if item.is_file():
                 paths.append(('workspace/' + item.relative_to(workspace).as_posix(), item))
+        # Capture the complete file set and metadata. If a parallel interview,
+        # referral or report save changes anything, abort rather than publish
+        # a deceptively successful but inconsistent multi-file archive.
+        before = {name: (item.stat().st_size, item.stat().st_mtime_ns)
+                  for name, item in paths[1:]}
         if len(paths) > MAX_FILES:
             raise ValueError('Too many files to back up')
         with zipfile.ZipFile(zipped, 'w', zipfile.ZIP_DEFLATED, allowZip64=True) as archive:
@@ -74,11 +81,13 @@ def create(conn, workspace, output, password):
                 if not path.is_file():
                     raise ValueError('Source file disappeared during backup')
                 hasher = hashlib.sha256()
+                length = 0
                 with path.open('rb') as source, archive.open(name, 'w') as dest:
                     while chunk := source.read(CHUNK):
                         hasher.update(chunk)
+                        length += len(chunk)
                         dest.write(chunk)
-                index[name] = {'sha256': hasher.hexdigest(), 'size': path.stat().st_size}
+                index[name] = {'sha256': hasher.hexdigest(), 'size': length}
             archive.writestr('manifest.json', json.dumps({'format': 1, 'files': index},
                                                          sort_keys=True))
         fd, temp = tempfile.mkstemp(prefix='.hmr-encrypt-', dir=output.parent)
@@ -92,6 +101,12 @@ def create(conn, workspace, output, password):
                 encrypted.write(encryptor.tag)
                 encrypted.flush()
                 os.fsync(encrypted.fileno())
+            current = {('workspace/' + item.relative_to(workspace).as_posix()):
+                       (item.stat().st_size, item.stat().st_mtime_ns)
+                       for item in workspace.rglob('*') if item.is_file() and not item.is_symlink()}
+            if current != before or conn.total_changes != total_changes or (
+                    conn.execute('PRAGMA data_version').fetchone()[0] != data_version):
+                raise ValueError('Patient workspace or database changed during backup; retry when no edits are pending')
             if output.exists():
                 raise FileExistsError('Backup destination already exists')
             os.replace(temp, output)
