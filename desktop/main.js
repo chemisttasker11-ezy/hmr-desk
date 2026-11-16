@@ -182,6 +182,7 @@ prodaLogin = require('./src/proda-login')({
 ipcMain.handle('api', async (e, method, p, b) => {
   if (e.sender !== win.webContents || p === '/api/referrals/review' || p.startsWith('/api/backups/') ||
       (method === 'POST' && p.endsWith('/pathology/sources')) ||
+      (method === 'POST' && p === '/api/templates/register') ||
       require('./src/control').isPrivateApiRoute(p)) throw Error('Forbidden');
   return api(method, p, b);
 });
@@ -336,6 +337,27 @@ ipcMain.handle('one-off', async (e, action, site, value) => {
     oneOffs[site].push(entry);
   }
   return oneOffs[site].map((p) => p.folder);
+});
+ipcMain.handle('register-owner-template', async (e, details) => {
+  if (e.sender !== win.webContents || !details || typeof details !== 'object' ||
+      typeof details.version !== 'string' || typeof details.approved_by !== 'string' ||
+      details.owner_authorised !== true || details.version.length > 80 ||
+      details.approved_by.length > 150)
+    throw Error('Owner-approved template registration requires explicit authorisation');
+  const chosen = await dialog.showOpenDialog(win, {
+    title:'Choose editable owner-approved HMR Word template',
+    properties:['openFile'],filters:[{name:'Editable Word template',extensions:['docx']}],
+  });
+  if (chosen.canceled || !chosen.filePaths[0]) return {cancelled:true};
+  const confirmation = await dialog.showMessageBox(win, {
+    type:'warning',title:'Register owner-approved HMR layout',
+    message:'Confirm this is the correct editable HMR template with permission to use its letterhead and fonts.',
+    detail:'A template with missing placeholders, an invalid checksum, or no owner attestation will be refused. Previous template versions are archived locally. This does not constitute final clinical or release acceptance.',
+    buttons:['Register this version','Cancel'],defaultId:1,cancelId:1,noLink:true,
+  });
+  if (confirmation.response !== 0) return {cancelled:true};
+  return api('POST','/api/templates/register',{source:chosen.filePaths[0],
+    version:details.version,approved_by:details.approved_by,owner_authorised:true});
 });
 ipcMain.handle('pathology-source-pick', async (e, patientId) => {
   if (e.sender !== win.webContents || !Number.isSafeInteger(patientId) || patientId < 1)
