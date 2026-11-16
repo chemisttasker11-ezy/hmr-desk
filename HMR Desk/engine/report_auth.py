@@ -19,6 +19,29 @@ def digest(file):
     return hashlib.sha256(Path(file).read_bytes()).hexdigest()
 
 
+def source_snapshot(patient):
+    """Hash original referral/pathology sources, excluding generated reports."""
+    folder = jobs.patient_folder(patient).resolve()
+    candidates = []
+    for name in ('referral_source.json', 'pathology_sources.json', 'referral.pdf'):
+        candidates.append(folder / name)
+    candidates.extend(sorted(
+        p for p in folder.iterdir() if p.is_file() and 'referral' in p.stem.lower() and p.suffix.lower() == '.pdf'
+    ))
+    pathology = folder / 'Pathology'
+    if pathology.is_dir():
+        candidates.extend(sorted(pathology.glob('*.pdf')))
+    result = {}
+    for file in candidates:
+        if not file.exists():
+            continue
+        if file.is_symlink() or not file.is_file() or not file.resolve().is_relative_to(folder):
+            raise ValueError('Unsafe clinical source path')
+        relative = file.relative_to(folder).as_posix()
+        result[relative] = digest(file)
+    return dict(sorted(result.items()))
+
+
 def generated_versions(conn, patient):
     """Only job-generated, auditable files in the patient's own folder."""
     root = jobs.patient_folder(patient).resolve()
@@ -84,6 +107,8 @@ def check_approval(conn, patient, body):
     template, approved = template_report_builder.approved_template(jobs.APP_ASSETS / 'templates')
     if detail.get('template_sha256') != approved['sha256']:
         raise ValueError('Approved template changed since report generation; rebuild first')
+    if detail.get('source_files_sha256') != source_snapshot(patient):
+        raise ValueError('Original referral or pathology source changed since report generation')
     root = jobs.patient_folder(patient).resolve()
     file = (root / filename).resolve()
     if file.parent != root or not file.is_file() or digest(file) != sha or sha != detail.get('sha256'):
@@ -114,6 +139,7 @@ def check_approval(conn, patient, body):
         'pathology_revision': detail['pathology_revision'],
         'template_sha256': detail['template_sha256'],
         'template_version': detail['template_version'],
+        'source_files_sha256': detail['source_files_sha256'],
         'reviewer': reviewer.strip(),
         'medicine_review_hash': review_status['source_hash'],
         'clinical_reviewed': True,
@@ -142,6 +168,8 @@ def check_sent(conn, patient):
         raise ValueError('Interview was edited after sign-off')
     if pathology_records.revision(pathology_records.file_for(patient)) != evidence.get('pathology_revision'):
         raise ValueError('Pathology was edited after sign-off')
+    if evidence.get('source_files_sha256') != source_snapshot(patient):
+        raise ValueError('Original source files changed after sign-off')
     import reconciliation
     current = reconciliation.digest(interview.load(conn, patient))
     if not evidence.get('medicine_review_hash') or current != evidence['medicine_review_hash']:
