@@ -61,6 +61,8 @@ def atomic_json(path, data):
     try:
         with os.fdopen(fd, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
         os.replace(temp, path)
     finally:
         if os.path.exists(temp): os.unlink(temp)
