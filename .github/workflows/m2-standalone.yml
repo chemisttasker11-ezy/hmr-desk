@@ -9,6 +9,10 @@ on:
       - '.github/workflows/m2-standalone.yml'
   workflow_dispatch:
 
+concurrency:
+  group: m2-windows-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
