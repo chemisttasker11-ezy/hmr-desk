@@ -8,7 +8,9 @@ import db, messaging, outbox, settings
 with tempfile.TemporaryDirectory() as tmp:
     db.BASE = tmp
     conn = db.connect(os.path.join(tmp, 'db.sqlite'))
-    settings.update(conn, {'ai_reply_reading': 'off'})
+    # Owner preference: messages are drafted for approval; nothing sends itself until a kind is switched to auto.
+    assert all(settings.get(conn, 'auto_' + k) == 'ask' for k in ('confirmation', 'thanks_decline', 'follow_up', 'reminder'))
+    settings.update(conn, {'ai_reply_reading': 'off', 'auto_confirmation': 'auto', 'auto_thanks_decline': 'auto', 'auto_follow_up': 'auto', 'auto_reminder': 'auto'})
     outbox.config = lambda: {'test_number': '0412345678'}
     now = dt.datetime(2026, 11, 11, 15)
     def patient(key, state, phone='0412345678', postcode='4216', visit='2026-11-15', folder=None):
