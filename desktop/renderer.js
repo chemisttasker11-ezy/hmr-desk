@@ -1,5 +1,19 @@
 const { esc, date, group, sentence } = H;
 const $ = (id) => document.getElementById(id);
+if (typeof hmr.onEngineState === 'function') hmr.onEngineState(state => {
+  let notice = document.getElementById('hmr-engine-connection-state');
+  if (!notice) {
+    notice = document.createElement('p');
+    notice.id = 'hmr-engine-connection-state';
+    notice.setAttribute('role', 'status');
+    notice.className = 'error';
+    notice.style.cssText = 'position:sticky;top:0;z-index:10000;padding:12px;background:#f6d8d8;color:#571515;font-weight:600';
+    document.body.prepend(notice);
+  }
+  notice.hidden = !!state.ready;
+  notice.textContent = state.ready ? '' : (state.reason || 'Clinical engine is temporarily unavailable');
+});
+
 const labels = {
   today: 'Today', book: 'Book', visit: 'Visit', claim: 'Claim', activity: 'Activity', to_book: 'To book', report_editor: 'Edit report', followup_editor: 'Follow-up form',
   calendar: 'Calendar',
