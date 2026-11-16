@@ -28,12 +28,18 @@ def test_legacy_schema_upgrade_preserves_rows_and_does_not_reapply(tmp_path, mon
         assert legacy.execute('PRAGMA user_version').fetchone()[0] == 0
     with db.connect(str(target)) as upgraded:
         assert upgraded.execute('PRAGMA user_version').fetchone()[0] == 1
+        snapshots = list((tmp_path / 'userdata' / '.migration-snapshots').glob('before-schema-*.db'))
+        assert len(snapshots) == 1
+        with sqlite3.connect(snapshots[0]) as previous:
+            assert previous.execute('PRAGMA user_version').fetchone()[0] == 0
+            assert previous.execute("SELECT name FROM patients WHERE key='prior'").fetchone()[0] == 'Prior Synthetic'
         assert upgraded.execute("SELECT name FROM patients WHERE key='prior'").fetchone()[0] == 'Prior Synthetic'
         assert upgraded.execute("SELECT body FROM messages WHERE id='old'").fetchone()[0] == 'test'
         assert 'ai_intent' in {r[1] for r in upgraded.execute('PRAGMA table_info(messages)')}
         assert 'format' in {r[1] for r in upgraded.execute('PRAGMA table_info(tasks)')}
     with db.connect(str(target)) as again:
         assert again.execute("SELECT COUNT(*) FROM patients").fetchone()[0] == 1
+    assert len(list((tmp_path / 'userdata' / '.migration-snapshots').glob('before-schema-*.db'))) == 1
 
 
 def test_newer_database_refused_without_modification(tmp_path):
