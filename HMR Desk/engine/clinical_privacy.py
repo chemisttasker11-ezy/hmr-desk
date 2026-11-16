@@ -100,6 +100,18 @@ def project(record, *, sex=""):
         # Free-form observation notes can contain patient identifiers: omit.
         # A later structured pathology schema can safely provide values and units.
         observations.append({"id": "obs_" + str(i + 1), "type": clean(row[0], label=True)})
+    pathology = []
+    for i, row in enumerate(record.get("pathology") or []):
+        if not isinstance(row, list) or len(row) != 4:
+            raise PrivacyBlocked("Invalid pathology row")
+        # Pathology date, report header and free-text comments stay local.
+        # Only clearly numeric results are eligible; everything else is withheld.
+        value = row[1].strip() if isinstance(row[1], str) else ""
+        if not re.fullmatch(r"-?\\d+(?:\\.\\d+)?", value):
+            continue
+        pathology.append({"id": "lab_" + str(i + 1),
+                          "test": clean(row[0], label=True),
+                          "value": value})
     details = record.get("details") or {}
     symptoms = {}
     for key in ("sx_falls", "sx_dizziness", "sx_drowsiness", "sx_pain",
@@ -118,8 +130,9 @@ def project(record, *, sex=""):
         "medicines": medicines,
         "other_medicines": other,
         "observation_types": observations,
+        "pathology": pathology,
         "structured_flags": symptoms,
-        "omitted": ["free_text_notes", "pathology_values_pending_structured_review"],
+        "omitted": ["free_text_notes", "pathology_dates_and_units_pending_structured_review"],
     }
     validate_payload(result)
     return result
@@ -127,7 +140,7 @@ def project(record, *, sex=""):
 
 def validate_payload(payload):
     if set(payload) != {"schema_version", "demographics", "medicines", "other_medicines",
-                        "observation_types", "structured_flags", "omitted"}:
+                        "observation_types", "pathology", "structured_flags", "omitted"}:
         raise PrivacyBlocked("Unexpected clinical payload fields")
     if payload["schema_version"] != SCHEMA:
         raise PrivacyBlocked("Invalid clinical schema version")
@@ -152,7 +165,7 @@ def validate_findings(response, payload):
     if not isinstance(findings, list) or len(findings) > 15:
         raise PrivacyBlocked("Invalid findings count")
     ids = {m["id"] for m in payload["medicines"] + payload["other_medicines"]}
-    ids.update(x["id"] for x in payload["observation_types"])
+    ids.update(x["id"] for x in payload["observation_types"] + payload["pathology"])
     result = []
     for item in findings:
         if not isinstance(item, dict) or set(item) != {"title", "recommendation", "rationale", "evidence_ids"}:
