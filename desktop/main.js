@@ -24,7 +24,16 @@ let engineOwner = null;
 const { start: startEngine } = require('./src/engine-owner');
 const { verifyWorkspace } = require('./src/storage-choice');
 const { makeVault } = require('./src/draft-vault');
-const protectedDraftVault = makeVault(path.join(dataDir, 'encrypted-drafts'), safeStorage);
+// First-launch guard: Electron stores the DPAPI-wrapped key in "Local State" lazily. Until it is on disk the
+// vault refuses drafts, so a hard kill in the first session cannot leave a draft nobody can decrypt later.
+const localStateFile = () => path.join(app.getPath('userData'), 'Local State');
+const osCryptKeyPersisted = () => {
+  if (process.platform !== 'win32') return true;
+  try { return !!JSON.parse(fs.readFileSync(localStateFile(), 'utf8')).os_crypt?.encrypted_key; }
+  catch { return false; }
+};
+const protectedDraftVault = makeVault(path.join(dataDir, 'encrypted-drafts'), safeStorage, { keyPersisted: osCryptKeyPersisted });
+app.whenReady().then(() => { try { safeStorage.encryptString('hmr'); } catch { /* the vault reports unavailability when used */ } });
 let recoveryRunning = false;
 let engineCrashes = [];
 async function restartEngineAfterCrash() {
@@ -1162,4 +1171,4 @@ async function captureShots() {
     if (syntheticSignInListeners) { for (const listener of syntheticSignInListeners) ipcMain.on('sign-in-page', listener); signIns.update = originalSignInUpdate; signIns.reset = originalSignInReset; }
     if (win && !win.isDestroyed()) win.webContents.removeListener('console-message', onConsole);
   }
-}
+                                                                                    }
