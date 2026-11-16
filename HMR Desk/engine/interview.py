@@ -68,7 +68,7 @@ def referral_text(folder):
     files = sorted(f for f in folder.iterdir() if f.is_file() and f.suffix.lower() == '.pdf' and not f.name.lower().startswith(('ppa consent - ', 'hmr interview - ')))
     files = [f for f in files if re.search(r'_ [A-Z]{2,4}\.pdf$', f.name)] or [f for f in files if 'referral' in f.name.lower()]
     if files:
-        specmod = importlib.util.spec_from_file_location('hmr_intake', Path(db.BASE) / 'scripts' / 'intake' / 'intake.py')
+        specmod = importlib.util.spec_from_file_location('hmr_intake', __import__('app_paths').resource_root() / 'scripts' / 'intake' / 'intake.py')
         module = importlib.util.module_from_spec(specmod); specmod.loader.exec_module(module)
         with module.fitz.open(files[0]) as doc: pages = [page.get_text() for page in doc]
         if any(len(t.strip()) < 200 for t in pages):
