@@ -34,6 +34,7 @@ def case(tmp_path, monkeypatch):
     }))
     spec = folder / 'report_spec.json'
     spec.write_text('{"synthetic":"reviewed"}')
+    (folder / 'referral.pdf').write_bytes(b'%PDF-1.4\\nsynthetic original source')
     word = folder / 'HMR Synthetic.docx'
     word.write_bytes(b'synthetic DOCX representation')
     pdf = folder / 'HMR Synthetic.pdf'
@@ -51,6 +52,7 @@ def case(tmp_path, monkeypatch):
             'interview_revision': 'missing', 'pathology_revision': 'missing',
             'template_approved': True, 'template_sha256': thash,
             'template_version': 'synthetic-test',
+            'source_files_sha256': report_auth.source_snapshot({'folder': 'TO SORT/Synthetic'}),
         }
         db.log(conn, pid, 'report_build', evidence, 'job')
     patient = conn.execute('SELECT * FROM patients WHERE id=?', (pid,)).fetchone()
@@ -104,5 +106,14 @@ def test_signoff_requires_current_medicine_reconciliation(tmp_path, monkeypatch)
     conn, patient, folder, body = case(tmp_path, monkeypatch)
     (folder / 'reconciliation_review.json').unlink()
     with pytest.raises(ValueError, match='Medicine reconciliation'):
+        report_auth.check_approval(conn, patient, body)
+    conn.close()
+
+
+def test_report_source_pdf_change_invalidates_signoff(tmp_path, monkeypatch):
+    conn, patient, folder, body = case(tmp_path, monkeypatch)
+    assert report_auth.check_approval(conn, patient, body)
+    (folder / 'referral.pdf').write_bytes(b'changed source')
+    with pytest.raises(ValueError, match='Original referral or pathology source'):
         report_auth.check_approval(conn, patient, body)
     conn.close()
