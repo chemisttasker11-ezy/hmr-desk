@@ -26,6 +26,7 @@ contextBridge.exposeInMainWorld('hmr', {
   openRoute: (url) => ipcRenderer.invoke('open-route', url),
   config: () => ipcRenderer.invoke('config'),
   encryptedBackup: (action, passphrase) => ipcRenderer.invoke('encrypted-backup', action, passphrase),
+  migrateWorkspace: passphrase => ipcRenderer.invoke('migrate-workspace', passphrase),
   openPatientFolder: (id, file) => ipcRenderer.invoke('open-patient-folder', id, file),
   oneOff: (action, site, value) => ipcRenderer.invoke('one-off', action, site, value),
   referralPick: (kind) => ipcRenderer.invoke('referral-pick', kind),
