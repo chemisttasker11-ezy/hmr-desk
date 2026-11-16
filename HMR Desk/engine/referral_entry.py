@@ -120,7 +120,7 @@ def commit(conn, token, fields, distinct_person=False, manual_referral=False):
             for candidate in candidates:
                 for identifier in ('ihi', 'medicare'):
                     left, right = (fields.get(identifier) or '').strip(), (candidate[identifier] or '').strip()
-                    if left and right and re.sub(r'\\D', '', left) == re.sub(r'\\D', '', right):
+                    if left and right and re.sub(r'\D', '', left) == re.sub(r'\D', '', right):
                         raise ValueError('Identifier matches an existing patient; do not create a separate identity')
                 dob = (fields.get('dob') or '').strip()
                 if dob and candidate['dob'] and dob == candidate['dob']:
