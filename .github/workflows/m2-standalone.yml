@@ -61,8 +61,15 @@ jobs:
         run: python -m PyInstaller --clean --noconfirm hmr-engine.spec
       - name: Smoke actual frozen engine without Python subprocess runtime
         run: python scripts/smoke-packaged-engine.py "HMR Desk/engine/dist/hmr-engine/hmr-engine.exe"
+      - name: Restore verified LibreOffice MSI cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}\hmr-libreoffice-msi
+          key: libreoffice-msi-ecdb65e76f5e91dc198b8c8dce5b5d6e1eb12fea6023553e52b591afd10b619d
       - name: Bundle pinned, checksum-verified offline PDF converter
         shell: pwsh
+        env:
+          HMR_LIBREOFFICE_MSI_CACHE: ${{ runner.temp }}\hmr-libreoffice-msi
         run: ./scripts/bundle-libreoffice.ps1
       - name: Convert a real synthetic DOCX and verify offline PDF
         run: python scripts/smoke-pdf.py
