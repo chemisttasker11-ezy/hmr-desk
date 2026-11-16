@@ -506,6 +506,17 @@ ipcMain.on('draft-store', (e, action, key, value) => {
     e.returnValue = { error: 'Protected draft storage failed (' + error.constructor.name + ')' };
   }
 });
+// Removing plain copies requires an explicit native confirmation, never page-supplied consent.
+ipcMain.handle('records-retire', async (e) => {
+  if (e.sender !== win.webContents) throw Error('Invalid request');
+  const choice = await dialog.showMessageBox(win, { type: 'warning',
+    title: 'Remove verified plain record copies?',
+    message: 'Remove only plain record files whose exact bytes are already saved in the encrypted database?',
+    detail: 'Stop other apps or editors changing the workspace first. Different or unreadable files stay in place for review. Word, PDF and source/import documents stay unchanged. This is ordinary file deletion, not secure erasure: old copies may remain in backups, synced storage or disk recovery. Export a readable copy first if you need one.',
+    buttons: ['Cancel', 'Remove matching copies'], defaultId: 0, cancelId: 0 });
+  if (choice.response !== 1) return { cancelled: true };
+  return api('POST', '/api/records/retire', { confirmed: true });
+});
 // Record export gets its own channel: the folder is chosen in a native dialog here, never supplied by page code.
 ipcMain.handle('records-export', async (e, patientId) => {
   if (e.sender !== win.webContents || !Number.isInteger(patientId) || patientId < 0) throw Error('Invalid export request');
@@ -1188,4 +1199,4 @@ async function captureShots() {
     if (syntheticSignInListeners) { for (const listener of syntheticSignInListeners) ipcMain.on('sign-in-page', listener); signIns.update = originalSignInUpdate; signIns.reset = originalSignInReset; }
     if (win && !win.isDestroyed()) win.webContents.removeListener('console-message', onConsole);
   }
-  }
+        }
