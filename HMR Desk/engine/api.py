@@ -753,6 +753,22 @@ def handle(conn, method, path, query, body):
                 except interview.Conflict:
                     conn.rollback(); return 409, {'error': 'interview conflict'}
                 return 200, result
+        match = re.fullmatch(r'/api/patients/(\\d+)/pathology-records', path)
+        if match and method in ('GET', 'POST'):
+            import pathology_records
+            p = conn.execute('SELECT * FROM patients WHERE id=?', (int(match[1]),)).fetchone()
+            if not p: return 404, {'error': 'patient not found'}
+            if method == 'GET':
+                return 200, pathology_records.load(p)
+            try:
+                result = pathology_records.save(p, body)
+            except ValueError as exc:
+                if 'changed; reload' in str(exc): return 409, {'error': str(exc)}
+                raise
+            db.log(conn, p['id'], 'pathology_records_saved',
+                   {'count': len(result['records']), 'revision': result['revision']}, 'api')
+            conn.commit()
+            return 200, result
         match = re.fullmatch(r'/api/patients/(\\d+)/reconciliation', path)
         if match and method in ('GET', 'POST'):
             import interview
