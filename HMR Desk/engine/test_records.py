@@ -76,3 +76,10 @@ def test_export_import_round_trip(conn, tmp_path):
     records.export_folder(conn, 3, out)
     assert records.import_folder(conn, 4, out) == {'report_spec.json': 'imported'}
     assert records.get(conn, 4, 'report_spec.json') == b'{"issues":[1]}'
+
+
+def test_record_name_patterns(conn):
+    for ok in ('followup1.json', 'pathology_records.json', 'reconciliation_review.json', 'MIMS interactions (manual) 2026-01-01.txt', 'report_spec.ai.json.bak'):
+        assert records.is_record_name(ok), ok
+    for bad in ('followup3.json', 'drug_classes.json', 'clinics.json', 'report.docx', 'MIMS interactions/../x.txt', 'a/interview.json', 'HMR Interview x.docx'):
+        assert not records.is_record_name(bad), bad
