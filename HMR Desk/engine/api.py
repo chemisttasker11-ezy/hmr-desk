@@ -604,6 +604,11 @@ def handle(conn, method, path, query, body):
             import backup_bundle
             if not isinstance(body, dict) or set(body) != {'source', 'passphrase'}: raise ValueError('invalid backup preview')
             return 200, backup_bundle.restore(body['source'], None, body['passphrase'], preview_only=True)
+        if path == '/api/backups/validate-isolated' and method == 'POST':
+            import backup_bundle
+            if not isinstance(body, dict) or set(body) != {'destination'} or not isinstance(body['destination'], str):
+                raise ValueError('Invalid isolated recovery validation')
+            return 200, backup_bundle.verify_isolated(body['destination'])
         if path == '/api/backups/restore' and method == 'POST':
             import backup_bundle
             if not isinstance(body, dict) or set(body) != {'source', 'destination', 'passphrase'}: raise ValueError('invalid restore input')
