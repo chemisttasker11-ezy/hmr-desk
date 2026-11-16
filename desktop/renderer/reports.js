@@ -159,9 +159,69 @@ async function reportClick(b) {
     return true;
   }
   if (b.dataset.signOff) {
-    await hmr.api('POST', `/api/patients/${encodeURIComponent(b.dataset.signOff)}/action`, { action: 'signed_off' });
-    if (page === 'reports') await reports(); else await showPatient(b.dataset.signOff);
+    const patientId = b.dataset.signOff;
+    const approved = await pharmacistReportSignoff(patientId);
+    if (approved) {
+      if (page === 'reports') await reports(); else await showPatient(patientId);
+    }
     return true;
   }
   return false;
+}
+
+
+async function pharmacistReportSignoff(patientId) {
+  const result = await hmr.api('GET', `/api/patients/${encodeURIComponent(patientId)}/report-versions`);
+  const versions = (result.versions || []).filter(row =>
+    row.document_matches_build && row.pdf_exists_and_matches && row.template_approved_at_build);
+  if (!versions.length) {
+    alert('Build an owner-approved DOCX and matching PDF, then review both before signing off. Provisional or modified files cannot be signed off.');
+    return false;
+  }
+  const settings = await hmr.api('GET', '/api/settings');
+  const pharmacist = settings.settings?.find(item => item.key === 'pharmacist_name')?.value || '';
+  return new Promise(resolve => {
+    const dialog = document.createElement('dialog');
+    dialog.setAttribute('aria-label', 'Approve exact HMR report version');
+    dialog.innerHTML = `<form class="form">
+      <h2>Pharmacist authorisation of HMR report</h2>
+      <p>Choose the exact Word/PDF pair you have read. The clinical data, source revisions, template and file checksums are verified before sign-off. No report is sent automatically.</p>
+      <label>Report version<select name="report" required>${versions.map((v,i) =>
+        `<option value="${i}">${esc(v.file)} — ${esc(v.template_version)} — ${esc(v.created_at)}</option>`).join('')}</select></label>
+      <label>Reviewing pharmacist<input name="reviewer" required minlength="3" maxlength="150" value="${esc(pharmacist)}" autocomplete="name"></label>
+      <label><input type="checkbox" name="checked" required> I reviewed the selected Word and PDF, confirmed the patient-specific clinical assertions, and authorise this exact revision for finalisation.</label>
+      <p class="error" role="alert"></p>
+      <div class="actions"><button type="submit" class="primary">Authorise selected revision</button><button type="button" data-report-signoff-cancel>Cancel</button></div>
+    </form>`;
+    document.body.appendChild(dialog);
+    let completed = false;
+    const finish = value => {
+      if (completed) return;
+      completed = true;
+      if (dialog.open) dialog.close();
+      dialog.remove();
+      resolve(value);
+    };
+    dialog.querySelector('[data-report-signoff-cancel]').addEventListener('click', () => finish(false));
+    dialog.addEventListener('cancel', event => {event.preventDefault();finish(false);});
+    const form = dialog.querySelector('form');
+    form.addEventListener('submit', async event => {
+      event.preventDefault();
+      const selected = versions[Number(form.elements.namedItem('report').value)];
+      if (!selected || !form.elements.namedItem('checked').checked) return;
+      const btn = form.querySelector('[type=submit]');
+      btn.disabled = true;
+      try {
+        await hmr.api('POST', `/api/patients/${encodeURIComponent(patientId)}/action`, {
+          action: 'signed_off', report_file: selected.file, report_sha256: selected.sha256,
+          reviewer: form.elements.namedItem('reviewer').value.trim(), clinical_reviewed: true,
+        });
+        finish(true);
+      } catch (error) {
+        form.querySelector('[role=alert]').textContent = errorText(error);
+        btn.disabled = false;
+      }
+    });
+    dialog.showModal();
+  });
 }
