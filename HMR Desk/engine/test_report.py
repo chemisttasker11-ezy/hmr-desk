@@ -249,7 +249,7 @@ with tempfile.TemporaryDirectory() as tmp:
             (folder / 'report_spec.json').unlink(); mapped = report.start(conn, p)
             assert mapped['obs'].splitlines() == ['BP: 120/80 (referral)', 'Pulse: 72', 'Height / weight / BMI: Height: 170 cm (referral); Weight: 70 kg', 'Home BP readings: 130/80', 'Home blood glucose readings: 6', 'Smoking: Current smoker — 5 daily', 'Alcohol: No alcohol', 'Mobility: Walks independently', 'Missed doses: sometimes — weekly', 'Device technique: issues — inhaler', 'Swallowing problems reported: tablets', 'Reports falls in the last 12 months: one fall', 'Recent hospital or specialist change: specialist']
             assert 'Reports falls in the last 12 months: one fall' in suggest.context_for(conn, p)['obs']
-            assert mapped['intro'] == 'I visited Test Person on 2026-01-02, with daughter present. Test Person lives alone. Medicines are managed by daughter, using a dose administration aid (Webster pack) packed by Local pharmacy.'
+            assert mapped['intro'] == 'Test Person was interviewed at home on 2026-01-02, with daughter present. Test Person lives alone. Medicines are managed by daughter, using a dose administration aid (Webster pack) packed by Local pharmacy.'
             assert 'intro' in mapped['needs_review'] and 'intro' not in report.placeholders(mapped)
             assert mapped['otc'][0][0] == 'vitamin' and mapped['meds'][1][1] == 'When required; used twice weekly'
             assert not any(code in json.dumps(mapped) for code in ('with_other', 'webster', 'not_asked', 'sx_'))
