@@ -7,8 +7,8 @@ assets = root / 'assets'
 datas = [(str(assets), 'assets')] if assets.is_dir() else []
 # Include the legacy parser as a bundled application-owned resource until it is
 # completely replaced by local modules. The frozen runtime never uses a Python script path.
-legacy = root.parent.parent / 'scripts' / 'intake' / 'intake.py'
-if legacy.is_file():
+legacy = root.parent.parent / 'scripts' / 'intake'
+if (legacy / 'intake.py').is_file():
     datas.append((str(legacy), 'scripts/intake'))
 
 a = Analysis(
