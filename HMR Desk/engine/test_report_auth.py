@@ -8,6 +8,7 @@ from docx import Document
 import db
 import jobs
 import report_auth
+import reconciliation
 
 
 def digest(value):
@@ -53,6 +54,12 @@ def case(tmp_path, monkeypatch):
         }
         db.log(conn, pid, 'report_build', evidence, 'job')
     patient = conn.execute('SELECT * FROM patients WHERE id=?', (pid,)).fetchone()
+    # The pharmacist explicitly acknowledged this synthetic medicine snapshot.
+    record = {'meds': [], 'other_meds': [],
+              'details': {'meds': [], 'other_meds': []}}
+    monkeypatch.setattr(report_auth.interview, 'load', lambda conn, patient: record)
+    review = reconciliation.acknowledge(record, reconciliation.digest(record), 'Synthetic Pharmacist')
+    (folder / 'reconciliation_review.json').write_text(json.dumps(review))
     request = {'action':'signed_off', 'report_file':word.name,
                'report_sha256':evidence['sha256'], 'reviewer':'Synthetic Pharmacist',
                'clinical_reviewed':True}
@@ -89,5 +96,13 @@ def test_signoff_rejects_unapproved_template_and_changed_spec(tmp_path, monkeypa
     conn, patient, folder, body = case(tmp_path, monkeypatch)
     (folder / 'report_spec.json').write_text('{"synthetic":"changed"}')
     with pytest.raises(ValueError, match='Report content changed'):
+        report_auth.check_approval(conn, patient, body)
+    conn.close()
+
+
+def test_signoff_requires_current_medicine_reconciliation(tmp_path, monkeypatch):
+    conn, patient, folder, body = case(tmp_path, monkeypatch)
+    (folder / 'reconciliation_review.json').unlink()
+    with pytest.raises(ValueError, match='Medicine reconciliation'):
         report_auth.check_approval(conn, patient, body)
     conn.close()
