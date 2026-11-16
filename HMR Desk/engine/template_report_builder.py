@@ -181,9 +181,34 @@ def _set_text(paragraph, text):
         paragraph.add_run(text)
 
 
+def _apply_owner_table_format(doc, table):
+    """Use the approved template's own table formatting, not a generic grid.
+
+    The template's first existing table supplies the style id and table properties
+    (borders, widths, cell margins). Only a template with no table of its own falls
+    back to the built-in grid, so a bare template still renders readable tables.
+    """
+    from copy import deepcopy
+    existing = [t for t in doc.tables if t._tbl is not table._tbl]
+    candidates = [t for t in existing if len(t.rows) >= 2 and len(t.columns) >= 2]
+    reference = candidates[0] if candidates else next(iter(existing), None)
+    if reference is not None:
+        source_pr = reference._tbl.tblPr
+        target_pr = table._tbl.tblPr
+        if source_pr is not None and target_pr is not None:
+            parent = target_pr.getparent()
+            parent.replace(target_pr, deepcopy(source_pr))
+            return 'template'
+    try:
+        table.style = 'Table Grid'
+    except KeyError:
+        return 'none'
+    return 'fallback-grid'
+
+
 def _table(doc, rows, labels):
     table = doc.add_table(rows=1, cols=len(labels))
-    table.style = 'Table Grid'
+    _apply_owner_table_format(doc, table)
     for cell, label in zip(table.rows[0].cells, labels):
         cell.text = label
     for values in rows:
