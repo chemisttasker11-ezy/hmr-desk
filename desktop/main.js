@@ -338,7 +338,9 @@ ipcMain.handle('one-off', async (e, action, site, value) => {
 ipcMain.handle('open-report-version', async (e, patientId, reportFile, format) => {
   if (e.sender !== win.webContents || !Number.isSafeInteger(patientId) || patientId < 1 ||
       typeof reportFile !== 'string' || path.basename(reportFile) !== reportFile ||
-      !/^[^<>:"/\\|?*]+\.docx$/i.test(reportFile) || !['docx', 'pdf'].includes(format))
+      !reportFile.toLowerCase().endsWith('.docx') ||
+      ['<', '>', ':', '"', '/', String.fromCharCode(92), '|', '?', '*'].some(ch => reportFile.includes(ch)) ||
+      !['docx', 'pdf'].includes(format))
     throw Error('Invalid report preview request');
   const versions = await api('GET', `/api/patients/${patientId}/report-versions`);
   const version = versions.versions?.find(row => row.file === reportFile && row.document_matches_build &&
