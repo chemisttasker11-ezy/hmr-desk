@@ -57,11 +57,28 @@ async function prepareMigration(source, destination, {onBeforeActivation} = {}) 
     throw Error('Choose absolute local source and destination folders');
   const before = await inventory(source);
   const target = path.resolve(destination);
-  // Resolve the existing parent before comparing: junctions, case differences,
-  // and relative aliasing must never let migration stage inside its own source.
   const parent = path.dirname(target);
-  const existingParent = await fs.realpath(parent);
-  const canonicalTarget = path.join(existingParent, path.basename(target));
+  // Reject obvious nesting BEFORE touching parent directories.
+  if (nested(before.root, target) || nested(target, before.root))
+    throw Error('Source and destination must be independent folders');
+  // Resolve existing ancestors to reject junction/symlink aliases as well.
+  async function canonicalize(directory) {
+    const missing = [];
+    let current = directory;
+    for (;;) {
+      try {
+        const real = await fs.realpath(current);
+        return path.join(real, ...missing.reverse());
+      } catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+        const above = path.dirname(current);
+        if (above === current) throw Error('Unable to resolve destination parent');
+        missing.push(path.basename(current));
+        current = above;
+      }
+    }
+  }
+  const canonicalTarget = path.join(await canonicalize(parent), path.basename(target));
   if (nested(before.root, canonicalTarget) || nested(canonicalTarget, before.root))
     throw Error('Source and destination must be independent folders');
   try { await fs.lstat(target); throw Error('Destination exists; choose a new empty workspace'); }
