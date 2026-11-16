@@ -120,6 +120,7 @@ def register(source_path, version, approved_by, owner_authorised):
             os.fsync(file.fileno())
         if hashlib.sha256(pending_doc.read_bytes()).hexdigest() != sha:
             raise ValueError('Template changed while being copied')
+        validate_layout(pending_doc)
         os.replace(pending_doc, active)
         os.replace(pending_json, manifest)
         approved_template(template_dir)
