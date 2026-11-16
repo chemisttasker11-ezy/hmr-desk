@@ -25,6 +25,8 @@ def case(tmp_path, monkeypatch):
     templates = assets / 'templates'
     templates.mkdir(parents=True)
     monkeypatch.setattr(jobs, 'APP_ASSETS', assets)
+    import template_report_builder
+    monkeypatch.setattr(template_report_builder, 'active_template_root', lambda: templates)
     template = templates / 'approved-hmr.docx'
     Document().save(template)
     thash = digest(template.read_bytes())
