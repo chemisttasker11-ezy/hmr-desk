@@ -695,7 +695,7 @@ def handle(conn, method, path, query, body):
             return 200, referral_entry.review(conn, body.get('paths') if isinstance(body, dict) else None)
         if method == 'POST' and path == '/api/referrals/commit':
             import referral_entry
-            return 200, referral_entry.commit(conn, body.get('token'), body.get('fields'))
+            return 200, referral_entry.commit(conn, body.get('token'), body.get('fields'), body.get('distinct_person', False))
         if method == 'POST' and path == '/api/intake/correction' and isinstance(body, dict):
             jobs.correction(body.get('file'), body.get('fields'))
             return 200, {'ok': True}
