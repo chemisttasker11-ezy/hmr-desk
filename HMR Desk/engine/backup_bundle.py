@@ -4,6 +4,7 @@ Format: HMRBKP1 + 16 byte scrypt salt + 12 byte AES-256-GCM nonce +
 streamed ciphertext + 16 byte GCM tag. No key or password is written to disk.
 """
 import hashlib
+from contextlib import closing
 import json
 import os
 from pathlib import Path
@@ -55,7 +56,7 @@ def create(conn, workspace, output, password):
     with tempfile.TemporaryDirectory(prefix='hmr-backup-') as directory:
         root = Path(directory)
         database = root / 'hmr.db'
-        with sqlite3.connect(database) as snapshot:
+        with closing(sqlite3.connect(database)) as snapshot:
             conn.backup(snapshot)
         zipped = root / 'snapshot.zip'
         index = {}
