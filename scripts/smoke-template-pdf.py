@@ -1,0 +1,97 @@
+"""Windows synthetic template-bound DOCX/PDF fidelity smoke.
+
+Uses an explicitly labelled fake template created in the temporary directory.
+It does not imply that the owner's real layout is available or approved.
+"""
+import hashlib
+import json
+import os
+from pathlib import Path
+import sys
+import tempfile
+
+import fitz
+from docx import Document
+
+root = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(root / 'HMR Desk' / 'engine'))
+import pdf_export
+import template_report_builder
+
+
+def make_template(folder):
+    doc = Document()
+    sec = doc.sections[0]
+    sec.header.paragraphs[0].text = 'SYNTHETIC HMR LETTERHEAD / LAYOUT TEST ONLY'
+    sec.footer.paragraphs[0].text = 'SYNTHETIC HMR FOOTER / NOT FOR CLINICAL USE'
+    doc.add_heading('HOME MEDICINES REVIEW / SYNTHETIC ONLY', level=1)
+    for name in template_report_builder.TEXT_FIELDS:
+        doc.add_paragraph('{{HMR_' + name + '}}')
+    for name in template_report_builder.TABLE_FIELDS:
+        doc.add_paragraph('{{HMR_' + name + '}}')
+    doc.add_paragraph(template_report_builder.ISSUES_ANCHOR)
+    template = folder / 'approved-hmr.docx'
+    doc.save(template)
+    info = {
+        'version':'synthetic-ci-layout-1',
+        'approved_by':'Automated synthetic fixture only',
+        'approved_on':'2026-11-16',
+        'sha256':hashlib.sha256(template.read_bytes()).hexdigest(),
+    }
+    (folder / 'approved-hmr.json').write_text(json.dumps(info))
+    return template
+
+
+def data(many=False):
+    count = 35 if many else 2
+    return {
+        'assess_date':'12/11/2026', 'report_date':'16/11/2026',
+        'patient':'Synthetic Test Person / no actual patient',
+        'doctor':'Dr Synthetic', 'dear':'Dear Dr Synthetic,',
+        'thanks':'Thank you for the referral.', 'reason':'Reconciliation',
+        'intro':'Local mock interview for source testing.',
+        'conditions':'No real clinical conditions stated',
+        'allergies':'Unknown; verification required',
+        'obs':'No genuine measurements',
+        'meds':[['Synthetic medicine ' + str(i), 'Recorded use ' + str(i),
+                 'Patient narrative requires pharmacist review', 'Review'] for i in range(count)],
+        'otc':[['Supplement X','PRN','Mock entry']],
+        'ceased':[['Synthetic ceased','Historical','Review cessation']],
+        'path':[['Synthetic test','98','umol/L','Synthetic only','sample fixture.pdf page 2']],
+        'issues':[{'title':'Synthetic finding ' + str(i),
+                   'rec':'Pharmacist to review against genuine sources.',
+                   'rationale':'This is synthetic data, not a clinical recommendation.'}
+                  for i in range(3 if many else 1)],
+        'followup':'Synthetic follow-up example',
+    }
+
+
+def main():
+    converter = (root / 'vendor' / 'libreoffice' / 'program' / 'soffice.exe').resolve()
+    if not converter.is_file():
+        raise RuntimeError('Pinned offline converter missing')
+    os.environ['HMR_PDF_CONVERTER'] = str(converter)
+    with tempfile.TemporaryDirectory(prefix='hmr-template-pdf-') as temp:
+        folder = Path(temp)
+        template = make_template(folder)
+        assert template_report_builder.approved_template(folder)[0] == template
+        for long_case in (False, True):
+            stem = 'long' if long_case else 'short'
+            word = folder / (stem + '.docx')
+            pdf = folder / (stem + '.pdf')
+            template_report_builder.render(data(long_case), word, template)
+            pdf_export.convert(word, pdf)
+            with fitz.open(pdf) as document:
+                assert document.page_count >= (2 if long_case else 1)
+                all_text = '\n'.join(page.get_text() for page in document)
+                for expected in ('SYNTHETIC HMR LETTERHEAD', 'SYNTHETIC HMR FOOTER',
+                                 'Synthetic Test Person', 'Synthetic finding'):
+                    assert expected in all_text, expected + ' missing in ' + stem
+                assert '{{HMR_' not in all_text
+                assert ('Synthetic medicine 34' if long_case else 'Synthetic medicine 1') in all_text
+            assert word.is_file() and pdf.is_file()
+    print('PASS: synthetic short/long template DOCX and matching bundled-LibreOffice PDF pagination/text')
+
+
+if __name__ == '__main__':
+    main()
