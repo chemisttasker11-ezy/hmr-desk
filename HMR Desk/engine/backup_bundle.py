@@ -219,6 +219,7 @@ def restore(source, destination, password, preview_only=False):
                 raise ValueError('Wrong passphrase or corrupt encrypted backup') from exc
             stage = temp / 'restored'
             stage.mkdir()
+            (stage / 'workspace').mkdir()  # a backup of an empty workspace must still restore a workspace folder
             with zipfile.ZipFile(zipped) as archive:
                 names = archive.namelist()
                 if not names or names[-1] != 'manifest.json' or len(names) > MAX_FILES + 1:
