@@ -11,17 +11,17 @@ import re
 
 SCHEMA = "hmr-clinical-v1"
 SENSITIVE = re.compile(
-    r"(?i)(?:\\b(?:medicare|\\bihi\\b|\\birn\\b|\\bdob\\b|date of birth|"
-    r"\\bmrn\\b|patient name|\\bgp name|\\bprovider number|\\bphone\\b|"
-    r"\\baddress\\b|\\bemail\\b|\\bsuburb\\b)\\s*[:#=]|"
-    r"\\b\\d{4}\\s?\\d{5}\\s?\\d{1}\\b|"
-    r"\\b8003\\s?\\d{4}\\s?\\d{4}\\s?\\d{4}\\b|"
-    r"\\b(?:04\\d{2}[ -]?\\d{3}[ -]?\\d{3})\\b|"
-    r"[a-z0-9._%+-]+@[a-z0-9.-]+\\.[a-z]{2,}|"
-    r"\\b(?:19|20)\\d{2}[-/]\\d{1,2}[-/]\\d{1,2}\\b)"
+    r"(?i)(?:\b(?:medicare|\bihi\b|\birn\b|\bdob\b|date of birth|"
+    r"\bmrn\b|patient name|\bgp name|\bprovider number|\bphone\b|"
+    r"\baddress\b|\bemail\b|\bsuburb\b)\s*[:#=]|"
+    r"\b\d{4}\s?\d{5}\s?\d{1}\b|"
+    r"\b8003\s?\d{4}\s?\d{4}\s?\d{4}\b|"
+    r"\b(?:04\d{2}[ -]?\d{3}[ -]?\d{3})\b|"
+    r"[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}|"
+    r"\b(?:19|20)\d{2}[-/]\d{1,2}[-/]\d{1,2}\b)"
 )
-SAFE_LABEL = re.compile(r"^[\\w ,.'()/+%:-]{1,160}$", re.UNICODE)
-SAFE_VALUE = re.compile(r"^[\\w ,.'()/+%:;=-]{1,180}$", re.UNICODE)
+SAFE_LABEL = re.compile(r"^[\w ,.'()/+%:-]{1,160}$", re.UNICODE)
+SAFE_VALUE = re.compile(r"^[\w ,.'()/+%:;=-]{1,180}$", re.UNICODE)
 
 
 class PrivacyBlocked(ValueError):
