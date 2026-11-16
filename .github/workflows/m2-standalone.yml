@@ -65,6 +65,9 @@ jobs:
       - name: Smoke packaged desktop and owned engine with Python and Node absent from PATH
         shell: pwsh
         run: ./scripts/smoke-packaged-desktop.ps1
+      - name: Generate unsigned installer SHA256 and resource manifest
+        shell: pwsh
+        run: ./scripts/manifest-windows.ps1
       - name: Upload unsigned engineering artifact (not clinical release)
         uses: actions/upload-artifact@v4
         with:
@@ -72,5 +75,7 @@ jobs:
           path: |
             desktop/dist/*.exe
             desktop/dist/*.yml
+            desktop/dist/SHA256SUMS.txt
+            desktop/dist/installer-manifest.json
           if-no-files-found: error
           retention-days: 7
