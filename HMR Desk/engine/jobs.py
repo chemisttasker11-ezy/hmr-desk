@@ -257,19 +257,30 @@ def report_build(patient_id, pdf=False):
         if not target.is_absolute(): target = folder / target
         target = target.resolve()
         if target.parent != folder or target.suffix.lower() != '.docx': raise ValueError('Report output must be a DOCX in patient folder')
-        preview = spec.with_name(spec.stem + '-sheet.png')
-        pdf_target = target.with_suffix('.pdf')
-        if target.exists() or preview.exists() or (pdf and pdf_target.exists()): raise FileExistsError('Report output or preview already exists')
+        # Preserve every prior DOCX/PDF and any signed revision; never overwrite.
         if not Path(data['out']).is_absolute(): raise ValueError('Report spec out must be an absolute path')
+        original = target
+        for revision in range(1, 1001):
+            target = original if revision == 1 else original.with_name(original.stem + '-v' + str(revision) + original.suffix)
+            pdf_target = target.with_suffix('.pdf')
+            if not target.exists() and (not pdf or not pdf_target.exists()): break
+        else: raise FileExistsError('Report revision limit exceeded')
         import local_report_builder
-        local_report_builder.render(data, target)
-        output = 'Built locally with the bundled DOCX renderer'
-        if not target.is_file(): raise RuntimeError('Report was not created: ' + str(target))
+        import pdf_export
+        # The current renderer remains provisional until the owner-approved DOCX
+        # template is supplied and the template fidelity gate has passed.
+        with tempfile.TemporaryDirectory(prefix='.hmr-docx-', dir=folder) as directory:
+            draft = Path(directory) / target.name
+            local_report_builder.render(data, draft)
+            if not draft.is_file(): raise RuntimeError('Draft Word report failed to render')
+            if target.exists(): raise FileExistsError('Output appeared during report rendering')
+            os.replace(draft, target)
+        output = 'Built a provisional local Word report'
         if pdf:
             try:
-                subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(SKILL / 'scripts' / 'word2pdf.ps1'), str(target), str(pdf_target)], check=True, capture_output=True, timeout=120)
-                if not pdf_target.is_file(): raise RuntimeError('PDF was not created')
-            except (OSError, subprocess.SubprocessError, RuntimeError) as exc: raise RuntimeError('PDF conversion failed; DOCX kept at ' + str(target) + ': ' + str(exc)) from exc
+                pdf_export.convert(target, pdf_target)
+            except (OSError, ValueError, RuntimeError) as exc:
+                raise RuntimeError('Local PDF conversion failed; prior Word draft preserved') from exc
         if p['state'] == 'visited' and db.can_move(p['state'], 'report_drafted'):
             db.set_state(conn, patient_id, 'report_drafted', source='job')
         db.log(conn, patient_id, 'report_build', {'file': str(target)}, 'job')
