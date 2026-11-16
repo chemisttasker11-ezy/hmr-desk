@@ -1,9 +1,21 @@
 """Versioned, non-destructive SQLite migration regressions (synthetic data only)."""
+import contextlib
 import sqlite3
 
 import pytest
 
 import db
+
+@contextlib.contextmanager
+def plain(path):
+    """A plain SQLite connection that is committed and really closed (Windows keeps files open otherwise)."""
+    conn = sqlite3.connect(path)
+    try:
+        yield conn
+        conn.commit()
+    finally:
+        conn.close()
+
 
 
 def test_new_db_has_versioned_schema_and_idempotent_reconnect(tmp_path, monkeypatch):
@@ -22,7 +34,7 @@ def test_legacy_schema_upgrade_preserves_rows_and_does_not_reapply(tmp_path, mon
     monkeypatch.setattr(db, 'DATA_DIR', str(tmp_path / 'userdata'))
     target = tmp_path / 'userdata' / 'historical.db'
     target.parent.mkdir()
-    with sqlite3.connect(target) as legacy:
+    with plain(target) as legacy:
         legacy.executescript(db.SCHEMA)
         legacy.execute("INSERT INTO patients(key,name) VALUES ('prior','Prior Synthetic')")
         legacy.execute("INSERT INTO messages(id,direction,body,state,created_at) VALUES ('old','in','test','received','2026-01-01')")
@@ -45,7 +57,7 @@ def test_legacy_schema_upgrade_preserves_rows_and_does_not_reapply(tmp_path, mon
 
 def test_newer_database_refused_without_modification(tmp_path):
     target = tmp_path / 'future.db'
-    with sqlite3.connect(target) as future:
+    with plain(target) as future:
         future.execute('PRAGMA user_version = 999')
         future.execute('CREATE TABLE sentinel (payload TEXT)')
         future.execute("INSERT INTO sentinel VALUES ('untouched')")
@@ -59,7 +71,7 @@ def test_newer_database_refused_without_modification(tmp_path):
 def test_additive_migration_rolls_back_on_column_failure(tmp_path, monkeypatch):
     monkeypatch.setattr(db, 'BASE', str(tmp_path / 'workspace'))
     target = tmp_path / 'legacy.db'
-    with sqlite3.connect(target) as legacy:
+    with plain(target) as legacy:
         legacy.executescript(db.SCHEMA)
     original = db._ADDITIVE_COLUMNS
     monkeypatch.setattr(db, '_ADDITIVE_COLUMNS', original + (('patients', 'not_a_column', 'INVALID SQL ('),))
