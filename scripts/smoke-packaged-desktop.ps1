@@ -2,7 +2,7 @@
 # This is NOT a clean Windows 11 VM acceptance test.
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
-$exe = Join-Path $root 'desktop\dist\win-unpacked\HMR Desk.exe'
+$exe = if ($env:HMR_SMOKE_EXE) { $env:HMR_SMOKE_EXE } else { Join-Path $root 'desktop\dist\win-unpacked\HMR Desk.exe' }
 if (-not (Test-Path $exe)) { throw 'Unpacked HMR Desktop executable not found' }
 $originalHome = $env:USERPROFILE
 $originalPath = $env:PATH
