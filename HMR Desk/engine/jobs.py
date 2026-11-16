@@ -308,6 +308,7 @@ def report_build(patient_id, pdf=False):
             'template_sha256': approved[1]['sha256'] if approved else '',
             'template_approved': bool(approved),
             'source_files_sha256': report_auth.source_snapshot(p),
+            'clinical_snapshot_sha256': report_auth.clinical_snapshot_hash(conn, p),
         }
         db.log(conn, patient_id, 'report_build', evidence, 'job')
         return output
