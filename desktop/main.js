@@ -374,7 +374,7 @@ ipcMain.on('draft-store', (e, action, key, value) => {
   }
 });
 ipcMain.handle('encrypted-backup', async (e, action, passphrase) => {
-  if (e.sender !== win.webContents || !['create', 'restore'].includes(action) ||
+  if (e.sender !== win.webContents || !['create', 'restore', 'preview'].includes(action) ||
       typeof passphrase !== 'string' || passphrase.length < 12 || passphrase.length > 512)
     throw Error('Invalid backup request or passphrase (minimum 12 characters)');
   if (action === 'create') {
@@ -387,6 +387,18 @@ ipcMain.handle('encrypted-backup', async (e, action, passphrase) => {
   const chosen = await dialog.showOpenDialog(win, { title: 'Choose encrypted HMR backup',
     properties: ['openFile'], filters: [{ name: 'Encrypted HMR backup', extensions: ['hmrbak'] }] });
   if (chosen.canceled || !chosen.filePaths.length) return { cancelled: true };
+  const inspection = await api('POST', '/api/backups/preview',
+    { source: chosen.filePaths[0], passphrase });
+  if (action === 'preview') return inspection;
+  const confirmation = await dialog.showMessageBox(win, {
+    type: 'question',
+    title: 'Verified isolated restore',
+    message: 'Verified encrypted backup: ' + inspection.patients + ' patient records and ' +
+      inspection.workspace_files + ' patient workspace files.',
+    detail: 'Restore will create a separate, new folder. Your current database and workspace will NOT be replaced. Continue?',
+    buttons: ['Continue isolated restore', 'Cancel'], defaultId: 1, cancelId: 1, noLink: true,
+  });
+  if (confirmation.response !== 0) return { cancelled: true };
   const folder = await dialog.showOpenDialog(win, { title: 'Choose parent folder for isolated restore',
     properties: ['openDirectory', 'createDirectory'] });
   if (folder.canceled || !folder.filePaths.length) return { cancelled: true };
