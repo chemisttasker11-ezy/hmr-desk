@@ -48,6 +48,8 @@ jobs:
         run: ./scripts/bundle-libreoffice.ps1
       - name: Convert a real synthetic DOCX and verify offline PDF
         run: python scripts/smoke-pdf.py
+      - name: Synthetic short and long template-bound DOCX-to-PDF layout regression
+        run: python scripts/smoke-template-pdf.py
       - name: Build NSIS installer with engine resources
         working-directory: desktop
         run: npm run dist
