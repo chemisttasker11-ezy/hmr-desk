@@ -13,12 +13,19 @@ Word, PDF and source-file outputs are not stored here and stay plain files.
 import datetime, hashlib, os, re
 from pathlib import Path
 
-RECORD_NAMES = (
-    'interview.json', 'interview.json.bak',
-    'report_spec.json', 'report_spec.json.bak',
-    'report_spec.ai.json', 'report_spec.ai.json.bak',
-    'confirmed_meds.json',
+# Patient-folder files that hold patient-specific clinical content. Fixed templates, reference data and the
+# Word/PDF/consent/source documents are NOT records here.
+RECORD_PATTERNS = (
+    r'interview\.json(\.bak)?',
+    r'report_spec(\.ai)?\.json(\.bak)?',
+    r'confirmed_meds\.json',
+    r'followup[12]\.json',
+    r'pathology_sources\.json',
+    r'pathology_records\.json',
+    r'reconciliation_review\.json',
+    r'MIMS interactions[^/\\]{0,200}\.txt',
 )
+_RECORD_RE = re.compile('(?:' + '|'.join(RECORD_PATTERNS) + ')')
 EXPORT_NOTE = 'README - exported records.txt'
 EXPORT_NOTE_TEXT = (
     'These files are a copy of saved HMR Desk clinical records.\n'
@@ -44,8 +51,12 @@ def _now():
     return datetime.datetime.now().isoformat(timespec='seconds')
 
 
+def is_record_name(name):
+    return isinstance(name, str) and _RECORD_RE.fullmatch(name) is not None
+
+
 def _check(name):
-    if name not in RECORD_NAMES:
+    if not is_record_name(name):
         raise ValueError('not a record name')
     return name
 
@@ -106,7 +117,7 @@ def import_folder(conn, patient_id, folder):
     ensure(conn)
     folder = Path(folder)
     result = {}
-    for name in RECORD_NAMES:
+    for name in sorted(n for n in os.listdir(folder) if is_record_name(n)):
         path = folder / name
         if not path.is_file():
             continue
@@ -151,5 +162,5 @@ def export_folder(conn, patient_id, destination):
 def removable_files(conn, patient_id, folder):
     """Record files whose bytes match the database exactly (safe to retire in a later stage)."""
     folder = Path(folder)
-    return [folder / n for n in RECORD_NAMES
-            if (folder / n).is_file() and get(conn, patient_id, n) == (folder / n).read_bytes()]
+    return [folder / n for n in sorted(os.listdir(folder))
+            if is_record_name(n) and (folder / n).is_file() and get(conn, patient_id, n) == (folder / n).read_bytes()]
