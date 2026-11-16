@@ -131,8 +131,11 @@ def _derived(conn, patient):
     def referral_note(r, m):
         return '\n'.join(filter(None, (r[4], 'DAA: ' + m['packed'] if m['packed'] else '')))
     import pathology_records
-    verified_pathology = pathology_records.load(patient)['records']
+    clinical_pathology = pathology_records.load(patient)
+    verified_pathology = clinical_pathology['records']
+    verification = clinical_pathology.get('verification', {})
     pathology_table = [[r[0], r[1], '', '',
+                        'UNVERIFIED legacy interview entry — confirm against original source | ' +
                         ' '.join(filter(None, (r[3], ('Date: ' + r[2]) if r[2] else '')))]
                        for r in record['pathology'] if any(r)]
     for result in verified_pathology:
@@ -141,7 +144,11 @@ def _derived(conn, patient):
             result['test'],
             result['value'], result['unit'], result['reference_interval'],
             ' | '.join(filter(None, (
-                'Verified by pharmacist' if result['verified'] else 'UNVERIFIED — check original source',
+                ('Verified by ' + verification[result['id']]['verified_by'] +
+                 ' at ' + verification[result['id']]['verified_at']
+                 if result['verified'] and result['id'] in verification else
+                 'LEGACY VERIFICATION — reviewer not recorded; check original source'
+                 if result['verified'] else 'UNVERIFIED — check original source'),
                 'Sample: ' + result['sample_date'] if result['sample_date'] else '',
                 'Source: ' + result['source'] if result['source'] else '',
                 result['comment'],
@@ -183,7 +190,9 @@ def _refresh(conn, patient):
     if not target.is_file(): raise ValueError('report spec does not exist')
     data = json.loads(target.read_text(encoding='utf-8')); validate(data)
     record, derived, _ = _derived(conn, patient)
-    data.update(derived, interview_revision=record['revision'], interview_reason=record['details']['reason'])
+    import pathology_records
+    data.update(derived, interview_revision=record['revision'], interview_reason=record['details']['reason'],
+                pathology_revision=pathology_records.revision(pathology_records.file_for(patient)))
     save(conn, patient, data)
     db.log(conn, patient['id'], 'report_refreshed', {}, 'job')
     return data
