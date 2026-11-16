@@ -1,7 +1,6 @@
 """Local HTTP receiver and periodic engine tasks."""
 import datetime
 import contextlib
-import functools
 import http.server
 import json
 import logging
@@ -87,7 +86,7 @@ def hook_server(port, hook_token):
     return server
 
 
-class QuietStatic(http.server.SimpleHTTPRequestHandler):
+class QuietStatic(http.server.BaseHTTPRequestHandler):
     def log_message(self, *args):  # pythonw has no stderr
         pass
 
@@ -126,7 +125,10 @@ class QuietStatic(http.server.SimpleHTTPRequestHandler):
         if urlsplit(self.path).path.startswith('/api/'):
             self.api_request()
         else:
-            super().do_GET()
+            self.send_error(404)
+
+    def do_HEAD(self):
+        self.send_error(404)
 
     def do_POST(self):
         if urlsplit(self.path).path.startswith('/api/'):
@@ -160,18 +162,13 @@ def main():
         return
     api.jobs.ensure_worker(recover=True)
     threading.Thread(target=hook.serve_forever, daemon=True).start()
-    static = None
-    try:
-        static = http.server.ThreadingHTTPServer(('127.0.0.1', 8765), functools.partial(QuietStatic, directory=db.BASE))
-        threading.Thread(target=static.serve_forever, daemon=True).start()
-    except OSError:
-        logging.warning('Static server port 8765 is in use')
+    # Never expose the patient workspace over an unauthenticated static HTTP server.
     # The app's API gets its own port, bound without address reuse: on Windows an old
     # `python -m http.server 8765` can share port 8765 and swallow API requests (seen 12 Nov).
     class ApiServer(http.server.ThreadingHTTPServer):
         allow_reuse_address = False
     try:
-        api_server = ApiServer(('127.0.0.1', 8767), functools.partial(QuietStatic, directory=db.BASE))
+        api_server = ApiServer(('127.0.0.1', 8767), QuietStatic)
         threading.Thread(target=api_server.serve_forever, daemon=True).start()
     except OSError:
         logging.warning('API port 8767 is in use')
@@ -237,9 +234,6 @@ def main():
     finally:
         hook.shutdown()
         hook.server_close()
-        if static:
-            static.shutdown()
-            static.server_close()
         conn.close()
 
 
