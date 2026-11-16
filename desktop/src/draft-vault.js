@@ -11,10 +11,16 @@ const crypto = require('node:crypto');
 const MAX_DRAFT_BYTES = 2 * 1024 * 1024;
 const MAX_DRAFTS = 2000;
 
-function makeVault(directory, safeStorage) {
+// options.keyPersisted: optional () => boolean. On Windows Electron writes the DPAPI-wrapped key to its
+// "Local State" file lazily, so a hard kill in the very first session could leave a draft that no later
+// session can decrypt. While the key is not on disk, drafts are refused (the renderer then tells the user to
+// keep the window open) instead of being written under a key that may be lost.
+function makeVault(directory, safeStorage, options = {}) {
   function encrypted() {
     if (!safeStorage?.isEncryptionAvailable?.())
       throw Error('Windows protected draft storage unavailable; keep the interview open until connected');
+    if (options.keyPersisted && !options.keyPersisted())
+      throw Error('Windows protected draft storage is still starting; keep the window open until saved');
   }
   function filename(key) {
     if (typeof key !== 'string' || !/^hmr-draft:[a-z_]+:[A-Za-z0-9_-]{1,128}(?::conflict-history)?$/.test(key))
