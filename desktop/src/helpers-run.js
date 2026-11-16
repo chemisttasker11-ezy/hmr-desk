@@ -6,8 +6,9 @@ const { save, csvRows, patientFor } = require('./save');
 
 module.exports = ({ views, armed, queues, saved, sites, config, dataDir, api, notify, waitingTasks }) => {
   let mimsRun = null, mimsGeneration = 0;
+  const sourceDir = site => path.join(process.resourcesPath ? path.join(process.resourcesPath, 'browser-helpers') : config.base, sites[site].dir);
   function allowed(site, sender) {
-    const manifest = path.join(config.base, sites[site].dir, 'manifest.json');
+    const manifest = path.join(sourceDir(site), 'manifest.json');
     const list =
       process.env.HMR_SMOKE_PATTERNS && process.env.HMR_SMOKE_URL
         ? JSON.parse(process.env.HMR_SMOKE_PATTERNS)
@@ -26,7 +27,7 @@ module.exports = ({ views, armed, queues, saved, sites, config, dataDir, api, no
     const generation = site === 'emims' ? ++mimsGeneration : 0;
     if (site === 'emims') mimsRun = null;
     const queue = site === 'emims' ? JSON.parse(JSON.stringify(queues[site])) : queues[site];
-    const source = await fsp.readFile(path.join(config.base, spec.dir, 'content.js'), 'utf8');
+    const source = await fsp.readFile(path.join(sourceDir(site), 'content.js'), 'utf8');
     if (!armed[site] || (site === 'emims' && generation !== mimsGeneration)) return;
     const token = site === 'emims' ? randomUUID() : undefined;
     const script = assemble(spec.key, queue, source, token);
