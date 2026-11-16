@@ -65,7 +65,14 @@ def main():
                 raise AssertionError('Patient files exposed over HTTP')
             except HTTPError as exc:
                 assert exc.code == 404
-            print('PASS: frozen engine startup, session auth, isolated workspace and static-file denial')
+            req = Request(f'http://127.0.0.1:{port}/api/engine/stop',
+                          headers={'X-HMR-Token': token, 'Content-Type': 'application/json'},
+                          data=b'{}', method='POST')
+            with urlopen(req, timeout=3) as response:
+                assert json.load(response)['stopping']
+            process.wait(timeout=8)
+            assert process.returncode == 0, 'Engine did not exit cleanly after authenticated stop'
+            print('PASS: frozen engine startup, session auth, isolated workspace, static-file denial and graceful shutdown')
         finally:
             process.terminate()
             try:
