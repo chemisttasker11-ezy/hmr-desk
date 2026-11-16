@@ -139,7 +139,7 @@ prodaLogin = require('./src/proda-login')({
   getWindow: () => win,
 });
 ipcMain.handle('api', async (e, method, p, b) => {
-  if (e.sender !== win.webContents || p === '/api/referrals/review' || require('./src/control').isPrivateApiRoute(p)) throw Error('Forbidden');
+  if (e.sender !== win.webContents || p === '/api/referrals/review' || p.startsWith('/api/backups/') || require('./src/control').isPrivateApiRoute(p)) throw Error('Forbidden');
   return api(method, p, b);
 });
 ipcMain.handle('referral-pick', async (e, kind) => {
@@ -308,6 +308,27 @@ ipcMain.handle('open-patient-folder', async (e, id, file) => {
   }
   const error = await shell.openPath(openTarget);
   if (error) throw Error(error);
+});
+ipcMain.handle('encrypted-backup', async (e, action, passphrase) => {
+  if (e.sender !== win.webContents || !['create', 'restore'].includes(action) ||
+      typeof passphrase !== 'string' || passphrase.length < 12 || passphrase.length > 512)
+    throw Error('Invalid backup request or passphrase (minimum 12 characters)');
+  if (action === 'create') {
+    const chosen = await dialog.showSaveDialog(win, { title: 'Save encrypted HMR backup',
+      defaultPath: path.join(app.getPath('documents'), 'hmr-backup.hmrbak'),
+      filters: [{ name: 'Encrypted HMR backup', extensions: ['hmrbak'] }] });
+    if (chosen.canceled || !chosen.filePath) return { cancelled: true };
+    return api('POST', '/api/backups/create', { target: chosen.filePath, passphrase });
+  }
+  const chosen = await dialog.showOpenDialog(win, { title: 'Choose encrypted HMR backup',
+    properties: ['openFile'], filters: [{ name: 'Encrypted HMR backup', extensions: ['hmrbak'] }] });
+  if (chosen.canceled || !chosen.filePaths.length) return { cancelled: true };
+  const folder = await dialog.showOpenDialog(win, { title: 'Choose parent folder for isolated restore',
+    properties: ['openDirectory', 'createDirectory'] });
+  if (folder.canceled || !folder.filePaths.length) return { cancelled: true };
+  const dest = path.join(folder.filePaths[0], 'HMR-Restored-' + Date.now());
+  return api('POST', '/api/backups/restore',
+    { source: chosen.filePaths[0], destination: dest, passphrase });
 });
 ipcMain.handle('save-helper', saveHelper);
 const hasLock = app.requestSingleInstanceLock();
