@@ -24,6 +24,39 @@ const { start: startEngine } = require('./src/engine-owner');
 const { verifyWorkspace } = require('./src/storage-choice');
 const { makeVault } = require('./src/draft-vault');
 const protectedDraftVault = makeVault(path.join(dataDir, 'encrypted-drafts'), safeStorage);
+let recoveryRunning = false;
+let engineCrashes = [];
+async function restartEngineAfterCrash() {
+  if (recoveryRunning || engineShutdownStarted || !app.isReady()) return;
+  const now = Date.now();
+  engineCrashes = engineCrashes.filter(time => now - time < 120000);
+  engineCrashes.push(now);
+  if (engineCrashes.length > 4) {
+    win?.webContents?.send('engine-state', { ready: false, reason: 'Engine repeatedly crashed; close the app and contact support with redacted diagnostics' });
+    return;
+  }
+  recoveryRunning = true;
+  win?.webContents?.send('engine-state', { ready: false, reason: 'Clinical engine stopped; recovering local data connection' });
+  try {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (engineShutdownStarted) return;
+      try {
+        const owner = await startEngine({ resourcesPath: process.resourcesPath, dataDir,
+          workspace: config.base, config, onCrash: restartEngineAfterCrash });
+        if (engineShutdownStarted) { await owner.stop(); return; }
+        engineOwner = owner;
+        win?.webContents?.send('engine-state', { ready: true });
+        return;
+      } catch (error) {
+        if (attempt < 2)
+          await new Promise(resolve => setTimeout(resolve, 1000 + attempt * 1000));
+      }
+    }
+    win?.webContents?.send('engine-state', { ready: false, reason: 'Clinical engine unavailable after restart attempts. Keep your protected drafts and restart the application.' });
+  } finally {
+    recoveryRunning = false;
+  }
+}
 const sites = {
   mhr: {
     url: 'https://proda.humanservices.gov.au/',
@@ -388,7 +421,7 @@ if (hasLock)
     }
     if (app.isPackaged && !process.env.HMR_API && !process.env.HMR_SMOKE_URL && !process.env.HMR_SHOTS) {
       try {
-        engineOwner = await startEngine({ resourcesPath: process.resourcesPath, dataDir, workspace: config.base, config });
+        engineOwner = await startEngine({ resourcesPath: process.resourcesPath, dataDir, workspace: config.base, config, onCrash: restartEngineAfterCrash });
       } catch (error) {
         dialog.showErrorBox('HMR Desk engine unavailable', error.message);
         app.quit();
