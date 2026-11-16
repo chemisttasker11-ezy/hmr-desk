@@ -8,6 +8,8 @@ import hashlib
 import json
 from pathlib import Path
 
+import clinical_review
+
 
 SCHEMA_VERSION = 1
 MAX_ITEMS = 120
@@ -74,9 +76,7 @@ def canonical(identity, interview_record, pathology, report_spec, referral_sourc
     review = referral_source.get('clinical_review', {})
     if not isinstance(review, dict):
         raise ValueError('Invalid referral review')
-    reviewed = review.get('confirmed') is True and review.get('source_page', 0) >= 1 and (
-        isinstance(review.get('reviewed_by'), str) and len(review['reviewed_by'].strip()) >= 3
-    )
+    reviewed = clinical_review.is_reviewed(review)
     reported_allergy_state = review.get('allergies_status', 'unknown') if reviewed else 'unknown'
     if reported_allergy_state not in ('unknown', 'explicit_none', 'listed'):
         reported_allergy_state = 'unknown'
