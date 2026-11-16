@@ -14,6 +14,8 @@ from urllib.parse import urlsplit, parse_qs
 
 import api
 
+STOP_EVENT = threading.Event()
+
 import db
 import inbox
 import messaging
@@ -73,8 +75,8 @@ class HookHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
         except (ValueError, UnicodeError):
             self.send_error(400)
-        except Exception:
-            logging.exception('Webhook processing failed')
+        except Exception as exc:
+            logging.error('Webhook processing failed (%s)', type(exc).__name__)
             self.send_error(500)
 
     def do_GET(self):
@@ -112,7 +114,11 @@ class QuietStatic(http.server.BaseHTTPRequestHandler):
                         body = json.loads(self.rfile.read(length))
                         if not isinstance(body, dict):
                             raise ValueError('body must be an object')
-                    status, result = api.handle(conn, self.command, parsed.path, parse_qs(parsed.query), body)
+                    if self.command == 'POST' and parsed.path == '/api/engine/stop':
+                        STOP_EVENT.set()
+                        status, result = 200, {'stopping': True}
+                    else:
+                        status, result = api.handle(conn, self.command, parsed.path, parse_qs(parsed.query), body)
                 except (ValueError, UnicodeError) as exc:
                     status, result = 400, {'error': str(exc)}
         data = json.dumps(result, ensure_ascii=False).encode('utf-8')
@@ -141,6 +147,7 @@ class QuietStatic(http.server.BaseHTTPRequestHandler):
 
 
 def main():
+    STOP_EVENT.clear()
     if os.name == 'nt':  # child tools (tailscale, the renderers) must not flash a console window every minute
         popen_init = subprocess.Popen.__init__
         def quiet(self, *a, **k):
@@ -180,11 +187,11 @@ def main():
         logging.error('API port is in use; refusing to start without an authenticated listener')
         hook.shutdown(); hook.server_close(); conn.close()
         raise
-    logging.info('Service started: %s patients, db %s', conn.execute('SELECT COUNT(*) FROM patients').fetchone()[0], db.db_path())
+    logging.info('Local clinical engine started')
     last_poll = 0
     online = None
     try:
-        while True:
+        while not STOP_EVENT.is_set():
             try:
                 client = outbox.make_client()
                 cfg = outbox.config()
@@ -203,15 +210,15 @@ def main():
                 set_meta(conn, 'gateway_online', 'false')
             try:
                 messaging.autopilot(conn)
-            except Exception:
+            except Exception as exc:
                 conn.rollback()
-                logging.exception('Messaging autopilot failed')
+                logging.error('Messaging autopilot failed (%s)', type(exc).__name__)
             try:
                 import lifecycle
                 lifecycle.auto_visit(conn)
-            except Exception:
+            except Exception as exc:
                 conn.rollback()
-                logging.exception('Automatic visit recording failed')
+                logging.error('Automatic visit recording failed (%s)', type(exc).__name__)
             try:
                 plan = get_meta(conn, 'plan_file')
                 stamp = str(os.stat(plan).st_mtime_ns) if plan and os.path.isfile(plan) else None
@@ -234,9 +241,9 @@ def main():
                 if today.hour >= 2 and get_meta(conn, 'backup_date') != str(today.date()):
                     db.backup(conn)
                     set_meta(conn, 'backup_date', today.date())
-            except Exception:
-                logging.exception('Engine maintenance failed')
-            time.sleep(60)
+            except Exception as exc:
+                logging.error('Engine maintenance failed (%s)', type(exc).__name__)
+            STOP_EVENT.wait(60)
     except KeyboardInterrupt:
         pass
     finally:
