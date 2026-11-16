@@ -333,11 +333,8 @@ def export(conn, patient, fmt):
     section('PPA consent', 'Signed: ' + ('Yes' if data['consent']['signed'] else 'No') + '    Date: ' + data['consent']['date'])
     with target.open('xb') as f: doc.save(f)
     if fmt in ('pdf', 'both'):
-        pdf = folder / (stem + '.pdf'); script = jobs.SKILL / 'scripts' / 'word2pdf.ps1'
-        try:
-            subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script), str(target), str(pdf)], check=True, capture_output=True, timeout=120)
-            if not pdf.is_file(): raise RuntimeError('PDF was not created')
-        except (OSError, subprocess.SubprocessError, RuntimeError) as exc: raise RuntimeError('PDF conversion failed; Microsoft Word is required. DOCX kept at ' + str(target) + ': ' + str(exc)) from exc
+        import pdf_export
+        pdf_export.convert(target, folder / (stem + '.pdf'))
     return str(target)
 
 def consent_template():
