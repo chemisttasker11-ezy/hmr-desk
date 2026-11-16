@@ -48,6 +48,35 @@ def test_same_name_requires_explicit_different_identifiers(tmp_path, monkeypatch
     conn.close()
 
 
+
+def test_same_name_formatted_medicare_is_not_distinct(tmp_path, monkeypatch):
+    workspace = tmp_path / 'workspace'
+    data = tmp_path / 'data'
+    workspace.mkdir()
+    data.mkdir()
+    monkeypatch.setattr(db, 'BASE', str(workspace))
+    monkeypatch.setattr(db, 'DATA_DIR', str(data))
+    conn = db.connect(str(data / 'hmr.db'))
+    with conn:
+        conn.execute('INSERT INTO patients(key,name,dob,medicare) VALUES (?,?,?,?)',
+                     ('sam example', 'Sam Example', '1940-04-10', '1234 56789 0'))
+    source = tmp_path / 'source.pdf'
+    payload = b'%PDF-1.4\\n%SYNTHETIC ONLY'
+    source.write_bytes(payload)
+    token = uuid.uuid4().hex
+    with conn:
+        conn.execute('INSERT INTO meta(key,value) VALUES (?,?)',
+                     ('referral_review_' + token, json.dumps({
+                         'source': str(source), 'sha256': hashlib.sha256(payload).hexdigest(),
+                         'fields': {}, 'kind': 'referral'})))
+    with pytest.raises(ValueError, match='Identifier matches'):
+        referral_entry.commit(conn, token,
+                              {'name': 'Sam Example', 'dob': '1945-02-20',
+                               'medicare': '1234567890'}, distinct_person=True)
+    assert conn.execute('SELECT COUNT(*) FROM patients').fetchone()[0] == 1
+    conn.close()
+
+
 def test_unrecognised_scan_retained_for_explicit_manual_pharmacist_intake(tmp_path, monkeypatch):
     import fitz
     workspace = tmp_path / 'workspace'
