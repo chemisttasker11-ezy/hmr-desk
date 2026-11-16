@@ -8,6 +8,7 @@ import shutil
 import uuid
 from pathlib import Path
 
+import clinical_review
 import db
 import app_paths
 import fitz
@@ -115,34 +116,69 @@ def _validate_date(value, field):
                      '; confirm the exact date from the original PDF')
 
 
-CLINICAL_FIELDS = ('conditions', 'allergies', 'medicines', 'observations')
+CLINICAL_FIELDS = clinical_review.FIELDS
+
+
+def _review_pages(value, page_count):
+    """Accept per-field pages, or a version 1 single page applied to populated fields."""
+    if 'source_pages' in value:
+        pages = value['source_pages']
+        if not isinstance(pages, dict) or set(pages) != set(CLINICAL_FIELDS):
+            raise ValueError('Invalid per-field PDF source pages')
+    else:
+        legacy = value['source_page']
+        if type(legacy) is not int:
+            raise ValueError('Invalid PDF source page number')
+        pages = {field: legacy if clinical_review.populated(value, field) else 0
+                 for field in CLINICAL_FIELDS}
+    for page in pages.values():
+        if type(page) is not int or not 0 <= page <= page_count:
+            raise ValueError('Invalid PDF source page number')
+    return {field: pages[field] for field in CLINICAL_FIELDS}
 
 
 def validate_clinical_review(value, page_count):
-    """No inferred negatives. Only a named reviewer may confirm source text."""
+    """No inferred negatives. Only a named reviewer may confirm source text.
+
+    Each populated clinical field needs its own original PDF page.
+    """
     if value is None:
-        return {'version': 1, 'confirmed': False, 'allergies_status': 'unknown',
-                'source_page': 0, 'reviewed_by': '',
+        return {'version': 2, 'confirmed': False, 'allergies_status': 'unknown',
+                'source_pages': {key: 0 for key in CLINICAL_FIELDS}, 'reviewed_by': '',
                 **{key: '' for key in CLINICAL_FIELDS}}
-    required = {'confirmed', 'allergies_status', 'source_page', 'reviewed_by', *CLINICAL_FIELDS}
-    if not isinstance(value, dict) or set(value) != required or type(value['confirmed']) is not bool:
+    base = {'confirmed', 'allergies_status', 'reviewed_by', *CLINICAL_FIELDS}
+    if not isinstance(value, dict) or type(value.get('confirmed')) is not bool:
+        raise ValueError('Invalid clinical source review')
+    if set(value) not in (base | {'source_page'}, base | {'source_pages'}):
         raise ValueError('Invalid clinical source review')
     if value['allergies_status'] not in ('unknown', 'explicit_none', 'listed'):
         raise ValueError('Invalid allergy documentation state')
-    if type(value['source_page']) is not int or not 0 <= value['source_page'] <= page_count:
-        raise ValueError('Invalid PDF source page number')
     if any(not isinstance(value[key], str) or len(value[key]) > 10000 for key in (*CLINICAL_FIELDS, 'reviewed_by')):
         raise ValueError('Invalid clinical review text')
-    if value['confirmed'] and (value['source_page'] < 1 or len(value['reviewed_by'].strip()) < 3):
-        raise ValueError('Source page and reviewing pharmacist are required for confirmed clinical fields')
-    if value['confirmed'] and value['allergies_status'] == 'listed' and not value['allergies'].strip():
+    pages = _review_pages(value, page_count)
+    text = {key: value[key].strip() for key in (*CLINICAL_FIELDS, 'reviewed_by')}
+    checked = {**value, **text}
+    if value['confirmed']:
+        if len(text['reviewed_by']) < 3:
+            raise ValueError('Source page and reviewing pharmacist are required for confirmed clinical fields')
+        filled = [key for key in CLINICAL_FIELDS if clinical_review.populated(checked, key)]
+        if not filled:
+            raise ValueError('Source page and reviewing pharmacist are required for confirmed clinical fields')
+        for key in filled:
+            if pages[key] < 1:
+                raise ValueError('Source page is required for each confirmed clinical field: ' + key)
+        for key in CLINICAL_FIELDS:
+            if key not in filled and pages[key]:
+                raise ValueError('A source page was given for an empty clinical field: ' + key)
+    if value['confirmed'] and value['allergies_status'] == 'listed' and not text['allergies']:
         raise ValueError('Explicitly listed allergies require source-verified allergy details')
-    if value['confirmed'] and value['allergies_status'] == 'explicit_none' and value['allergies'].strip():
+    if value['confirmed'] and value['allergies_status'] == 'explicit_none' and text['allergies']:
         raise ValueError('Explicitly no known allergies cannot be combined with an allergy list')
     if not value['confirmed'] and value['allergies_status'] == 'explicit_none':
         raise ValueError('Do not record no known allergies without explicit source confirmation')
-    return {'version': 1, **{key: value[key].strip() if isinstance(value[key], str) else value[key]
-                            for key in required}}
+    return {'version': 2, 'confirmed': value['confirmed'], 'allergies_status': value['allergies_status'],
+            'source_pages': pages, 'reviewed_by': text['reviewed_by'],
+            **{key: text[key] for key in CLINICAL_FIELDS}}
 
 
 def commit(conn, token, fields, distinct_person=False, manual_referral=False, clinical=None):
