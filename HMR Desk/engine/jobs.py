@@ -203,9 +203,8 @@ def report_extract(patient_id):
         folder = patient_folder(get_patient(conn, patient_id))
     case, images = folder / 'case.txt', folder / 'case-images'
     if case.exists() or images.exists(): raise FileExistsError('Extraction output already exists')
-    if not EXTRACT_SCRIPT.is_file():
-        raise RuntimeError('Referral extraction is not yet bundled in this build; use the existing local referral/interview editor')
-    output = run_script(EXTRACT_SCRIPT, folder, images)
+    import local_referral_extraction
+    output = local_referral_extraction.extract(folder, images)
     if (folder / 'interview.json').is_file():
         import interview
         with connection() as conn:
@@ -297,9 +296,19 @@ def referral_text(folder):
     for file in files:
         if file.suffix.lower() == '.txt': parts.append(file.read_text(encoding='utf-8'))
         elif file.suffix.lower() == '.pdf':
-            result = subprocess.run(['pdftotext', '-layout', str(file), '-'], capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=120)
-            if result.returncode or not result.stdout.strip(): raise ValueError('Referral PDF has no readable text: ' + file.name)
-            parts.append(result.stdout)
+            import fitz
+            try:
+                with fitz.open(file) as doc:
+                    if doc.needs_pass: raise ValueError('Referral PDF is password-protected')
+                    pages = [page.get_text('text', sort=True) for page in doc]
+            except fitz.FileDataError as exc:
+                raise ValueError('Referral PDF is unreadable') from exc
+            if not any(page.strip() for page in pages):
+                import referral_entry
+                pages = referral_entry.parser().ocr_pdfs([file]).get(str(file), [])
+            if not any(page.strip() for page in pages):
+                raise ValueError('Referral PDF has no readable text; inspect the original')
+            parts.append('\n'.join(pages))
         else: raise ValueError('Unsupported referral document: ' + file.name)
     return '\n\n'.join(parts)
 
