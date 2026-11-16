@@ -69,7 +69,7 @@ async function reportScreen() {
       '<p>Start the report before editing.</p><button data-page="reports">Back to reports</button>';
     return;
   }
-  reportAi = settingsData.settings?.find(x => x.key === 'ai_report_assist')?.value !== false && settingsData.settings?.find(x => x.key === 'ai_report_assist')?.value !== 'off';
+  reportAi = settingsData.settings?.find(x => x.key === 'ai_report_assist')?.value === true;
   reportRecord = record;
   reportDetail = detail;
   reportDraft = draft.saved === false ? null : draft;
