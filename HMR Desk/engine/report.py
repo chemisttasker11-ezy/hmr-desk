@@ -174,12 +174,12 @@ def library(q):
     words = q.casefold().split()
     if not words: return []
     refs = jobs.SKILL / 'references'; result = []
-    text = _read(refs / 'finding-library.md')
+    text = _read(refs / 'finding-library.md') if (refs / 'finding-library.md').is_file() else ''
     for section in re.split(r'(?m)(?=^## )', text):
         if not section.startswith('## '): continue
         title, _, body = section.partition('\n')
         if all(w in section.casefold() for w in words): result.append(dict(source='library', title=title[3:].strip(), rec=body.strip(), rationale='', context='Full library section; split and edit for this patient.'))
-    for line in _read(refs / 'case-index.jsonl').splitlines():
+    for line in (_read(refs / 'case-index.jsonl') if (refs / 'case-index.jsonl').is_file() else '').splitlines():
         if not line.strip(): continue
         case = json.loads(line)
         for finding in case.get('findings', []):
