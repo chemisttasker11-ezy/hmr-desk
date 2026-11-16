@@ -34,7 +34,8 @@ async function start({ resourcesPath, dataDir, workspace, config, timeoutMs = 20
     windowsHide: true,
     stdio: 'ignore',
     env: { ...process.env, HMR_DATA_DIR: dataDir, HMR_WORKSPACE: workspace,
-      HMR_SESSION_TOKEN: session, HMR_API_PORT: String(port) },
+      HMR_SESSION_TOKEN: session, HMR_API_PORT: String(port),
+      HMR_PDF_CONVERTER: path.join(resourcesPath, 'converter', 'libreoffice', 'program', 'soffice.exe') },
   });
   let exited = false;
   child.once('exit', () => { exited = true; });
