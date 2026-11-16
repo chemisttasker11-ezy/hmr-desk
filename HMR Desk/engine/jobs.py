@@ -245,6 +245,11 @@ def report_build(patient_id, pdf=False):
         if not spec.is_file(): raise FileNotFoundError('Report spec missing: ' + str(spec))
         data = importer.read(spec)
         report.validate(data)
+        import interview, pathology_records
+        if data.get('interview_revision') and data['interview_revision'] != interview.revision(folder / 'interview.json'):
+            raise ValueError('Interview changed after report preparation; refresh and re-review the report before building')
+        if data.get('pathology_revision') and data['pathology_revision'] != pathology_records.revision(pathology_records.file_for(p)):
+            raise ValueError('Pathology changed after report preparation; refresh and re-review the report before building')
         if not data['issues']: raise ValueError('add at least one finding')
         pending = report.placeholders(data)
         if pending: raise ValueError('Review placeholder fields: ' + ', '.join(pending))
