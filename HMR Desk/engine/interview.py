@@ -44,7 +44,7 @@ def medicine_rows(data):
     rows = [r[:] for r in data['meds']]
     for i, meta in enumerate((data.get('details') or {}).get('meds', [])):
         if i < len(rows):
-            rows[i][4] = '\n'.join(filter(None, (rows[i][4], 'DAA: ' + meta['packed'] if meta['packed'] else '', use_text(meta), 'How often used: ' + meta['prn_use'] if meta.get('prn_use') else '')))
+            rows[i][4] = '\n'.join(filter(None, (rows[i][4], 'DAA: ' + meta['packed'] if meta['packed'] else '', use_text(meta), reference_text(meta), 'How often used: ' + meta['prn_use'] if meta.get('prn_use') else '')))
     return rows
 
 USE_REASONS = ('', 'finished_course', 'stopped_gp', 'stopped_specialist', 'self_ceased', 'ran_out_of_scripts', 'side_effects', 'other', 'unknown')
@@ -58,7 +58,19 @@ def use_text(meta):
     if status == 'not_using' and meta.get('use_details'): text += ': ' + meta['use_details']
     return text
 
+REFERENCE_KEYS = {'source', 'code', 'display', 'release'}
+
+def valid_reference(ref):
+    return isinstance(ref, dict) and set(ref) == REFERENCE_KEYS and all(isinstance(v, str) and 0 < len(v) <= 400 for v in ref.values())
+
+def reference_text(meta):
+    ref = (meta or {}).get('reference')
+    return 'Reference: ' + ref['display'] + ' (' + ref['source'].upper() + ' ' + ref['code'] + ', release ' + ref['release'] + ')' if valid_reference(ref) else ''
+
 def valid_use(m, base, optional):
+    if 'reference' in m:
+        if not valid_reference(m['reference']): return False
+        m = {k: v for k, v in m.items() if k != 'reference'}
     if any(k in m and (not isinstance(m[k], str) or len(m[k]) > 20000 or (k == 'kind' and m[k] not in ('', 'prescribed', 'otc', 'complementary'))) for k in optional): return False
     m = {k: v for k, v in m.items() if k not in optional}
     extra = {'use_status', 'use_reason', 'use_details'}
@@ -357,7 +369,7 @@ def export(conn, patient, fmt):
     table('Medicines on referral', ['Medicine','Referral directions','Actually taking','Points to check','Notes'], medicine_rows(data), 3)
     other_rows = [r[:] for r in data['other_meds']]
     for i, meta in enumerate(data['details'].get('other_meds', [])):
-        if i < len(other_rows): other_rows[i][3] = '\n'.join(filter(None, (other_rows[i][3], use_text(meta), CHOICE_LABELS['kind'].get(meta.get('kind'), ''))))
+        if i < len(other_rows): other_rows[i][3] = '\n'.join(filter(None, (other_rows[i][3], use_text(meta), CHOICE_LABELS['kind'].get(meta.get('kind'), ''), reference_text(meta))))
     table('Other medicines found', ['Medicine','Directions','Why / who','Notes'], other_rows, 3)
     table('Pathology on file', ['Test','Result','Date','Comment'], data['pathology'], 2)
     section('To clarify', '\n'.join(data['clarify']))
