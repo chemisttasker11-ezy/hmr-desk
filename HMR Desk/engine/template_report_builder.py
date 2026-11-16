@@ -14,8 +14,11 @@ import json
 import re
 from pathlib import Path
 
+from copy import deepcopy
+
 from docx import Document
 from docx.table import Table
+from docx.text.paragraph import Paragraph
 
 TEXT_FIELDS = {
     'ASSESS_DATE': 'assess_date', 'REPORT_DATE': 'report_date',
@@ -23,6 +26,15 @@ TEXT_FIELDS = {
     'THANKS': 'thanks', 'REASON': 'reason', 'INTRO': 'intro',
     'CONDITIONS': 'conditions', 'ALLERGIES': 'allergies',
     'OBS': 'obs', 'FOLLOWUP': 'followup',
+}
+# Optional text markers: filled when present in the approved layout, never required.
+OPTIONAL_TEXT_FIELDS = {'PATIENT_NAME': 'patient_name', 'PATH_DATE': 'path_date'}
+ISSUES_END = '{{HMR_ISSUES_END}}'
+LINE_PROTO = '{{HMR_LINE}}'
+ISSUE_FIELDS = {
+    '{{HMR_ISSUE_TITLE}}': lambda n, f: str(n) + '. ' + f['title'],
+    '{{HMR_ISSUE_REC}}': lambda n, f: f['rec'],
+    '{{HMR_ISSUE_RATIONALE}}': lambda n, f: f['rationale'],
 }
 TABLE_FIELDS = {
     'MEDS_TABLE': ('meds', ('Medicine', 'Actual use', 'Notes', 'Review')),
@@ -171,6 +183,15 @@ def _paragraphs(doc):
                 yield from from_table(table)
 
 
+def _paragraphs_in_table(table):
+    for row in table.rows:
+        for cell in row.cells:
+            for paragraph in cell.paragraphs:
+                yield paragraph
+            for nested in cell.tables:
+                yield from _paragraphs_in_table(nested)
+
+
 def _set_text(paragraph, text):
     # Keep original paragraph and first-run formatting, not default document style.
     if paragraph.runs:
@@ -182,28 +203,50 @@ def _set_text(paragraph, text):
 
 
 def _apply_owner_table_format(doc, table):
-    """Use the approved template's own table formatting, not a generic grid.
+    """Legacy path (no prototype table in the template): reuse a named table style.
 
-    The template's first existing table supplies the style id and table properties
-    (borders, widths, cell margins). Only a template with no table of its own falls
-    back to the built-in grid, so a bare template still renders readable tables.
+    Only a table with an explicit named style (not the default "Normal Table") counts as
+    the owner's table format. Layout tables such as a title banner carry no such style, so
+    they are never copied. A template with a prototype table at the marker uses
+    `_fill_prototype_table` instead, which keeps header and row formatting exactly.
     """
-    from copy import deepcopy
     existing = [t for t in doc.tables if t._tbl is not table._tbl]
-    candidates = [t for t in existing if len(t.rows) >= 2 and len(t.columns) >= 2]
-    reference = candidates[0] if candidates else next(iter(existing), None)
-    if reference is not None:
-        source_pr = reference._tbl.tblPr
-        target_pr = table._tbl.tblPr
-        if source_pr is not None and target_pr is not None:
-            parent = target_pr.getparent()
-            parent.replace(target_pr, deepcopy(source_pr))
-            return 'template'
+    named = [t for t in existing if t.style is not None and t.style.name not in ('Normal Table', 'Normal')]
+    if named:
+        table.style = named[0].style
+        return 'template-style'
     try:
         table.style = 'Table Grid'
     except KeyError:
         return 'none'
     return 'fallback-grid'
+
+
+def _set_cell_text(cell, text):
+    """Replace a cell's text, keeping the first paragraph and its first run formatting."""
+    paragraphs = cell.paragraphs
+    for extra in paragraphs[1:]:
+        extra._p.getparent().remove(extra._p)
+    _set_text(paragraphs[0], text)
+
+
+def _fill_prototype_table(prototype, rows, labels):
+    """Clone the template's own header and sample row; keep its shading, borders, fonts."""
+    if len(prototype.rows) < 2:
+        raise ValueError('Prototype table needs a header row and one sample data row')
+    if len(prototype.columns) != len(labels):
+        raise ValueError('Prototype table has %d columns; this report needs %d' % (len(prototype.columns), len(labels)))
+    sample = prototype.rows[1]._tr
+    for values in rows:
+        if len(values) != len(labels):
+            raise ValueError('Report row does not match the table columns')
+        clone = deepcopy(sample)
+        prototype._tbl.append(clone)
+        row = prototype.rows[-1]
+        for cell, value in zip(row.cells, values):
+            _set_cell_text(cell, str(value))
+    for old in list(prototype.rows)[1:len(prototype.rows) - len(rows)]:
+        prototype._tbl.remove(old._tr)
 
 
 def _table(doc, rows, labels):
@@ -236,13 +279,32 @@ def render(data, target, template):
         changed = original
         for marker in {m.group(0) for m in matches}:
             name = marker[len('{{HMR_'):-2]
-            if name in TEXT_FIELDS:
+            if name in OPTIONAL_TEXT_FIELDS:
+                default = str(data.get('patient', '')).split('\n')[0] if name == 'PATIENT_NAME' else ''
+                value = data.get(OPTIONAL_TEXT_FIELDS[name], default)
+                if not isinstance(value, str):
+                    raise ValueError('Invalid text field in report data')
+                changed = changed.replace(marker, value)
+            elif name in TEXT_FIELDS:
                 value = data.get(TEXT_FIELDS[name], '')
                 if not isinstance(value, str):
                     raise ValueError('Invalid text field in report data')
                 changed = changed.replace(marker, value)
         if changed != original:
-            _set_text(paragraph, changed)
+            nxt = paragraph._p.getnext()
+            if (paragraph._p.getparent().tag.endswith('}tc') and nxt is not None and nxt.tag.endswith('}p')
+                    and ''.join(nxt.xpath('.//w:t/text()')).strip() == LINE_PROTO):
+                # The approved cell carries a line prototype: first line keeps this paragraph's
+                # formatting, every further line is a clone of the prototype paragraph.
+                lines = changed.split('\n')
+                _set_text(paragraph, lines[0])
+                for line in lines[1:]:
+                    clone = deepcopy(nxt)
+                    nxt.addprevious(clone)
+                    _set_text(Paragraph(clone, paragraph._parent), line)
+                nxt.getparent().remove(nxt)
+            else:
+                _set_text(paragraph, changed)
     for name, (key, labels) in TABLE_FIELDS.items():
         marker = '{{HMR_' + name + '}}'
         if occurrences.get(marker) != 1:
@@ -253,7 +315,15 @@ def render(data, target, template):
         rows = data[key]
         if not isinstance(rows, list):
             raise ValueError('Invalid table rows')
-        if rows:
+        following = anchor._p.getnext()
+        if following is not None and following.tag.endswith('}tbl'):
+            # The approved layout carries its own prototype table right after the marker.
+            prototype = Table(following, anchor._parent)
+            if rows:
+                _fill_prototype_table(prototype, rows, labels)
+            else:
+                following.getparent().remove(following)
+        elif rows:
             table = _table(doc, rows, labels)
             anchor._p.addprevious(table._element)
         anchor._element.getparent().remove(anchor._element)
@@ -262,15 +332,46 @@ def render(data, target, template):
     anchor = next(p for p in all_paragraphs if ISSUES_ANCHOR in p.text)
     if anchor.text.strip() != ISSUES_ANCHOR or anchor._p.getparent().tag.endswith('}tc'):
         raise ValueError('Finding placeholder must occupy its own body paragraph')
-    for index, finding in enumerate(data['issues'], 1):
-        for paragraph_text, style in (
-            (str(index) + '. ' + finding['title'], 'Heading 3'),
-            ('Recommendation: ' + finding['rec'], 'Normal'),
-            ('Rationale: ' + finding['rationale'], 'Normal'),
-        ):
-            p = doc.add_paragraph(paragraph_text)
-            p.style = style
-            anchor._p.addprevious(p._p)
+    block = []
+    end_anchor = None
+    sibling = anchor._p.getnext()
+    while sibling is not None:
+        if sibling.tag.endswith('}p') and ''.join(sibling.xpath('.//w:t/text()')).strip() == ISSUES_END:
+            end_anchor = sibling
+            break
+        block.append(sibling)
+        sibling = sibling.getnext()
+    if end_anchor is not None:
+        # Approved layout supplies one prototype finding (title, recommendation, rationale,
+        # Plan/Feedback box). Clone it per finding so every finding looks like the owner's.
+        for index, finding in enumerate(data['issues'], 1):
+            for element in block:
+                clone = deepcopy(element)
+                anchor._p.addprevious(clone)
+                if clone.tag.endswith('}p'):
+                    paragraphs = [Paragraph(clone, anchor._parent)]
+                else:
+                    paragraphs = list(_paragraphs_in_table(Table(clone, anchor._parent)))
+                for paragraph in paragraphs:
+                    text = paragraph.text
+                    changed = text
+                    for marker, make in ISSUE_FIELDS.items():
+                        if marker in changed:
+                            changed = changed.replace(marker, make(index, finding))
+                    if changed != text:
+                        _set_text(paragraph, changed)
+        for element in block + [end_anchor]:
+            element.getparent().remove(element)
+    else:
+        for index, finding in enumerate(data['issues'], 1):
+            for paragraph_text, style in (
+                (str(index) + '. ' + finding['title'], 'Heading 3'),
+                ('Recommendation: ' + finding['rec'], 'Normal'),
+                ('Rationale: ' + finding['rationale'], 'Normal'),
+            ):
+                p = doc.add_paragraph(paragraph_text)
+                p.style = style
+                anchor._p.addprevious(p._p)
     anchor._element.getparent().remove(anchor._element)
     required = {'{{HMR_' + k + '}}' for k in TEXT_FIELDS} | {
         '{{HMR_' + k + '}}' for k in TABLE_FIELDS} | {ISSUES_ANCHOR}
