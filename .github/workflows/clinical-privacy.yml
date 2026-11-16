@@ -28,7 +28,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: python -m pip install pytest python-docx
+      - run: python -m pip install pytest python-docx sqlcipher3-wheels==0.5.7
       - name: Compile modified engine modules
         working-directory: HMR Desk/engine
         run: python -m py_compile clinical_privacy.py jobs.py steps.py settings.py service.py api.py report.py manual_defaults.py reconciliation.py local_report_builder.py
