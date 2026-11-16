@@ -120,8 +120,9 @@ def blank(conn, patient):
     text, clarify = referral_text(folder)
     found = referral.parse(text) if text is not None else None
     record['clarify'].extend(clarify)
-    if spec.is_file():
-        data = json.loads(spec.read_text(encoding='utf-8-sig'))
+    stored_spec = records.get_json(conn, patient['id'], 'interview_spec.json')
+    if stored_spec is not None or spec.is_file():
+        data = stored_spec if stored_spec is not None else json.loads(spec.read_text(encoding='utf-8-sig'))
         for k in TEXT:
             source = 'alcohol' if k == 'alcohol_smoking' else k
             if isinstance(data.get(source), str): record[k] = data[source]
