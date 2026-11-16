@@ -585,6 +585,7 @@ document.addEventListener('input', (event) => {
     interviewRecord[key][el.dataset.prop] =
       el.type === 'checkbox' ? el.checked : el.dataset.prop === 'relationship' ? Number(el.value) : el.value;
   else interviewRecord[key] = key === 'clarify' ? el.value.split('\n') : el.value;
+  if ((key === 'meds' || key === 'other_meds') && el.dataset.col === '0' && typeof medicineNameEdited === 'function') medicineNameEdited(key, Number(el.dataset.row), el);
   if (key === 'consent') {
     const consent = interviewRecord.consent;
     const incomplete = consent.by === 'authorised' && (!consent.relationship || !consent.authorised_name.trim());
