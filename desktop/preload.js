@@ -29,6 +29,8 @@ contextBridge.exposeInMainWorld('hmr', {
   migrateWorkspace: passphrase => ipcRenderer.invoke('migrate-workspace', passphrase),
   openPatientFolder: (id, file) => ipcRenderer.invoke('open-patient-folder', id, file),
   openReportVersion: (id, file, format) => ipcRenderer.invoke('open-report-version', id, file, format),
+  pickPathologySource: id => ipcRenderer.invoke('pathology-source-pick', id),
+  openPathologySource: (id, sourceId) => ipcRenderer.invoke('open-pathology-source', id, sourceId),
   oneOff: (action, site, value) => ipcRenderer.invoke('one-off', action, site, value),
   referralPick: (kind) => ipcRenderer.invoke('referral-pick', kind),
   openReviewedReferral: token => ipcRenderer.invoke('open-reviewed-referral', token),
