@@ -835,7 +835,10 @@ async function openFollowup(id, number) {
 async function followupScreen() {
   if (followupRecord) return;
   const id = followupId, number = followupNumber;
-  const record = await hmr.api('GET', `/api/patients/${encodeURIComponent(id)}/followup/${number}`);
+  const [record, medicineContext] = await Promise.all([
+    hmr.api('GET', `/api/patients/${encodeURIComponent(id)}/followup/${number}`),
+    hmr.api('GET', `/api/patients/${encodeURIComponent(id)}/medicine-context`).catch(() => ({error: true})),
+  ]);
   if (page !== 'followup_editor' || id !== followupId || number !== followupNumber) return;
   followupRecord = { date: '', method: 'phone', spoke_with: '', med_changes: '', recommendations: [], issues: '', outcome: '', notes: '', ...record };
   followupRecord.recommendations ||= [];
@@ -843,6 +846,7 @@ async function followupScreen() {
   const fields = [['spoke_with', 'Spoke with'], ['med_changes', 'Medicine changes'], ['issues', 'Issues'], ['outcome', 'Outcome'], ['notes', 'Notes']];
   $('screen').innerHTML = `<div class="actions"><button data-followup-back>Back to patient</button><button class="primary" data-followup-save>Save</button><button data-followup-export>Export Word</button><span id="followup-status" role="status">Ready</span></div>
     <section class="interview-section"><h2>Follow-up ${esc(number)}</h2><div class="form"><label>Date<input type="date" data-followup-field="date" value="${esc(followupRecord.date || '')}"></label><label>Method<select data-followup-field="method">${['phone', 'in person'].map(v => `<option value="${v}" ${followupRecord.method === v ? 'selected' : ''}>${v}</option>`).join('')}</select></label></div></section>
+    ${followupMedicineContextMarkup(medicineContext)}
     ${fields.slice(0, 2).map(([key, label]) => `<section class="interview-section"><label>${label}<textarea data-followup-field="${key}">${esc(followupRecord[key] || '')}</textarea></label></section>`).join('')}
     <section class="interview-section"><h2>Recommendations</h2><div class="interview-table"><table><thead><tr><th>Recommendation</th><th>Implemented</th><th>Comment</th></tr></thead><tbody>${followupRecord.recommendations.map((row, i) => `<tr><td>${esc(row[0] || '')}</td><td><select data-followup-row="${i}" data-col="1" aria-label="Implemented for recommendation ${i + 1}">${[['', 'Choose'], ['yes', 'Yes'], ['partly', 'Partly'], ['no', 'No']].map(([v, label]) => `<option value="${v}" ${row[1] === v ? 'selected' : ''}>${label}</option>`).join('')}</select></td><td><textarea data-followup-row="${i}" data-col="2" aria-label="Comment for recommendation ${i + 1}">${esc(row[2] || '')}</textarea></td></tr>`).join('')}</tbody></table></div></section>
     ${fields.slice(2).map(([key, label]) => `<section class="interview-section"><label>${label}<textarea data-followup-field="${key}">${esc(followupRecord[key] || '')}</textarea></label></section>`).join('')}`;
@@ -867,4 +871,4 @@ async function followupClick(b) {
     return true;
   }
   return false;
-  }
+}
