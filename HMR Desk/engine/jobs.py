@@ -296,7 +296,7 @@ def report_build(patient_id, pdf=False):
         if p['state'] == 'visited' and db.can_move(p['state'], 'report_drafted'):
             db.set_state(conn, patient_id, 'report_drafted', source='job')
         import hashlib
-        from pathlib import Path as _Path
+        import report_auth
         evidence = {
             'file': target.name,
             'sha256': hashlib.sha256(target.read_bytes()).hexdigest(),
@@ -307,6 +307,7 @@ def report_build(patient_id, pdf=False):
             'template_version': approved[1]['version'] if approved else '',
             'template_sha256': approved[1]['sha256'] if approved else '',
             'template_approved': bool(approved),
+            'source_files_sha256': report_auth.source_snapshot(p),
         }
         db.log(conn, patient_id, 'report_build', evidence, 'job')
         return output
