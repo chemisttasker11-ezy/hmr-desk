@@ -98,6 +98,13 @@ def check_approval(conn, patient, body):
         raise ValueError('Interview changed after report; refresh and rebuild')
     if pathology_records.revision(pathology_records.file_for(patient)) != detail.get('pathology_revision'):
         raise ValueError('Pathology changed after report; refresh and rebuild')
+    import reconciliation
+    review_file = root / 'reconciliation_review.json'
+    saved_review = json.loads(review_file.read_text(encoding='utf-8')) if review_file.is_file() else {}
+    current_interview = interview.load(conn, patient)
+    review_status = reconciliation.review_status(current_interview, saved_review)
+    if not review_status['reviewed']:
+        raise ValueError('Medicine reconciliation must be acknowledged for the current interview before sign-off')
     return {
         'report_file': filename,
         'report_sha256': sha,
@@ -108,6 +115,7 @@ def check_approval(conn, patient, body):
         'template_sha256': detail['template_sha256'],
         'template_version': detail['template_version'],
         'reviewer': reviewer.strip(),
+        'medicine_review_hash': review_status['source_hash'],
         'clinical_reviewed': True,
     }
 
@@ -134,4 +142,8 @@ def check_sent(conn, patient):
         raise ValueError('Interview was edited after sign-off')
     if pathology_records.revision(pathology_records.file_for(patient)) != evidence.get('pathology_revision'):
         raise ValueError('Pathology was edited after sign-off')
+    import reconciliation
+    current = reconciliation.digest(interview.load(conn, patient))
+    if not evidence.get('medicine_review_hash') or current != evidence['medicine_review_hash']:
+        raise ValueError('Medicine reconciliation is stale after sign-off')
     return True
