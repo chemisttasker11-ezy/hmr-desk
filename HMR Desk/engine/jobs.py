@@ -295,7 +295,20 @@ def report_build(patient_id, pdf=False):
                 raise RuntimeError('Local PDF conversion failed; prior Word draft preserved') from exc
         if p['state'] == 'visited' and db.can_move(p['state'], 'report_drafted'):
             db.set_state(conn, patient_id, 'report_drafted', source='job')
-        db.log(conn, patient_id, 'report_build', {'file': str(target)}, 'job')
+        import hashlib
+        from pathlib import Path as _Path
+        evidence = {
+            'file': target.name,
+            'sha256': hashlib.sha256(target.read_bytes()).hexdigest(),
+            'pdf_sha256': hashlib.sha256(pdf_target.read_bytes()).hexdigest() if pdf else '',
+            'report_spec_sha256': hashlib.sha256(spec.read_bytes()).hexdigest(),
+            'interview_revision': interview.revision(folder / 'interview.json'),
+            'pathology_revision': pathology_records.revision(pathology_records.file_for(p)),
+            'template_version': approved[1]['version'] if approved else '',
+            'template_sha256': approved[1]['sha256'] if approved else '',
+            'template_approved': bool(approved),
+        }
+        db.log(conn, patient_id, 'report_build', evidence, 'job')
         return output
 
 
