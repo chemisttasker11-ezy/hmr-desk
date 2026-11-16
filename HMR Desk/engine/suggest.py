@@ -11,6 +11,7 @@ import brainstorm
 import db
 import interview
 import jobs
+import records
 import report
 
 CLASSES_PATH = Path(__file__).with_name('drug_classes.json')
@@ -232,12 +233,12 @@ def suggest(context, index=None):
  return result
 
 def context_for(conn, patient):
- p=dict(patient); folder=jobs.patient_folder(patient); path=folder/'interview.json'
- if path.is_file(): record=interview.load(conn,patient)
+ p=dict(patient)
+ if records.exists(conn,patient['id'],'interview.json'): record=interview.load(conn,patient)
  else: record={'header':{},'meds':[],'other_meds':[],'conditions':'','obs':[],'pathology':[],'notes':'','mobility':''}
- confirmed=folder/'confirmed_meds.json'
- meds=[r[0] for r in json.loads(confirmed.read_text(encoding='utf-8')).get('meds',[]) if r] if confirmed.is_file() else [r[0] for r in record['meds']+record['other_meds'] if r and r[0] and not re.search(r'\b(?:ceased|stopped)\b',' '.join(r),re.I)]
- interactions='\n'.join(x.read_text(encoding='utf-8',errors='replace') for x in sorted(folder.glob('MIMS interactions*.txt')))
+ confirmed=records.get_json(conn,patient['id'],'confirmed_meds.json')
+ meds=[r[0] for r in confirmed.get('meds',[]) if r] if confirmed is not None else [r[0] for r in record['meds']+record['other_meds'] if r and r[0] and not re.search(r'\b(?:ceased|stopped)\b',' '.join(r),re.I)]
+ interactions='\n'.join(records.get(conn,patient['id'],n).decode('utf-8',errors='replace') for n in sorted(records.names_like(conn,patient['id'],'MIMS interactions')) if n.lower().endswith('.txt'))
  age=record['header'].get('age','')
  if not age and p.get('dob'):
   for fmt in ('%Y-%m-%d','%d/%m/%Y'):
