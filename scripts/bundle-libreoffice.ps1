@@ -28,9 +28,37 @@ $url = 'https://download.documentfoundation.org/libreoffice/stable/25.8.7/win/x8
 $download = Join-Path $work 'libreoffice.msi'
 $stage = Join-Path $work 'msi-content'
 try {
-  Invoke-WebRequest -Uri $url -OutFile $download -MaximumRedirection 8
-  $actual = (Get-FileHash $download -Algorithm SHA256).Hash.ToLowerInvariant()
-  if ($actual -ne $expected) { throw "LibreOffice download checksum mismatch; refusing to package" }
+  # Optional build cache of the already verified MSI (keyed by the pinned SHA256 in CI).
+  $cacheDir = $env:HMR_LIBREOFFICE_MSI_CACHE
+  $cachedMsi = if ($cacheDir) { Join-Path $cacheDir ($expected + '.msi') } else { $null }
+  $have = $false
+  if ($cachedMsi -and (Test-Path $cachedMsi)) {
+    $cachedHash = (Get-FileHash $cachedMsi -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($cachedHash -eq $expected) { Copy-Item $cachedMsi $download; $have = $true; Write-Host 'Using cached, hash-verified LibreOffice MSI' }
+    else { Remove-Item $cachedMsi -Force; Write-Host 'Discarded cached MSI with wrong hash' }
+  }
+  if (-not $have) {
+    # Transient upstream errors (for example HTTP 502) are retried with backoff. Every
+    # attempt is checked against the one pinned SHA256; a different file is never accepted.
+    $attempts = 6
+    for ($i = 1; $i -le $attempts -and -not $have; $i++) {
+      try {
+        Invoke-WebRequest -Uri $url -OutFile $download -MaximumRedirection 8 -TimeoutSec 600
+        $actual = (Get-FileHash $download -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($actual -ne $expected) { throw "LibreOffice download checksum mismatch ($actual)" }
+        $have = $true
+      } catch {
+        Write-Host "LibreOffice download attempt $i of $attempts failed: $($_.Exception.Message)"
+        if (Test-Path $download) { Remove-Item $download -Force -ErrorAction SilentlyContinue }
+        if ($i -lt $attempts) { Start-Sleep -Seconds ([Math]::Min(120, 10 * [Math]::Pow(2, $i - 1))) }
+      }
+    }
+    if (-not $have) { throw 'LibreOffice download failed or checksum mismatch after retries; refusing to package' }
+    if ($cachedMsi) {
+      New-Item -ItemType Directory -Path $cacheDir -Force | Out-Null
+      Copy-Item $download $cachedMsi -Force
+    }
+  }
   New-Item -ItemType Directory -Path $stage | Out-Null
   $process = Start-Process -FilePath 'msiexec.exe' -ArgumentList @('/a', ('"' + $download + '"'), '/qn',
     ('TARGETDIR="' + $stage + '"'), '/norestart') -Wait -PassThru -NoNewWindow
