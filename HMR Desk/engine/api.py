@@ -535,6 +535,9 @@ def recent_tasks(conn, patient_id=None, limit=200):
 
 def handle(conn, method, path, query, body):
     try:
+        if method == 'GET' and path == '/api/health':
+            return 200, {'ready': True, 'engine_version': '0.1.0', 'schema_version': 1,
+                         'capabilities': {'manual_hmr': True, 'clinical_ai_optional': True}}
         if method == 'POST' and path == '/api/auth/proda/start': return 200, proda_sms.start(settings.get(conn, 'proda_auto_sms_login'), body)
         if method == 'POST' and path == '/api/auth/proda/poll': return 200, proda_sms.poll(settings.get(conn, 'proda_auto_sms_login'), body)
         if method == 'POST' and path == '/api/auth/proda/finish': return 200, proda_sms.finish(body)
