@@ -116,8 +116,9 @@ def create(conn, workspace, output, password):
     with tempfile.TemporaryDirectory(prefix='hmr-backup-', dir=_private_stage_root()) as directory:
         root = Path(directory)
         database = root / 'hmr.db'
-        with closing(sqlite3.connect(database)) as snapshot:
-            conn.backup(snapshot)
+        # The snapshot inside the passphrase-encrypted bundle is plain SQLite on purpose: a restore on a
+        # new PC then needs only the passphrase. The engine encrypts it with that PC's key on first connect.
+        db.plain_snapshot(conn, database)
         zipped = root / 'snapshot.zip'
         index = {}
         paths = [('data/hmr.db', database)]
