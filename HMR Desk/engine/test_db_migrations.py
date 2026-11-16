@@ -19,6 +19,7 @@ def test_new_db_has_versioned_schema_and_idempotent_reconnect(tmp_path, monkeypa
 
 def test_legacy_schema_upgrade_preserves_rows_and_does_not_reapply(tmp_path, monkeypatch):
     monkeypatch.setattr(db, 'BASE', str(tmp_path / 'workspace'))
+    monkeypatch.setattr(db, 'DATA_DIR', str(tmp_path / 'userdata'))
     target = tmp_path / 'userdata' / 'historical.db'
     target.parent.mkdir()
     with sqlite3.connect(target) as legacy:
