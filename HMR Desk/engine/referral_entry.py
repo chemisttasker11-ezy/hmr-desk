@@ -82,7 +82,7 @@ def review(conn, paths):
             excerpts = [{'page': i + 1, 'method': methods[i], 'text': text[:1200]}
                         for i, text in enumerate(pages[:20])]
             item = {'source': source, 'sha256': digest, 'fields': fields, 'kind': kind,
-                    'page_previews': excerpts, 'flags': flags}
+                    'page_previews': excerpts, 'page_count': len(pages), 'flags': flags}
             conn.execute('INSERT INTO meta(key,value) VALUES (?,?)', ('referral_review_' + token, json.dumps(item)))
             row.update(token=token, kind=kind, fields=fields, flags=flags,
                        page_previews=excerpts,
@@ -115,7 +115,37 @@ def _validate_date(value, field):
                      '; confirm the exact date from the original PDF')
 
 
-def commit(conn, token, fields, distinct_person=False, manual_referral=False):
+CLINICAL_FIELDS = ('conditions', 'allergies', 'medicines', 'observations')
+
+
+def validate_clinical_review(value, page_count):
+    """No inferred negatives. Only a named reviewer may confirm source text."""
+    if value is None:
+        return {'version': 1, 'confirmed': False, 'allergies_status': 'unknown',
+                'source_page': 0, 'reviewed_by': '',
+                **{key: '' for key in CLINICAL_FIELDS}}
+    required = {'confirmed', 'allergies_status', 'source_page', 'reviewed_by', *CLINICAL_FIELDS}
+    if not isinstance(value, dict) or set(value) != required or type(value['confirmed']) is not bool:
+        raise ValueError('Invalid clinical source review')
+    if value['allergies_status'] not in ('unknown', 'explicit_none', 'listed'):
+        raise ValueError('Invalid allergy documentation state')
+    if type(value['source_page']) is not int or not 0 <= value['source_page'] <= page_count:
+        raise ValueError('Invalid PDF source page number')
+    if any(not isinstance(value[key], str) or len(value[key]) > 10000 for key in (*CLINICAL_FIELDS, 'reviewed_by')):
+        raise ValueError('Invalid clinical review text')
+    if value['confirmed'] and (value['source_page'] < 1 or len(value['reviewed_by'].strip()) < 3):
+        raise ValueError('Source page and reviewing pharmacist are required for confirmed clinical fields')
+    if value['confirmed'] and value['allergies_status'] == 'listed' and not value['allergies'].strip():
+        raise ValueError('Explicitly listed allergies require source-verified allergy details')
+    if value['confirmed'] and value['allergies_status'] == 'explicit_none' and value['allergies'].strip():
+        raise ValueError('Explicitly no known allergies cannot be combined with an allergy list')
+    if not value['confirmed'] and value['allergies_status'] == 'explicit_none':
+        raise ValueError('Do not record no known allergies without explicit source confirmation')
+    return {'version': 1, **{key: value[key].strip() if isinstance(value[key], str) else value[key]
+                            for key in required}}
+
+
+def commit(conn, token, fields, distinct_person=False, manual_referral=False, clinical=None):
     if not isinstance(token, str) or not re.fullmatch('[0-9a-f]{32}', token): raise ValueError('Invalid review')
     if type(distinct_person) is not bool or type(manual_referral) is not bool: raise ValueError('Invalid pharmacist acknowledgement')
     if not isinstance(fields, dict) or not fields.keys() <= set(FIELDS) or any(not isinstance(v, str) for v in fields.values()): raise ValueError('Invalid fields')
@@ -124,6 +154,7 @@ def commit(conn, token, fields, distinct_person=False, manual_referral=False):
     record = conn.execute('SELECT value FROM meta WHERE key=?', ('referral_review_' + token,)).fetchone()
     if not record: raise ValueError('Review expired; review the PDF again')
     item = json.loads(record['value'])
+    clinical_review = validate_clinical_review(clinical, item.get('page_count', 1))
     if item['kind'] != 'referral' and not manual_referral: raise ValueError('Unrecognised PDF requires explicit pharmacist confirmation as an HMR referral')
     data = read_pdf(item['source'])
     if hashlib.sha256(data).hexdigest() != item['sha256']: raise ValueError('Source changed; review the PDF again')
@@ -144,6 +175,7 @@ def commit(conn, token, fields, distinct_person=False, manual_referral=False):
             'extraction_flags': item.get('flags', []),
             'confirmed_identity_fields': {k: v.strip() for k, v in fields.items()},
             'manual_source_classification': bool(manual_referral),
+            'clinical_review': clinical_review,
             'source_truth': 'original referral.pdf; extracted fields require pharmacist source review',
         }
         with (folder / 'referral_source.json').open('x', encoding='utf-8') as f:
