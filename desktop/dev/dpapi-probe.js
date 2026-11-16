@@ -20,6 +20,14 @@ app.whenReady().then(async()=>{
     if (!Buffer.isBuffer(ciphertext)||ciphertext.includes(Buffer.from(marker)))
       throw Error('Encrypted draft unexpectedly contains plaintext marker');
     fs.writeFileSync(output,ciphertext,{flag:'wx',mode:0o600});
+    // Chromium keeps the safeStorage key in "Local State" and flushes it
+    // lazily. A hard kill before that flush makes the ciphertext unreadable,
+    // so wait for the key file before reporting the draft as recoverable.
+    const localState=path.join(base,'profile','Local State');
+    const deadline=Date.now()+25000;
+    while(!fs.existsSync(localState)&&Date.now()<deadline)
+      await new Promise(resolve=>setTimeout(resolve,250));
+    if(!fs.existsSync(localState)) throw Error('safeStorage key (Local State) was not persisted');
     fs.writeFileSync(path.join(base,'writer-ready'),'WRITTEN_SYNTHETIC_DRAFT');
     // Parent will force-terminate us to simulate a crash and leave ciphertext.
     setInterval(()=>{},1000);
