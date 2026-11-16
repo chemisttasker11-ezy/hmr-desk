@@ -1,7 +1,7 @@
 ﻿"""HMR Desk database: the single source of truth for patient state.
 Location: %USERPROFILE%\\HMR-Desk-data\\hmr.db (see DATA_DIR); override with env HMR_DB (tests).
 Run `python db.py` for a self-check."""
-import datetime, json, os, re, sqlite3, unicodedata
+import datetime, json, os, re, sqlite3, unicodedata, tempfile
 import app_paths
 
 BASE = str(app_paths.workspace_root())
@@ -131,6 +131,28 @@ def migrate_schema(conn):
         raise
 
 
+def preserve_legacy_sqlite(conn):
+    """Create a verified rollback snapshot before changing a historical database.
+
+    SQLite's backup API includes WAL state. The snapshot stays in the user's
+    private application-data directory; it is not a portable encrypted backup.
+    """
+    root = os.path.join(DATA_DIR, '.migration-snapshots')
+    os.makedirs(root, mode=0o700, exist_ok=True)
+    fd, target = tempfile.mkstemp(prefix='before-schema-', suffix='.db', dir=root)
+    os.close(fd)
+    try:
+        with sqlite3.connect(target) as snapshot:
+            conn.backup(snapshot)
+            if snapshot.execute('PRAGMA integrity_check').fetchone()[0] != 'ok':
+                raise ValueError('Migration rollback snapshot failed SQLite integrity')
+        return target
+    except Exception:
+        if os.path.exists(target):
+            os.unlink(target)
+        raise
+
+
 def connect(path=None):
     path = path or db_path()
     os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
@@ -143,6 +165,9 @@ def connect(path=None):
         version = conn.execute('PRAGMA user_version').fetchone()[0]
         if version > SCHEMA_VERSION:
             raise RuntimeError('Database schema is newer than this HMR Desk application')
+        if version < SCHEMA_VERSION and conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='patients'").fetchone():
+            preserve_legacy_sqlite(conn)
         conn.executescript(SCHEMA)
         migrate_schema(conn)
         import_meetings(conn)
