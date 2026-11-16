@@ -3,7 +3,6 @@
 Read only locally downloaded licensed ZIPs. Preserve all strength role groups and
 concrete values; never guess units/brand/form by splitting display strings.
 """
-import csv
 import io
 import json
 import re
@@ -35,7 +34,38 @@ STRENGTH_TYPES = {
 }
 
 
-def load(db, path, release, url):
+MAX_RF2_LINE_CHARS = 1_000_000
+
+
+def rf2_rows(stream):
+    """One physical RF2 TSV line per record. Quotes/backslashes are literal data.
+
+    RF2 is tab-delimited, not CSV-quoted. Never let a leading quote join lines
+    or strip quotes used by concrete-value strings. Preserve empty fields.
+    """
+    def line():
+        value = stream.readline(MAX_RF2_LINE_CHARS + 1)
+        if len(value) > MAX_RF2_LINE_CHARS:
+            raise ValueError('RF2 physical line exceeds supported bound')
+        return value
+
+    header = line()
+    if not header:
+        raise ValueError('Missing RF2 header')
+    names = header.rstrip('\r\n').split('\t')
+    if not all(names) or len(set(names)) != len(names) or 'active' not in names:
+        raise ValueError('Invalid RF2 header')
+    while True:
+        raw = line()
+        if not raw:
+            break
+        values = raw.rstrip('\r\n').split('\t')
+        if len(values) != len(names) or any('\r' in v or '\n' in v or '\x00' in v for v in values):
+            raise ValueError('Malformed RF2 TSV field count or control character')
+        yield dict(zip(names, values))
+
+
+def load(db, path, release, url, *, row_counts=None):
     with zipfile.ZipFile(path) as z:
         members = [i for i in z.infolist() if '/Snapshot/' in '/' + i.filename
                    and i.filename.endswith('.txt') and not i.is_dir()]
@@ -49,12 +79,15 @@ def load(db, path, release, url):
                     continue
                 found = True
                 with z.open(info) as stream:
-                    reader = csv.DictReader(io.TextIOWrapper(stream, encoding='utf-8-sig'), delimiter='\t')
-                    for row in reader:
-                        if None in row:
-                            raise ValueError('Malformed RF2 TSV')
+                    count = 0
+                    for row in rf2_rows(io.TextIOWrapper(stream, encoding='utf-8-sig', newline='')):
+                        count += 1
                         if row.get('active') == '1':
                             yield row
+                    if row_counts is not None:
+                        previous = row_counts.setdefault(info.filename, count)
+                        if previous != count:
+                            raise ValueError('RF2 row count changed between scans')
             if not found:
                 raise ValueError(f'Missing RF2 Snapshot component {prefix}')
 
