@@ -16,13 +16,13 @@ $sha = (& git -C $root rev-parse HEAD).Trim()
 $pythonFreeze = @(& python -m pip freeze)
 $pythonRequirements = (Get-FileHash (Join-Path $root 'requirements.txt') -Algorithm SHA256).Hash.ToLowerInvariant()
 $pythonBuildRequirements = (Get-FileHash (Join-Path $root 'requirements-build.txt') -Algorithm SHA256).Hash.ToLowerInvariant()
-$npmLock = (Get-FileHash (Join-Path $root 'desktop\\package-lock.json') -Algorithm SHA256).Hash.ToLowerInvariant()
-$vendorFile = Join-Path $root 'vendor\\libreoffice\\HMR-BUNDLE-MANIFEST.json'
+$npmLock = (Get-FileHash (Join-Path $root 'desktop\package-lock.json') -Algorithm SHA256).Hash.ToLowerInvariant()
+$vendorFile = Join-Path $root 'vendor\libreoffice\HMR-BUNDLE-MANIFEST.json'
 if (-not (Test-Path $vendorFile)) { throw 'Portable converter provenance manifest missing' }
 $converterProvenance = Get-Content $vendorFile -Raw | ConvertFrom-Json
-$notices = @(Get-ChildItem (Join-Path $root 'vendor\\libreoffice') -Recurse -File |
+$notices = @(Get-ChildItem (Join-Path $root 'vendor\libreoffice') -Recurse -File |
   Where-Object { $_.Name -like 'LICENSE*' -or $_.Name -like 'NOTICE*' } |
-  ForEach-Object { [IO.Path]::GetRelativePath((Join-Path $root 'vendor\\libreoffice'),$_.FullName).Replace('\\','/') })
+  ForEach-Object { [IO.Path]::GetRelativePath((Join-Path $root 'vendor\libreoffice'),$_.FullName).Replace('\','/') })
 if ($notices.Count -eq 0) { throw 'Converter attribution notice not bundled' }
 $files = @($installer) + @((Get-Item $engine),(Get-Item $lo))
 $checksums = @()
