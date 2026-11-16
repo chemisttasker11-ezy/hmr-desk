@@ -221,8 +221,9 @@ ipcMain.handle('referral-drop', async (e, paths) => {
 ipcMain.handle('open-reviewed-referral', async (e, token) => {
   if (e.sender !== win.webContents) throw Error('Forbidden');
   const verified = await reviewedReferrals.verifiedPath(token);
-  const error = await shell.openPath(verified);
-  if (error) throw Error('Could not open original PDF in the installed PDF viewer');
+  // Untrusted referral originals open in the sandboxed in-app viewer, not the system default PDF viewer.
+  try { await openBundledPdfViewer(verified, 'referral original'); }
+  catch { throw Error('Could not open the original PDF'); }
   return { opened: true };
 });
 ipcMain.handle('open-route', async (e, url) => {
@@ -408,7 +409,7 @@ let pdfViewerWindow = null;
 async function openBundledPdfViewer(file, title) {
   if (pdfViewerWindow && !pdfViewerWindow.isDestroyed()) pdfViewerWindow.close();
   pdfViewerWindow = new BrowserWindow({
-    width: 1100, height: 900, parent: win, title: 'HMR report review - ' + title,
+    width: 1100, height: 900, parent: win, title: 'HMR PDF - ' + title,
     autoHideMenuBar: true,
     webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false,
       webSecurity: true, plugins: true },
@@ -1161,4 +1162,4 @@ async function captureShots() {
     if (syntheticSignInListeners) { for (const listener of syntheticSignInListeners) ipcMain.on('sign-in-page', listener); signIns.update = originalSignInUpdate; signIns.reset = originalSignInReset; }
     if (win && !win.isDestroyed()) win.webContents.removeListener('console-message', onConsole);
   }
-}
+      }
