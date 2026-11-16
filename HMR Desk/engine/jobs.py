@@ -250,7 +250,9 @@ def report_build(patient_id, pdf=False):
         pdf_target = target.with_suffix('.pdf')
         if target.exists() or preview.exists() or (pdf and pdf_target.exists()): raise FileExistsError('Report output or preview already exists')
         if not Path(data['out']).is_absolute(): raise ValueError('Report spec out must be an absolute path')
-        output = run_script(BUILD_SCRIPT, spec)
+        import local_report_builder
+        local_report_builder.render(data, target)
+        output = 'Built locally with the bundled DOCX renderer'
         if not target.is_file(): raise RuntimeError('Report was not created: ' + str(target))
         if pdf:
             try:
