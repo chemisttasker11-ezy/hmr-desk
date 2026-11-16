@@ -8,6 +8,7 @@ import uuid
 from pathlib import Path
 
 import db
+import app_paths
 import fitz
 
 MAX_PDF = 25 * 1024 * 1024
@@ -15,7 +16,7 @@ FIELDS = ('name', 'phone', 'address', 'suburb', 'gp', 'clinic', 'referral_date',
 
 
 def parser():
-    path = Path(db.BASE) / 'scripts' / 'intake' / 'intake.py'
+    path = app_paths.resource_root() / 'scripts' / 'intake' / 'intake.py'
     spec = importlib.util.spec_from_file_location('referral_parser', path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
