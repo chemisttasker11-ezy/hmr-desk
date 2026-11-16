@@ -9,7 +9,7 @@ DEFS = {
     'ai_reply_reading': ('AI reply reading', 'select', 'ask', ['off', 'ask', 'auto']),
     'proda_auto_sms_login': ('Automatic PRODA SMS login', 'bool', False),
     'autopilot_paused': ('Pause messaging autopilot', 'bool', False),
-    **{f'auto_{kind}': (f'Automatic {kind.replace(chr(95), chr(32))}', 'select', 'auto', ['off', 'ask', 'auto']) for kind in ('confirmation', 'thanks_decline', 'follow_up', 'reminder')},
+    **{f'auto_{kind}': (f'Automatic {kind.replace(chr(95), chr(32))}', 'select', 'ask', ['off', 'ask', 'auto']) for kind in ('confirmation', 'thanks_decline', 'follow_up', 'reminder')},
     'follow_up_after_hours': ('Follow-up after hours', 'int', 24, 12, 96),
     'reminder_from_hour': ('Reminder from local hour', 'int', 16, 9, 19),
     'home_address': ('Home address / start location', 'text', ''),
