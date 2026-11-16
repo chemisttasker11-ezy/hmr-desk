@@ -88,7 +88,10 @@ def main():
                                  'Synthetic Test Person', 'Synthetic finding'):
                     assert expected in all_text, expected + ' missing in ' + stem
                 assert '{{HMR_' not in all_text
-                assert ('Synthetic medicine 34' if long_case else 'Synthetic medicine 1') in all_text
+                # Table cells wrap inside narrow columns; compare on whitespace-normalised text.
+                flat = ' '.join(all_text.split())
+                needle = 'Synthetic medicine 34' if long_case else 'Synthetic medicine 1'
+                assert needle in flat, needle + ' missing in ' + stem + '; text sample: ' + flat[:1500]
             assert word.is_file() and pdf.is_file()
     print('PASS: synthetic short/long template DOCX and matching bundled-LibreOffice PDF pagination/text')
 
