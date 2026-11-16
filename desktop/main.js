@@ -180,11 +180,21 @@ prodaLogin = require('./src/proda-login')({
   getWindow: () => win,
 });
 ipcMain.handle('api', async (e, method, p, b) => {
-  if (e.sender !== win.webContents || p === '/api/referrals/review' || p.startsWith('/api/backups/') ||
+  if (e.sender !== win.webContents || p === '/api/referrals/review' || p.startsWith('/api/backups/') || (p.startsWith('/api/storage/') && p !== '/api/storage/status') ||
       (method === 'POST' && p.endsWith('/pathology/sources')) ||
       (method === 'POST' && p === '/api/templates/register') ||
       require('./src/control').isPrivateApiRoute(p)) throw Error('Forbidden');
   return api(method, p, b);
+});
+// Database key actions get their own channel so the recovery key is never reachable through the generic api bridge.
+const STORAGE_ACTIONS = {
+  reveal: '/api/storage/recovery-key',
+  confirm: '/api/storage/recovery-key/confirm',
+  rotate: '/api/storage/rotate',
+};
+ipcMain.handle('storage', async (e, action) => {
+  if (e.sender !== win.webContents || !Object.prototype.hasOwnProperty.call(STORAGE_ACTIONS, action)) throw Error('Forbidden');
+  return api('POST', STORAGE_ACTIONS[action], {});
 });
 ipcMain.handle('referral-pick', async (e, kind) => {
   if (e.sender !== win.webContents || !['files', 'folder', 'inbox'].includes(kind)) throw Error('Forbidden');
