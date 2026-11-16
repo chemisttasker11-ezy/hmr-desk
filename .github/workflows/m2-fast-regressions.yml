@@ -28,7 +28,7 @@ jobs:
       - name: Run all isolated clinical and privacy regressions
         working-directory: HMR Desk/engine
         run: |
-          python -m pytest -q test_app_paths.py test_db_migrations.py test_template_report_builder.py test_report_auth.py test_clinical_routes.py test_clinical_snapshot.py test_visual_compare.py test_manual_foundation.py test_clinical_privacy.py test_service_static_security.py test_backup_bundle.py test_reconciliation_review.py test_medicine_scenarios.py test_pathology_records.py test_pathology_import.py test_offline_helpers.py test_local_referral_extraction.py test_referral_identity.py test_referral_variants.py test_interview_intake_review.py test_clinical_review_pages.py test_backup_template.py test_db_encryption.py test_dev_seed.py test_template_table_format.py test_template_prototype.py
+          python -m pytest -q test_app_paths.py test_db_migrations.py test_template_report_builder.py test_report_auth.py test_clinical_routes.py test_clinical_snapshot.py test_visual_compare.py test_manual_foundation.py test_clinical_privacy.py test_service_static_security.py test_backup_bundle.py test_reconciliation_review.py test_medicine_scenarios.py test_pathology_records.py test_pathology_import.py test_offline_helpers.py test_local_referral_extraction.py test_referral_identity.py test_referral_variants.py test_interview_intake_review.py test_clinical_review_pages.py test_backup_template.py test_db_encryption.py test_dev_seed.py test_template_table_format.py test_template_prototype.py test_medicine_reference.py test_records.py test_pathology_records.py test_pathology_import.py
 
 
       - name: Medicine reference data synthetic tests (no network, no patient data)
