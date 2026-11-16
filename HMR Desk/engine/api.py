@@ -381,6 +381,13 @@ def _action(conn, p, body, moved_items):
         dated = {'visited': 'Visited', 'report_sent': 'Report sent', 'claimed': 'Claimed'}
         status = dated[name] + ' ' + dt.date.fromisoformat(body['date']).strftime('%d/%m/%Y') if name in dated else None
         if name == 'visited' and body.get('auto') is True: status += ' (auto)'
+        authorisation = None
+        if name == 'signed_off':
+            import report_auth
+            authorisation = report_auth.check_approval(conn, p, body)
+        if name == 'report_sent':
+            import report_auth
+            report_auth.check_sent(conn, p)
         if name == 'signed_off' and p['state'] == 'visited' and steps.built(p):
             db.set_state(conn, pid, 'report_drafted', source='app')
         db.set_state(conn, pid, target, status, source='app', force=name == 'book_phone' and p['state'] in ('new', 'pooled'))
@@ -406,6 +413,8 @@ def _action(conn, p, body, moved_items):
             field = {'visited':'visit_date','report_sent':'report_sent','claimed':'claimed'}[name]
             conn.execute('UPDATE visits SET '+field+'=? WHERE id=?', (body['date'],rowid))
         detail = {k: v for k, v in body.items() if k != 'action'}
+        if authorisation is not None:
+            detail = authorisation
         if name == 'visited': detail['prior_booking'] = {k: p[k] for k in ('visit_date','visit_time','visit_end','visit_group')}
         db.log(conn, pid, name, detail, 'app')
     elif name == 'pathology_outcome':
@@ -773,6 +782,12 @@ def handle(conn, method, path, query, body):
                 except interview.Conflict:
                     conn.rollback(); return 409, {'error': 'interview conflict'}
                 return 200, result
+        match = re.fullmatch(r'/api/patients/(\\d+)/report-versions', path)
+        if match and method == 'GET':
+            import report_auth
+            p = conn.execute('SELECT * FROM patients WHERE id=?', (int(match[1]),)).fetchone()
+            if not p: return 404, {'error': 'patient not found'}
+            return 200, {'versions': report_auth.generated_versions(conn, p)}
         match = re.fullmatch(r'/api/patients/(\\d+)/pathology-records', path)
         if match and method in ('GET', 'POST'):
             import pathology_records
