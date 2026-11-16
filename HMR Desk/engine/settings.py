@@ -3,6 +3,7 @@ import json
 import re
 
 DEFS = {
+    'clinical_ai_privacy_ack': ('Enable clinical AI after reviewing de-identified data policy', 'bool', False),
     'ai_interview_assist': ('AI interview assist', 'bool', True),
     'ai_report_assist': ('AI report assist', 'bool', True),
     'ai_reply_reading': ('AI reply reading', 'select', 'ask', ['off', 'ask', 'auto']),
