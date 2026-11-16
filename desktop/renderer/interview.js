@@ -44,7 +44,7 @@ function interviewEquivalent(a, b) {
   try { return JSON.stringify(stable(normalizeInterviewDetails(JSON.parse(a)))) === JSON.stringify(stable(normalizeInterviewDetails(JSON.parse(b)))); } catch { return false; }
 }
 let interviewEdited = new Set(),
-  interviewAgent = 'No agent selected', interviewAi = true,
+  interviewAgent = 'No agent selected', interviewAi = false,
   interviewOutput = '';
 function interviewStatus(message) {
   interviewSaveStatus = message;
