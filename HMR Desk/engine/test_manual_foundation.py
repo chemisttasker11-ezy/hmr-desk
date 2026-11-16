@@ -39,6 +39,8 @@ def test_manual_defaults_do_not_fabricate_clinical_text():
     defaults = manual_defaults.initial_text("Synthetic Patient", "Synthetic GP")
     assert defaults["reason"] == defaults["intro"] == ""
     assert set(manual_defaults.unresolved({**defaults, "needs_review": ["reason", "intro"]})) == {"reason", "intro"}
+    assert "Synthetic Patient" in defaults["followup"] and "Synthetic Patient" in defaults["thanks"]
+    assert "Synthetic Patient" not in manual_defaults.initial_text("", "Synthetic GP")["followup"]
 
 
 def test_local_docx_build(tmp_path):
