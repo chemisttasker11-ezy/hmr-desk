@@ -401,8 +401,8 @@ ipcMain.handle('open-pathology-source', async (e, patientId, sourceId) => {
   const crypto = require('node:crypto');
   const hash = crypto.createHash('sha256').update(await fsp.readFile(target)).digest('hex');
   if (hash !== source.sha256) throw Error('Original source changed since import');
-  const failure = await shell.openPath(target);
-  if (failure) throw Error('Windows could not open the source PDF viewer');
+  try { await openBundledPdfViewer(target, 'pathology source'); }
+  catch { throw Error('Could not open the source PDF'); }
   return {opened:true};
 });
 let pdfViewerWindow = null;
@@ -1162,4 +1162,4 @@ async function captureShots() {
     if (syntheticSignInListeners) { for (const listener of syntheticSignInListeners) ipcMain.on('sign-in-page', listener); signIns.update = originalSignInUpdate; signIns.reset = originalSignInReset; }
     if (win && !win.isDestroyed()) win.webContents.removeListener('console-message', onConsole);
   }
-}
+    }
