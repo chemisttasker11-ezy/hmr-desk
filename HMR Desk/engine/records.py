@@ -32,6 +32,8 @@ EXPORT_NOTE_TEXT = (
     'This copy is OUTSIDE the encryption HMR Desk applies to its own storage. Anyone who can open this folder\n'
     'can read it. Keep it somewhere you trust and delete it when you no longer need it. Deleting a file\n'
     'normally does not guarantee the data is unrecoverable from the disk.\n'
+    'Files named "MIMS interactions ..." contain MIMS content. Keep them within your MIMS licence terms\n'
+    'and do not share them outside it.\n'
 )
 
 SCHEMA = """
@@ -190,3 +192,54 @@ def dumps(data):
 
 def put_json(conn, patient_id, name, data):
     return put(conn, patient_id, name, dumps(data))
+
+
+def migrate_all(conn, folder_for):
+    """Copy every patient's plain record files into the encrypted store (verify-then-keep).
+
+    folder_for(patient_row) returns the patient's folder or None. A repeat is safe: an existing database record is
+    never overwritten, and a differing plain file is reported as a conflict and left alone. Plain files are not
+    deleted here. Returns a summary with no patient details."""
+    ensure(conn)
+    summary = {'patients': 0, 'imported': 0, 'already': 0, 'conflict': 0, 'no_folder': 0, 'errors': 0}
+    for patient in conn.execute('SELECT * FROM patients').fetchall():
+        summary['patients'] += 1
+        try:
+            folder = folder_for(patient)
+        except Exception:
+            folder = None
+        if not folder or not Path(folder).is_dir():
+            summary['no_folder'] += 1
+            continue
+        try:
+            for outcome in import_folder(conn, patient['id'], folder).values():
+                summary[outcome] += 1
+        except Exception:
+            summary['errors'] += 1
+    return summary
+
+
+def status(conn, folder_for):
+    """Where saved records live right now. Plain copies count as unprotected until they are retired."""
+    ensure(conn)
+    stored = conn.execute('SELECT COUNT(*) FROM records').fetchone()[0]
+    plain_same = plain_other = 0
+    for patient in conn.execute('SELECT * FROM patients').fetchall():
+        try:
+            folder = folder_for(patient)
+        except Exception:
+            continue
+        if not folder or not Path(folder).is_dir():
+            continue
+        for name in os.listdir(folder):
+            if not is_record_name(name) or not (Path(folder) / name).is_file():
+                continue
+            if get(conn, patient['id'], name) == (Path(folder) / name).read_bytes():
+                plain_same += 1
+            else:
+                plain_other += 1
+    return {'records_in_encrypted_store': stored, 'plain_copies_matching_store': plain_same,
+            'plain_files_differing_or_not_stored': plain_other,
+            'saved_records_protected': False,
+            'note': 'Plain record files remain in patient folders until they are removed. Word, PDF and source '
+                    'documents are not encrypted by the app.'}
