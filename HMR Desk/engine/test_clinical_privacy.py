@@ -79,3 +79,18 @@ def test_payload_schema_rejects_extra_keys():
     payload["patient_name"] = "Private Example"
     with pytest.raises(cp.PrivacyBlocked):
         cp.validate_payload(payload)
+
+
+
+def test_numeric_pathology_value_reaches_payload_and_text_is_withheld():
+    rec = record()
+    rec["pathology"] = [["Creatinine", "119", "2026-11-01", "umol/L"],
+                        ["eGFR", "45.5", "2026-11-01", "mL/min"],
+                        ["Potassium", "-1.2", "", ""],
+                        ["Comment", "see Dr Private GP", "", ""],
+                        ["Sodium", "1e5", "", ""]]
+    result = cp.project(rec, sex="female")
+    values = {row["test"]: row["value"] for row in result["pathology"]}
+    assert values == {"Creatinine": "119", "eGFR": "45.5", "Potassium": "-1.2"}
+    raw = json.dumps(result)
+    assert "2026-11-01" not in raw and "Private" not in raw
