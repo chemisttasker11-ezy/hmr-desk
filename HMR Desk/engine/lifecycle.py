@@ -185,7 +185,7 @@ if __name__ == '__main__':
     parser.add_argument('--dry-run', action='store_true', required=True)
     parser.parse_args()
     from pathlib import Path
-    conn = sqlite3.connect(Path(db.db_path()).resolve().as_uri() + '?mode=ro', uri=True)
+    conn = db.open_encrypted(db.db_path(), readonly=True)
     conn.row_factory = sqlite3.Row
     try:
         visits = auto_visit(conn, dry_run=True)
