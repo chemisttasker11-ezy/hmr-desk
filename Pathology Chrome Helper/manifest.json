@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "Pathology Report Saver",
+  "version": "0.4.0",
+  "description": "Saves My Health Record pathology PDFs: one report, the latest of each test from the last 6 months, or that for every listed patient.",
+  "permissions": ["downloads"],
+  "host_permissions": ["https://provider.ehealth.gov.au/*"],
+  "background": {"service_worker": "background.js"},
+  "content_scripts": [{"matches": [
+    "https://provider.ehealth.gov.au/portal/more/document_search/Get_Document*",
+    "https://provider.ehealth.gov.au/portal/clinical_documents/pathology_report*",
+    "https://provider.ehealth.gov.au/portal/health-record-search*",
+    "https://provider.ehealth.gov.au/portal/health-record-overview*",
+    "https://provider.ehealth.gov.au/portal/enterAccessCode*"
+  ], "js": ["patients.js", "content.js"]}]
+}

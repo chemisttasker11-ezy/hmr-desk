@@ -1,0 +1,53 @@
+# Local dependencies, build output and browser state
+node_modules/
+dist/
+shots/
+*-cache/
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+outputs/
+dev/hmr-smoke-*/
+**/app-profile/
+**/electron/
+**/profile/
+**/profiles/
+**/referral-cache/
+# Local data and documents
+*.db
+*.db-*
+*.sqlite*
+*.log
+*.pdf
+*.doc
+*.docx
+*.xls
+*.xlsx
+*.csv
+*.bak
+*.tmp
+# Credentials and machine-specific state
+.env
+.env.*
+*.key
+*.pem
+*token*
+*secret*
+*credential*
+sign-ins.bin
+app-config.json
+/Pathology Chrome Helper/patients.js
+/MIMS Interaction Helper/lists.js
+/PPA Claim Helper/claims.js
+
+# Patient workspace folders and exported materials
+/Scheduled/
+/Visited/
+/Completed & Claimed/
+/To CLAIM/
+/TO SORT/
+/on Excel/
+/cases/
+/TEMPLATES/
+/HMR Desk/referral-cache/

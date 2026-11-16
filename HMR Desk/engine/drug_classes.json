@@ -1,0 +1,640 @@
+{
+  "pantoprazole": [
+    "PPI"
+  ],
+  "esomeprazole": [
+    "PPI"
+  ],
+  "omeprazole": [
+    "PPI"
+  ],
+  "rabeprazole": [
+    "PPI"
+  ],
+  "lansoprazole": [
+    "PPI"
+  ],
+  "rosuvastatin": [
+    "statin"
+  ],
+  "atorvastatin": [
+    "statin"
+  ],
+  "simvastatin": [
+    "statin"
+  ],
+  "pravastatin": [
+    "statin"
+  ],
+  "aspirin": [
+    "antiplatelet"
+  ],
+  "clopidogrel": [
+    "antiplatelet"
+  ],
+  "apixaban": [
+    "DOAC",
+    "anticoagulant"
+  ],
+  "rivaroxaban": [
+    "DOAC",
+    "anticoagulant"
+  ],
+  "dabigatran": [
+    "DOAC",
+    "anticoagulant"
+  ],
+  "edoxaban": [
+    "DOAC",
+    "anticoagulant"
+  ],
+  "perindopril": [
+    "ACE inhibitor"
+  ],
+  "ramipril": [
+    "ACE inhibitor"
+  ],
+  "enalapril": [
+    "ACE inhibitor"
+  ],
+  "irbesartan": [
+    "ARB"
+  ],
+  "telmisartan": [
+    "ARB"
+  ],
+  "candesartan": [
+    "ARB"
+  ],
+  "olmesartan": [
+    "ARB"
+  ],
+  "valsartan": [
+    "ARB"
+  ],
+  "frusemide": [
+    "loop diuretic",
+    "diuretic"
+  ],
+  "furosemide": [
+    "loop diuretic",
+    "diuretic"
+  ],
+  "bumetanide": [
+    "loop diuretic",
+    "diuretic"
+  ],
+  "hydrochlorothiazide": [
+    "diuretic"
+  ],
+  "indapamide": [
+    "diuretic"
+  ],
+  "spironolactone": [
+    "diuretic"
+  ],
+  "celecoxib": [
+    "NSAID"
+  ],
+  "meloxicam": [
+    "NSAID"
+  ],
+  "diclofenac": [
+    "NSAID"
+  ],
+  "naproxen": [
+    "NSAID"
+  ],
+  "ibuprofen": [
+    "NSAID"
+  ],
+  "escitalopram": [
+    "SSRI",
+    "antidepressant"
+  ],
+  "sertraline": [
+    "SSRI",
+    "antidepressant"
+  ],
+  "citalopram": [
+    "SSRI",
+    "antidepressant"
+  ],
+  "paroxetine": [
+    "SSRI",
+    "antidepressant"
+  ],
+  "fluoxetine": [
+    "SSRI",
+    "antidepressant"
+  ],
+  "duloxetine": [
+    "SNRI",
+    "antidepressant"
+  ],
+  "venlafaxine": [
+    "SNRI",
+    "antidepressant"
+  ],
+  "desvenlafaxine": [
+    "SNRI",
+    "antidepressant"
+  ],
+  "temazepam": [
+    "benzodiazepine"
+  ],
+  "diazepam": [
+    "benzodiazepine"
+  ],
+  "oxazepam": [
+    "benzodiazepine"
+  ],
+  "clonazepam": [
+    "benzodiazepine"
+  ],
+  "lorazepam": [
+    "benzodiazepine"
+  ],
+  "zopiclone": [
+    "Z-drug"
+  ],
+  "zolpidem": [
+    "Z-drug"
+  ],
+  "oxycodone": [
+    "opioid"
+  ],
+  "codeine": [
+    "opioid"
+  ],
+  "tramadol": [
+    "opioid"
+  ],
+  "tapentadol": [
+    "opioid"
+  ],
+  "buprenorphine": [
+    "opioid"
+  ],
+  "morphine": [
+    "opioid"
+  ],
+  "amitriptyline": [
+    "anticholinergic",
+    "antidepressant"
+  ],
+  "oxybutynin": [
+    "anticholinergic"
+  ],
+  "solifenacin": [
+    "anticholinergic"
+  ],
+  "prochlorperazine": [
+    "anticholinergic"
+  ],
+  "doxylamine": [
+    "anticholinergic"
+  ],
+  "metformin": [
+    "metformin"
+  ],
+  "dapagliflozin": [
+    "SGLT2 inhibitor"
+  ],
+  "empagliflozin": [
+    "SGLT2 inhibitor"
+  ],
+  "gliclazide": [
+    "sulfonylurea"
+  ],
+  "glimepiride": [
+    "sulfonylurea"
+  ],
+  "glipizide": [
+    "sulfonylurea"
+  ],
+  "insulin": [
+    "insulin"
+  ],
+  "alendronate": [
+    "bisphosphonate",
+    "osteoporosis treatment"
+  ],
+  "risedronate": [
+    "bisphosphonate",
+    "osteoporosis treatment"
+  ],
+  "zoledronic": [
+    "bisphosphonate",
+    "osteoporosis treatment"
+  ],
+  "budesonide": [
+    "inhaled corticosteroid"
+  ],
+  "fluticasone": [
+    "inhaled corticosteroid"
+  ],
+  "beclometasone": [
+    "inhaled corticosteroid"
+  ],
+  "pregabalin": [
+    "gabapentinoid"
+  ],
+  "gabapentin": [
+    "gabapentinoid"
+  ],
+  "quetiapine": [
+    "antipsychotic"
+  ],
+  "olanzapine": [
+    "antipsychotic"
+  ],
+  "risperidone": [
+    "antipsychotic"
+  ],
+  "metoprolol": [
+    "beta blocker"
+  ],
+  "atenolol": [
+    "beta blocker"
+  ],
+  "bisoprolol": [
+    "beta blocker"
+  ],
+  "propranolol": [
+    "beta blocker"
+  ],
+  "nebivolol": [
+    "beta blocker"
+  ],
+  "carvedilol": [
+    "beta blocker"
+  ],
+  "sotalol": [
+    "beta blocker"
+  ],
+  "amlodipine": [
+    "calcium channel blocker"
+  ],
+  "lercanidipine": [
+    "calcium channel blocker"
+  ],
+  "felodipine": [
+    "calcium channel blocker"
+  ],
+  "verapamil": [
+    "calcium channel blocker"
+  ],
+  "mirtazapine": [
+    "antidepressant"
+  ],
+  "agomelatine": [
+    "antidepressant"
+  ],
+  "warfarin": [
+    "anticoagulant"
+  ],
+  "paracetamol": [
+    "analgesic"
+  ],
+  "denosumab": [
+    "osteoporosis treatment"
+  ],
+  "ezetimibe": [
+    "lipid lowering"
+  ],
+  "fenofibrate": [
+    "lipid lowering"
+  ],
+  "semaglutide": [
+    "GLP-1 agonist"
+  ],
+  "sitagliptin": [
+    "DPP-4 inhibitor"
+  ],
+  "linagliptin": [
+    "DPP-4 inhibitor"
+  ],
+  "prednisolone": [
+    "corticosteroid"
+  ],
+  "prednisone": [
+    "corticosteroid"
+  ],
+  "macrogol": [
+    "laxative"
+  ],
+  "lactulose": [
+    "laxative"
+  ],
+  "bisacodyl": [
+    "laxative"
+  ],
+  "docusate": [
+    "laxative"
+  ],
+  "senna": [
+    "laxative"
+  ],
+  "psyllium": [
+    "laxative"
+  ],
+  "salbutamol": [
+    "bronchodilator"
+  ],
+  "formoterol": [
+    "bronchodilator"
+  ],
+  "salmeterol": [
+    "bronchodilator"
+  ],
+  "tiotropium": [
+    "bronchodilator"
+  ],
+  "umeclidinium": [
+    "bronchodilator"
+  ],
+  "glycopyrronium": [
+    "bronchodilator"
+  ],
+  "levothyroxine": [
+    "thyroid hormone"
+  ],
+  "colecalciferol": [
+    "vitamin"
+  ],
+  "cholecalciferol": [
+    "vitamin"
+  ],
+  "cyanocobalamin": [
+    "vitamin"
+  ],
+  "hydroxocobalamin": [
+    "vitamin"
+  ],
+  "thiamine": [
+    "vitamin"
+  ],
+  "ascorbic": [
+    "vitamin"
+  ],
+  "methotrexate": [
+    "immunosuppressant"
+  ],
+  "leflunomide": [
+    "immunosuppressant"
+  ],
+  "allopurinol": [
+    "urate lowering"
+  ],
+  "amiodarone": [
+    "antiarrhythmic"
+  ],
+  "flecainide": [
+    "antiarrhythmic"
+  ],
+  "digoxin": [
+    "antiarrhythmic"
+  ],
+  "mirabegron": [
+    "urinary medicine"
+  ],
+  "tamsulosin": [
+    "urinary medicine"
+  ],
+  "dutasteride": [
+    "urinary medicine"
+  ],
+  "methenamine": [
+    "urinary medicine",
+    "urinary antiseptic"
+  ],
+  "cephalexin": [
+    "antibiotic"
+  ],
+  "doxycycline": [
+    "antibiotic"
+  ],
+  "azithromycin": [
+    "antibiotic"
+  ],
+  "nitrofurantoin": [
+    "antibiotic"
+  ],
+  "fexofenadine": [
+    "antihistamine"
+  ],
+  "cetirizine": [
+    "antihistamine"
+  ],
+  "loratadine": [
+    "antihistamine"
+  ],
+  "isosorbide": [
+    "nitrate"
+  ],
+  "glyceryl": [
+    "nitrate"
+  ],
+  "ondansetron": [
+    "antiemetic"
+  ],
+  "metoclopramide": [
+    "antiemetic"
+  ],
+  "domperidone": [
+    "antiemetic"
+  ],
+  "levetiracetam": [
+    "antiseizure"
+  ],
+  "valproate": [
+    "antiseizure"
+  ],
+  "nizatidine": [
+    "gastrointestinal medicine"
+  ],
+  "valaciclovir": [
+    "antiviral"
+  ],
+  "colchicine": [
+    "gout medicine"
+  ],
+  "melatonin": [
+    "melatonin"
+  ],
+  "magnesium": [
+    "magnesium"
+  ],
+  "ferrous": [
+    "iron"
+  ],
+  "calcium": [
+    "calcium"
+  ],
+  "betamethasone": [
+    "topical corticosteroid"
+  ],
+  "methylprednisolone": [
+    "topical corticosteroid"
+  ],
+  "mometasone": [
+    "topical corticosteroid"
+  ],
+  "hydrocortisone": [
+    "topical corticosteroid"
+  ],
+  "triamcinolone": [
+    "topical corticosteroid"
+  ],
+  "latanoprost": [
+    "eye medicine"
+  ],
+  "olopatadine": [
+    "eye medicine"
+  ],
+  "sildenafil": [
+    "PDE5 inhibitor"
+  ],
+  "tadalafil": [
+    "PDE5 inhibitor"
+  ],
+  "estriol": [
+    "hormone"
+  ],
+  "estradiol": [
+    "hormone"
+  ],
+  "pramipexole": [
+    "neurological medicine"
+  ],
+  "baclofen": [
+    "neurological medicine"
+  ],
+  "hydroxychloroquine": [
+    "inflammatory arthritis medicine"
+  ],
+  "loperamide": [
+    "antimotility"
+  ],
+  "mupirocin": [
+    "antibiotic topical"
+  ],
+  "chloramphenicol": [
+    "antibiotic topical"
+  ],
+  "fluorouracil": [
+    "antimetabolite"
+  ],
+  "betahistine": [
+    "antivertigo"
+  ],
+  "moxonidine": [
+    "antihypertensive"
+  ],
+  "prazosin": [
+    "antihypertensive"
+  ],
+  "sacubitril": [
+    "ARNI"
+  ],
+  "folic": [
+    "supplement"
+  ],
+  "vilanterol": [
+    "bronchodilator"
+  ],
+  "hctz": [
+    "diuretic"
+  ],
+  "sodium hyaluronate": [
+    "eye medicine"
+  ],
+  "levodopa": [
+    "antiparkinsonian"
+  ],
+  "vitamin d": [
+    "vitamin"
+  ],
+  "vitamin d3": [
+    "vitamin"
+  ],
+  "sodium valproate": [
+    "antiseizure"
+  ],
+  "azelastine": [
+    "antihistamine"
+  ],
+  "naloxone": [
+    "opioid antagonist"
+  ],
+  "brinzolamide": [
+    "glaucoma medicine"
+  ],
+  "salicylic acid": [
+    "topical medicine"
+  ],
+  "timolol": [
+    "beta blocker"
+  ],
+  "vitamin c": [
+    "vitamin"
+  ],
+  "multivitamin": [
+    "vitamin"
+  ],
+  "vitamin b complex": [
+    "vitamin"
+  ],
+  "vitamin b3": [
+    "vitamin"
+  ],
+  "vitamin k2": [
+    "vitamin"
+  ],
+  "vit d": [
+    "vitamin"
+  ],
+  "fish oil": [
+    "supplement"
+  ],
+  "glucosamine": [
+    "supplement"
+  ],
+  "chondroitin": [
+    "supplement"
+  ],
+  "zinc": [
+    "supplement"
+  ],
+  "turmeric": [
+    "supplement"
+  ],
+  "coq10": [
+    "supplement"
+  ],
+  "garlic": [
+    "supplement"
+  ],
+  "probiotics": [
+    "supplement"
+  ],
+  "benserazide": [
+    "antiparkinsonian"
+  ],
+  "amoxicillin": [
+    "antibiotic"
+  ],
+  "trimethoprim": [
+    "antibiotic"
+  ],
+  "nystatin": [
+    "antifungal"
+  ],
+  "iron supplement": [
+    "iron"
+  ],
+  "aspart": [
+    "insulin"
+  ]
+}

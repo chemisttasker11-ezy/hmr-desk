@@ -1,0 +1,1 @@
+Prepare the report spec using the supplied source and skill rules. Return one JSON object only. Do not invent missing clinical facts. The out field must be an absolute output DOCX path in the patient folder. Do not perform file operations.
