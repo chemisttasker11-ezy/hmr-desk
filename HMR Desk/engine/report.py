@@ -12,6 +12,7 @@ import brainstorm
 import db
 import interview
 import jobs
+import manual_defaults
 
 WIDTHS = {'meds': 4, 'otc': 3, 'ceased': 3, 'path': 5}
 REVIEW = ['thanks', 'reason', 'intro', 'followup']
@@ -52,10 +53,7 @@ def _save(conn, patient, data):
     return data
 
 def placeholders(data):
-    example = json.loads((jobs.SKILL / 'scripts' / 'example-spec.json').read_text(encoding='utf-8'))
-    gp = data['dear'][5:-1] if data['dear'].startswith('Dear ') and data['dear'].endswith(',') else ''
-    # Only reason and intro start as writing instructions; the thanks and follow-up defaults are real sentences.
-    return [k for k in data.get('needs_review', []) if k in ('reason', 'intro') and data[k] == example[k].replace('Mr Firstname Surname', data['name']).replace('Dr Firstname Surname', gp)]
+    return manual_defaults.unresolved(data)
 
 def observations(record):
     d = record.get('details', {}); lines = []
@@ -137,8 +135,7 @@ def start(conn, patient):
     if target.exists(): raise FileExistsError('report spec already exists')
     record, derived, dates = _derived(conn, patient); p = dict(patient); h = record['header']
     name = p['name']; gp = p.get('gp') or h['gp'] or ''
-    example = json.loads((jobs.SKILL / 'scripts' / 'example-spec.json').read_text(encoding='utf-8'))
-    data = {k: example[k].replace('Mr Firstname Surname', name).replace('Dr Firstname Surname', gp) for k in REVIEW}
+    data = manual_defaults.initial_text(name, gp)
     address = ', '.join(filter(None, (p.get('address'), p.get('suburb'))))
     patient_lines = [name, 'DOB: ' + (p.get('dob') or h['dob']), 'Medicare No: ' + (p.get('medicare') or ''), 'Address: ' + address, 'Phone: ' + (p.get('phone') or '')]
     doctor_lines = [gp, p.get('clinic') or '', 'Request date: ' + (p.get('referral_date') or '')]
