@@ -138,3 +138,30 @@ def test_read_only_backup_preview_verifies_patient_scope_and_never_restores(tmp_
     with pytest.raises(ValueError, match='Wrong passphrase'):
         backup_bundle.restore(backup, None, 'not-the-right-passphrase', preview_only=True)
     conn.close()
+
+
+def test_isolated_restore_integrity_check_before_activation(tmp_path, monkeypatch):
+    workspace = tmp_path / 'active workspace'
+    workspace.mkdir()
+    (workspace / 'synthetic.json').write_text('{"clinical":"synthetic"}')
+    userdata = tmp_path / 'userdata'
+    monkeypatch.setattr(db, 'BASE', str(workspace))
+    monkeypatch.setattr(db, 'DATA_DIR', str(userdata))
+    conn = db.connect(str(userdata / 'hmr.db'))
+    with conn:
+        conn.execute("INSERT INTO patients(key,name) VALUES ('synthetic case','Synthetic Case')")
+    backup = tmp_path / 'isolated.hmrbak'
+    backup_bundle.create(conn, workspace, backup, 'long-synthetic-passphrase')
+    isolated = tmp_path / 'restored'
+    backup_bundle.restore(backup, isolated, 'long-synthetic-passphrase')
+    checked = backup_bundle.verify_isolated(isolated)
+    assert checked['verified']
+    assert checked['patients'] == 1
+    assert checked['files'] == 2
+    assert (isolated / 'restore-manifest.json').is_file()
+    (isolated / 'workspace' / 'synthetic.json').write_text('tampered')
+    with pytest.raises(ValueError, match='length mismatch|hash mismatch'):
+        backup_bundle.verify_isolated(isolated)
+    with pytest.raises(ValueError, match='active clinical storage'):
+        backup_bundle.verify_isolated(workspace)
+    conn.close()
