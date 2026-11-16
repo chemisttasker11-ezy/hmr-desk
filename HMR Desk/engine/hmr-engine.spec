@@ -1,6 +1,6 @@
 # PyInstaller onedir specification; build from HMR Desk/engine on Windows x64.
 from pathlib import Path
-from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_submodules, collect_data_files
 
 root = Path(SPECPATH)
 assets = root / 'assets'
@@ -19,8 +19,8 @@ a = Analysis(
     [str(root / 'engine_main.py')],
     pathex=[str(root)],
     binaries=[],
-    datas=datas,
-    hiddenimports=collect_submodules('fitz'),
+    datas=datas + collect_data_files('medicine_data'),
+    hiddenimports=collect_submodules('fitz') + collect_submodules('medicine_data'),
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
