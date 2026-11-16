@@ -1,7 +1,7 @@
 ﻿"""HMR Desk database: the single source of truth for patient state.
 Location: %USERPROFILE%\\HMR-Desk-data\\hmr.db (see DATA_DIR); override with env HMR_DB (tests).
 Run `python db.py` for a self-check."""
-import datetime, json, os, re, sqlite3
+import datetime, json, os, re, sqlite3, unicodedata
 import app_paths
 
 BASE = str(app_paths.workspace_root())
@@ -180,8 +180,15 @@ def now():
 
 def patient_key(name):
     """'Mr Alex Quinn Example' and 'alex example' -> 'alex example' (first + last word, letters only)."""
-    w = re.sub(r"[^a-z' -]", ' ', re.sub(r'^(mr|mrs|ms|miss|dr)\.?\s+', '', (name or '').strip().lower())).split()
-    return f'{w[0]} {w[-1]}' if len(w) > 1 else (w[0] if w else '')
+    original = unicodedata.normalize('NFKC', str(name or '')).casefold().strip()
+    original = re.sub(r'^(?:mr|mrs|ms|miss|dr)\\.?\\s+', '', original)
+    tokens = []
+    for fragment in original.split():
+        clean = ''.join(char for char in fragment
+                        if char.isalpha() or char in ("'", '-')).strip("'-")
+        if clean:
+            tokens.append(clean)
+    return f'{tokens[0]} {tokens[-1]}' if len(tokens) > 1 else (tokens[0] if tokens else '')
 
 
 def log(conn, patient_id, type_, detail=None, source='engine'):
