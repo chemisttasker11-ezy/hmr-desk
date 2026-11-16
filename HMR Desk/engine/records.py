@@ -1,0 +1,155 @@
+"""Encrypted clinical record store (stage 1: store, import, export; nothing calls it yet).
+
+Saved clinical records (interview, report spec, confirmed medicines) move from plain files in the patient
+folder into the SQLCipher database, keyed by patient id so a folder move does not matter.
+
+Rules that keep records safe:
+  * Import only copies. A file is never overwritten into a newer database record, and never removed here.
+  * If the database already holds a different record, the file is left alone and reported as a conflict.
+  * Export writes an ordinary copy of the records to a folder the user picks. That copy is OUTSIDE the
+    app's encryption. Export never overwrites an existing file.
+Word, PDF and source-file outputs are not stored here and stay plain files.
+"""
+import datetime, hashlib, os, re
+from pathlib import Path
+
+RECORD_NAMES = (
+    'interview.json', 'interview.json.bak',
+    'report_spec.json', 'report_spec.json.bak',
+    'report_spec.ai.json', 'report_spec.ai.json.bak',
+    'confirmed_meds.json',
+)
+EXPORT_NOTE = 'README - exported records.txt'
+EXPORT_NOTE_TEXT = (
+    'These files are a copy of saved HMR Desk clinical records.\n'
+    'This copy is OUTSIDE the encryption HMR Desk applies to its own storage. Anyone who can open this folder\n'
+    'can read it. Keep it somewhere you trust and delete it when you no longer need it. Deleting a file\n'
+    'normally does not guarantee the data is unrecoverable from the disk.\n'
+)
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS records (
+  patient_id INTEGER NOT NULL, name TEXT NOT NULL, body BLOB NOT NULL,
+  revision TEXT NOT NULL, updated_at TEXT NOT NULL,
+  PRIMARY KEY (patient_id, name)
+);
+"""
+
+
+class Conflict(Exception):
+    pass
+
+
+def _now():
+    return datetime.datetime.now().isoformat(timespec='seconds')
+
+
+def _check(name):
+    if name not in RECORD_NAMES:
+        raise ValueError('not a record name')
+    return name
+
+
+def digest(body):
+    """Same token the file-based code used: sha256 of the exact bytes, or 'missing'."""
+    return hashlib.sha256(body).hexdigest() if body is not None else 'missing'
+
+
+def ensure(conn):
+    conn.execute(SCHEMA)  # not executescript: that would commit the caller's open transaction
+
+
+def get(conn, patient_id, name):
+    ensure(conn)
+    row = conn.execute('SELECT body FROM records WHERE patient_id=? AND name=?', (patient_id, _check(name))).fetchone()
+    return bytes(row[0]) if row else None
+
+
+def exists(conn, patient_id, name):
+    return get(conn, patient_id, name) is not None
+
+
+def revision(conn, patient_id, name):
+    return digest(get(conn, patient_id, name))
+
+
+def put(conn, patient_id, name, body, expected_revision=None):
+    """Write inside the caller's transaction (the caller commits). A stale expected revision raises Conflict."""
+    if not isinstance(body, (bytes, bytearray)):
+        raise TypeError('record body must be bytes')
+    body = bytes(body)
+    ensure(conn)
+    if expected_revision is not None and expected_revision != revision(conn, patient_id, name):
+        raise Conflict('record changed since it was read')
+    conn.execute(
+        'INSERT INTO records(patient_id,name,body,revision,updated_at) VALUES(?,?,?,?,?) '
+        'ON CONFLICT(patient_id,name) DO UPDATE SET body=excluded.body, revision=excluded.revision, updated_at=excluded.updated_at',
+        (patient_id, _check(name), body, digest(body), _now()))
+    return digest(body)
+
+
+def delete(conn, patient_id, name):
+    ensure(conn)
+    conn.execute('DELETE FROM records WHERE patient_id=? AND name=?', (patient_id, _check(name)))
+
+
+def names(conn, patient_id):
+    ensure(conn)
+    return [r[0] for r in conn.execute('SELECT name FROM records WHERE patient_id=? ORDER BY name', (patient_id,))]
+
+
+def import_folder(conn, patient_id, folder):
+    """Copy record files from a patient folder into the database, verified by read-back.
+
+    Returns {name: 'imported' | 'already' | 'conflict'} for files that exist. Repeating it is safe: an existing
+    database record is never replaced by a file. Files are not changed or removed."""
+    ensure(conn)
+    folder = Path(folder)
+    result = {}
+    for name in RECORD_NAMES:
+        path = folder / name
+        if not path.is_file():
+            continue
+        body = path.read_bytes()
+        current = get(conn, patient_id, name)
+        if current is None:
+            put(conn, patient_id, name, body)
+            conn.commit()
+            if get(conn, patient_id, name) != body:
+                raise RuntimeError('record import did not verify: ' + name)
+            result[name] = 'imported'
+        elif current == body:
+            result[name] = 'already'
+        else:
+            result[name] = 'conflict'
+    return result
+
+
+def export_folder(conn, patient_id, destination):
+    """Write a plain copy of the patient's records into destination. Never overwrites.
+
+    Returns {name: 'written' | 'exists'}. The copy is outside the app's encryption (see EXPORT_NOTE)."""
+    ensure(conn)
+    destination = Path(destination)
+    destination.mkdir(parents=True, exist_ok=True)
+    result = {}
+    for name in names(conn, patient_id):
+        target = destination / name
+        try:
+            with open(target, 'xb') as out:
+                out.write(get(conn, patient_id, name))
+                out.flush(); os.fsync(out.fileno())
+            result[name] = 'written'
+        except FileExistsError:
+            result[name] = 'exists'
+    note = destination / EXPORT_NOTE
+    if not note.exists():
+        note.write_text(EXPORT_NOTE_TEXT, encoding='utf-8')
+    return result
+
+
+def removable_files(conn, patient_id, folder):
+    """Record files whose bytes match the database exactly (safe to retire in a later stage)."""
+    folder = Path(folder)
+    return [folder / n for n in RECORD_NAMES
+            if (folder / n).is_file() and get(conn, patient_id, n) == (folder / n).read_bytes()]
