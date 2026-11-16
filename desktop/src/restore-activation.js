@@ -106,6 +106,7 @@ async function activateRestored(restoredDir,dataDir,configPath) {
   const journalPath = path.join(data,'restore-activation-journal.json');
   try {await fs.access(journalPath);throw Error('Previous restore activation requires recovery');}
   catch(e) {if(e.code!=='ENOENT')throw e;}
+  try {
   const saved = await fs.stat(restored.database);
   await fs.copyFile(restored.database,staged);
   if (await hash(staged)!==await hash(restored.database) || (await fs.stat(staged)).size!==saved.size)
@@ -129,6 +130,7 @@ async function activateRestored(restoredDir,dataDir,configPath) {
   } catch(e) {
     await recoverInterruptedRestore(data,configPath);
     throw e;
+  }
   } finally {await fs.rm(staged,{force:true});}
 }
 module.exports = {verifyRestored,activateRestored,recoverInterruptedRestore};
