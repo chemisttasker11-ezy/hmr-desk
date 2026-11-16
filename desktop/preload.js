@@ -1,5 +1,17 @@
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
+function protectedDraft(op, key, value) {
+  const result = ipcRenderer.sendSync('draft-store', op, key, value);
+  if (!result || typeof result !== 'object' || result.error)
+    throw Error(result?.error || 'Protected draft storage unavailable');
+  return result.value;
+}
 contextBridge.exposeInMainWorld('hmr', {
+  draftStore: {
+    getItem: key => protectedDraft('get', key),
+    setItem: (key, value) => protectedDraft('set', key, value),
+    removeItem: key => protectedDraft('remove', key),
+    keys: () => protectedDraft('keys'),
+  },
   api: async (method, path, body) => {
     try {
       return await ipcRenderer.invoke('api', method, path, body);
