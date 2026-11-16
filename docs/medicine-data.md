@@ -142,7 +142,72 @@ The committed loader/downloader were run against the official November 2026 ZIP:
 - The ZIP, raw records and generated SQLite database are deliberately **not**
   committed. Tests use synthetic shapes, not a redistributed PBS/AMT dataset.
 
-## AMT setup and import (owner action required)
+## AMT download from the NCTS syndication API (monthly update)
+
+`scripts/medicines/download_ncts.py` fetches the newest SNOMED CT-AU (AMT) RF2
+Snapshot from the NCTS National Syndication Server. Steps it performs, in order:
+
+1. Request an OAuth2 access token (`grant_type=client_credentials`) from
+   `https://api.healthterminologies.gov.au/oauth2/token`.
+2. Read `https://api.healthterminologies.gov.au/syndication/v1/syndication.xml`.
+3. Pick the newest `SCT_RF2_SNAPSHOT` entry (by release date in the entry).
+4. Download its ZIP with `Authorization: Bearer <token>`.
+5. Check the ZIP size and SHA-256 against the feed (`length` and
+   `ncts:sha256Hash`). A mismatch discards the file. Only then is it saved.
+
+Redirects to any host other than `api.healthterminologies.gov.au` are refused, so the
+token is never sent elsewhere. Sources for the flow: the NCTS implementer hub
+([common tasks](https://implementer.digitalhealth.gov.au/ncts/common-tasks-when-integrating-with-the-ncts)),
+the official [NCTS syndication client](https://github.com/AuDigitalHealth/ncts-syndication-client),
+and a live check that the token endpoint answers `invalid_client` to a bad credential
+while an unknown path returns 404. It has not yet been run with the real credential.
+
+### Client ID and client secret setup
+
+1. Sign in to the NCTS portal (healthterminologies.gov.au) with the NCTS account for
+   this project (`Dr.eslam.galaxy@gmail.com`) and open **Clients** (top right). Create
+   a client credential for "HMR Desk".
+2. The Client ID and Client Secret must never be committed, pasted into chat, or put
+   on a command line. They are kept in the password vault entry **"NCTS syndication
+   API client (HMR Desk)"** (username = Client ID, password = Client Secret).
+3. For the importer, put them in a local env file outside this repository (the script
+   refuses a file inside the checkout):
+
+```text
+# %USERPROFILE%\HMR-Desk-data\secrets\ncts.env
+HMR_NCTS_CLIENT_ID=your-client-id
+HMR_NCTS_CLIENT_SECRET=your-client-secret
+```
+
+   Restrict the folder to your Windows account. As an alternative, set the same two
+   variables in the environment of the process, for example from a secret store. The
+   importer reads `HMR_NCTS_ENV_FILE` or `--env-file` if the file is elsewhere.
+
+### Run
+
+```powershell
+python scripts/medicines/download_ncts.py --output-dir "$HOME/HMR-Desk-data/reference-downloads"
+# prints release (YYYYMMDD), file path, size and the verified SHA-256
+python scripts/medicines/catalog.py amt --input "$HOME/HMR-Desk-data/reference-downloads/ncts-sct-au-YYYYMMDD-snapshot.zip" --db "$HOME/HMR-Desk-data/medicine-reference.sqlite" --release YYYYMMDD --source-url "https://api.healthterminologies.gov.au/syndication/v1/syndication.xml" --accept-ncts-licence
+```
+
+The download is one sequential run of a ZIP of roughly 400 MB. Existing output files
+are not overwritten. Tests use synthetic feeds only (`test_ncts_download.py`).
+
+### Licence and access conditions
+
+- **Annual Statement of Usage:** NCTS access depends on completing the annual survey
+  each June. Missing it can lose access. Put a reminder in the owner calendar.
+- **Australia only:** the licence answers recorded for this account were "No" to use
+  outside Australia. The monthly update therefore runs in Australia only. Do not run it
+  from, or ship the downloaded data to, a location outside Australia.
+- The `--accept-ncts-licence` flag records the operator's precondition, not proof of a
+  licence. Do not bundle the ZIP or derived terminology in a distribution.
+- NCTS also publishes official Java and .NET syndication clients
+  ([ncts-syndication-client](https://github.com/AuDigitalHealth/ncts-syndication-client)).
+  They are an alternative to this script; this script avoids a JVM dependency.
+
+## AMT setup and import (manual download alternative, owner action required)
 
 1. Register/sign in to the [NCTS portal](https://implementer.digitalhealth.gov.au/ncts/licensing)
    under your own authorised identity or organisation and accept the agreements.
