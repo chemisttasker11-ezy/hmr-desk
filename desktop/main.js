@@ -394,6 +394,22 @@ ipcMain.handle('open-pathology-source', async (e, patientId, sourceId) => {
   if (failure) throw Error('Windows could not open the source PDF viewer');
   return {opened:true};
 });
+let pdfViewerWindow = null;
+async function openBundledPdfViewer(file, title) {
+  if (pdfViewerWindow && !pdfViewerWindow.isDestroyed()) pdfViewerWindow.close();
+  pdfViewerWindow = new BrowserWindow({
+    width: 1100, height: 900, parent: win, title: 'HMR report review - ' + title,
+    autoHideMenuBar: true,
+    webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false,
+      webSecurity: true, plugins: true },
+  });
+  const fileUrl = require('url').pathToFileURL(file).toString();
+  pdfViewerWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  pdfViewerWindow.webContents.on('will-navigate', (event, url) => {
+    if (url !== fileUrl && !url.startsWith(fileUrl + '#')) event.preventDefault();
+  });
+  await pdfViewerWindow.loadURL(fileUrl);
+}
 ipcMain.handle('open-report-version', async (e, patientId, reportFile, format) => {
   if (e.sender !== win.webContents || !Number.isSafeInteger(patientId) || patientId < 1 ||
       typeof reportFile !== 'string' || path.basename(reportFile) !== reportFile ||
@@ -413,9 +429,15 @@ ipcMain.handle('open-report-version', async (e, patientId, reportFile, format) =
   const selected = await fsp.realpath(path.join(patientFolder, name));
   if (path.dirname(selected) !== patientFolder || !(await fsp.stat(selected)).isFile())
     throw Error('Report file is not inside this patient folder');
+  if (format === 'pdf') {
+    // The PDF review path never depends on Word or a Windows file association:
+    // it opens in the bundled Chromium PDF viewer inside a locked-down window.
+    await openBundledPdfViewer(selected, name);
+    return {opened:true,viewer:'bundled'};
+  }
   const openError = await shell.openPath(selected);
   if (openError) throw Error('Windows could not open this file; use an installed compatible viewer');
-  return {opened:true};
+  return {opened:true,viewer:'external'};
 });
 ipcMain.handle('open-patient-folder', async (e, id, file) => {
   if (e.sender !== win.webContents || !Number.isSafeInteger(id) || id < 1) throw Error('Forbidden');
@@ -543,6 +565,37 @@ ipcMain.handle('activate-restored', async (e, passphrase) => {
     throw error;
   }
 });
+async function relaunchAfterRollback(outcome) {
+  config.base = outcome.workspace || config.base;
+  app.relaunch();
+  app.quit();
+}
+ipcMain.handle('rollback-last-activation', async (e) => {
+  if (e.sender !== win.webContents || engineShutdownStarted)
+    throw Error('Invalid rollback request');
+  const recovery = require('./src/restore-activation');
+  const record = await recovery.hasUnconfirmedActivation(dataDir) ||
+    fs.existsSync(path.join(dataDir, 'last-activation.json'));
+  if (!record) return {rolledBack:false,reason:'No restore activation to roll back'};
+  const confirmation = await dialog.showMessageBox(win, {
+    type:'warning',title:'Roll back restored data',
+    message:'Return to the data that was active before the last restore activation?',
+    detail:'The restored database and approved template are kept in a recovery folder, not deleted. HMR Desk restarts.',
+    buttons:['Roll back and restart','Cancel'],defaultId:1,cancelId:1,noLink:true,
+  });
+  if (confirmation.response !== 0) return {cancelled:true};
+  engineShutdownStarted = true;
+  try {
+    if (engineOwner) { await engineOwner.stop(); engineOwner = null; }
+    const outcome = await recovery.rollbackLastActivation(dataDir, configPath);
+    if (outcome.rolledBack) { await relaunchAfterRollback(outcome); return {restarting:true,...outcome}; }
+    engineShutdownStarted = false;
+    return outcome;
+  } catch (error) {
+    engineShutdownStarted = false;
+    throw error;
+  }
+});
 ipcMain.handle('migrate-workspace', async (e, passphrase) => {
   if (e.sender !== win.webContents || typeof passphrase !== 'string' ||
       passphrase.length < 12 || passphrase.length > 512 || !engineOwner)
@@ -611,12 +664,25 @@ app.on('second-instance', () => {
     win.focus();
   }
 });
+let activationRolledBackNotice = '';
 if (hasLock)
   app.whenReady().then(async () => {
     // Recover interrupted SQLite/config activation before any engine opens data.
     if (await require('./src/restore-activation').recoverInterruptedRestore(dataDir,configPath)) {
       Object.assign(config, JSON.parse(await fsp.readFile(configPath,'utf8')));
       isFirstRun = false;
+    }
+    try {
+      // A restore activation that never launched healthy is rolled back automatically.
+      const pending = await require('./src/restore-activation').checkPendingActivation(dataDir,configPath);
+      if (pending.state === 'rolled-back') {
+        Object.assign(config, JSON.parse(await fsp.readFile(configPath,'utf8')));
+        isFirstRun = false;
+        activationRolledBackNotice = 'The restored data did not start correctly after ' + pending.attempts +
+          ' attempts, so HMR Desk returned to your previous data. The restored files are kept in the recovery folder.';
+      }
+    } catch (error) {
+      dialog.showErrorBox('Restore activation check failed', String(error.message).slice(0, 250));
     }
     if (isFirstRun && app.isPackaged && !process.env.HMR_SMOKE_DATA && !process.env.HMR_API) {
       const choice = await dialog.showMessageBox({
@@ -646,9 +712,29 @@ if (hasLock)
       }
     }
     if (app.isPackaged && !process.env.HMR_API && !process.env.HMR_SMOKE_URL && !process.env.HMR_SHOTS) {
+      const recovery = require('./src/restore-activation');
       try {
         engineOwner = await startEngine({ resourcesPath: process.resourcesPath, dataDir, workspace: config.base, config, onCrash: restartEngineAfterCrash });
+        await recovery.markActivationHealthy(dataDir);
       } catch (error) {
+        if (await recovery.hasUnconfirmedActivation(dataDir).catch(() => false)) {
+          const choice = await dialog.showMessageBox({
+            type:'error',title:'HMR Desk could not start on the restored data',
+            message:'The engine failed to start after a restore activation.',
+            detail:String(error.message).slice(0,250) + '\n\nRoll back to the data that was active before the restore? Nothing is deleted.',
+            buttons:['Roll back and restart','Exit'],defaultId:0,cancelId:1,noLink:true,
+          });
+          if (choice.response === 0) {
+            try {
+              const outcome = await recovery.rollbackLastActivation(dataDir, configPath);
+              if (outcome.rolledBack) { app.relaunch(); app.quit(); return; }
+            } catch (rollbackError) {
+              dialog.showErrorBox('Rollback failed', String(rollbackError.message).slice(0, 250));
+            }
+          }
+          app.quit();
+          return;
+        }
         dialog.showErrorBox('HMR Desk engine unavailable', error.message);
         app.quit();
         return;
@@ -667,6 +753,9 @@ if (hasLock)
       },
     });
     win.loadFile('index.html');
+    if (activationRolledBackNotice)
+      win.webContents.once('did-finish-load', () =>
+        dialog.showMessageBox(win, {type:'warning',title:'Restore rolled back',message:activationRolledBackNotice}));
     // the app window never navigates away; tel: links (phone numbers) go to Windows
     win.webContents.on('will-navigate', (event, url) => {
       event.preventDefault();
