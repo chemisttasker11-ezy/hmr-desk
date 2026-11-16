@@ -38,6 +38,9 @@ jobs:
         run: |
           npm ci
           npm test
+      - name: Real Windows DPAPI protected synthetic draft crash/restart
+        shell: pwsh
+        run: ./scripts/smoke-dpapi.ps1
       - name: Build Windows x64 frozen Python engine
         working-directory: HMR Desk/engine
         run: python -m PyInstaller --clean --noconfirm hmr-engine.spec
