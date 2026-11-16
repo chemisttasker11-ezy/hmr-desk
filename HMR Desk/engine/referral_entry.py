@@ -60,7 +60,8 @@ def review(conn, paths):
             if kind == 'referral':
                 fields, more = module.extract_fields('\n'.join(pages[:3])); flags += more
             key = db.patient_key(fields.get('name')) if fields.get('name') else ''
-            duplicate = conn.execute('SELECT id FROM patients WHERE key=?', (key,)).fetchone() if key else None
+            candidates = conn.execute('SELECT id,name,dob,medicare,ihi,gp FROM patients WHERE key=? OR key LIKE ?', (key, key + ' @%')).fetchall() if key else []
+            duplicate = candidates[0] if candidates else None
             content_dup = conn.execute("SELECT patient_id FROM events WHERE type='referral_received' AND json_extract(detail, '$.sha256')=? LIMIT 1", (digest,)).fetchone()
             batch_dup = digest in seen_hashes or bool(key and key in seen_keys)
             seen_hashes.add(digest)
@@ -74,7 +75,9 @@ def review(conn, paths):
                        status='duplicate' if duplicate or content_dup or batch_dup else ('review' if kind == 'referral' else 'rejected'),
                        duplicate_kind='content' if content_dup or digest in {x.get('sha256') for x in result} else ('identity' if duplicate or batch_dup else None),
                        sha256=digest,
-                       patient_id=(duplicate or content_dup)['id' if duplicate else 'patient_id'] if duplicate or content_dup else None)
+                       patient_id=(duplicate or content_dup)['id' if duplicate else 'patient_id'] if duplicate or content_dup else None,
+                       duplicate_candidates=[{'id': candidate['id'], 'name': candidate['name'],
+                                              'dob': candidate['dob'], 'gp': candidate['gp']} for candidate in candidates])
         except Exception as exc:
             row['message'] = str(exc)
         result.append(row)
@@ -82,8 +85,9 @@ def review(conn, paths):
     return {'rows': result}
 
 
-def commit(conn, token, fields):
+def commit(conn, token, fields, distinct_person=False):
     if not isinstance(token, str) or not re.fullmatch('[0-9a-f]{32}', token): raise ValueError('Invalid review')
+    if type(distinct_person) is not bool: raise ValueError('Invalid distinct-person acknowledgement')
     if not isinstance(fields, dict) or not fields.keys() <= set(FIELDS) or any(not isinstance(v, str) for v in fields.values()): raise ValueError('Invalid fields')
     record = conn.execute('SELECT value FROM meta WHERE key=?', ('referral_review_' + token,)).fetchone()
     if not record: raise ValueError('Review expired; review the PDF again')
@@ -100,8 +104,25 @@ def commit(conn, token, fields):
         target = folder / 'referral.pdf'
         with target.open('xb') as f: f.write(data)
         conn.execute('BEGIN IMMEDIATE')
-        if conn.execute('SELECT 1 FROM patients WHERE key=?', (key,)).fetchone() or conn.execute("SELECT 1 FROM events WHERE type='referral_received' AND json_extract(detail, '$.sha256')=?", (item['sha256'],)).fetchone():
-            raise ValueError('Possible duplicate patient or referral; review existing patient')
+        if conn.execute("SELECT 1 FROM events WHERE type='referral_received' AND json_extract(detail, '$.sha256')=?", (item['sha256'],)).fetchone():
+            raise ValueError('This exact referral was already added')
+        candidates = conn.execute('SELECT id,dob,medicare,ihi FROM patients WHERE key=? OR key LIKE ?',
+                                  (key, key + ' @%')).fetchall()
+        if candidates:
+            if not distinct_person: raise ValueError('Patient name matches an existing record; compare reliable identifiers and explicitly confirm a different person')
+            for candidate in candidates:
+                for identifier in ('ihi', 'medicare'):
+                    left, right = (fields.get(identifier) or '').strip(), (candidate[identifier] or '').strip()
+                    if left and right and re.sub(r'\\D', '', left) == re.sub(r'\\D', '', right):
+                        raise ValueError('Identifier matches an existing patient; do not create a separate identity')
+                dob = (fields.get('dob') or '').strip()
+                if dob and candidate['dob'] and dob == candidate['dob']:
+                    raise ValueError('Name and date of birth match an existing patient; review existing record')
+                compared = any((fields.get(field) or '').strip() and candidate[field] and
+                               (fields.get(field) or '').strip() != candidate[field] for field in ('dob', 'ihi', 'medicare'))
+                if not compared:
+                    raise ValueError('Different reliable identifiers are required before adding a same-name patient')
+            key = key + ' @' + uuid.uuid4().hex[:12]
         cols = list(FIELDS)
         values = [fields.get(col, '').strip() or None for col in cols]
         cursor = conn.execute('INSERT INTO patients (key,folder,' + ','.join(cols) + ') VALUES (' + ','.join('?' for _ in range(len(cols)+2)) + ')', [key, os.path.relpath(folder, db.BASE), *values])
