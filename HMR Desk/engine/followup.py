@@ -3,14 +3,14 @@ import json
 import re
 from pathlib import Path
 import jobs
+import records
 
 FIELDS = ('date', 'method', 'spoke_with', 'med_changes', 'recommendations', 'issues', 'outcome', 'notes')
 
-def load(patient, number):
-    target = jobs.patient_folder(patient) / f'followup{number}.json'
-    if target.is_file(): return json.loads(target.read_text(encoding='utf-8'))
-    spec = jobs.report_spec_path(patient)
-    data = json.loads(spec.read_text(encoding='utf-8')) if spec.is_file() else {}
+def load(conn, patient, number):
+    saved = records.get_json(conn, patient['id'], f'followup{number}.json')
+    if saved is not None: return saved
+    data = records.get_json(conn, patient['id'], 'report_spec.json') or {}
     return dict(date='', method='phone', spoke_with='', med_changes='', recommendations=[[i['rec'], '', ''] for i in data.get('issues', []) if i.get('rec')], issues='', outcome='', notes='')
 
 def validate(data):
@@ -20,13 +20,14 @@ def validate(data):
     rows = data['recommendations']
     if not isinstance(rows, list) or len(rows) > 80 or any(not isinstance(r, list) or len(r) != 3 or any(not isinstance(x, str) or len(x) > 20000 for x in r) or r[1] not in ('yes', 'partly', 'no', '') for r in rows): raise ValueError('invalid recommendations')
 
-def save(patient, number, data):
-    jobs.atomic_json(jobs.patient_folder(patient) / f'followup{number}.json', data)
+def save(conn, patient, number, data):
+    records.put_json(conn, patient['id'], f'followup{number}.json', data)
+    conn.commit()
     return data
 
-def export(patient, number):
+def export(conn, patient, number):
     from docx import Document
-    data = load(patient, number); validate(data)
+    data = load(conn, patient, number); validate(data)
     folder = jobs.patient_folder(patient)
     name = re.sub(r'[<>:"/\\|?*]', '', patient['name']).rstrip(' .')
     stem = f'HMR Follow-up {number} - {name}'
