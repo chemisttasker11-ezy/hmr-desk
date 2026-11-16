@@ -1,0 +1,32 @@
+name: Medicine reference data (synthetic only)
+on:
+  pull_request:
+    paths:
+      - 'HMR Desk/engine/medicine_data/**'
+      - 'HMR Desk/engine/tests/medicine_data/**'
+      - 'scripts/medicines/**'
+      - '.github/workflows/medicine-data-tests.yml'
+  push:
+    paths:
+      - 'HMR Desk/engine/medicine_data/**'
+      - 'HMR Desk/engine/tests/medicine_data/**'
+      - 'scripts/medicines/**'
+      - '.github/workflows/medicine-data-tests.yml'
+permissions:
+  contents: read
+jobs:
+  synthetic-reference-tests:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ['3.11', '3.14']
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Synthetic tests, no network or patient data
+        run: python -m unittest discover -s "HMR Desk/engine/tests/medicine_data" -v
+      - name: Compile reference modules
+        run: python -m compileall -q "HMR Desk/engine/medicine_data" scripts/medicines
