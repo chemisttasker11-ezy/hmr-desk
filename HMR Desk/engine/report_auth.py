@@ -119,7 +119,7 @@ def check_approval(conn, patient, body):
     detail = _find_build(conn, patient, filename)
     if not detail.get('template_approved') or not detail.get('pdf_sha256'):
         raise ValueError('An owner-approved Word and matching PDF pair must be built before clinical sign-off')
-    template, approved = template_report_builder.approved_template(jobs.APP_ASSETS / 'templates')
+    template, approved = template_report_builder.approved_template(template_report_builder.active_template_root())
     if detail.get('template_sha256') != approved['sha256']:
         raise ValueError('Approved template changed since report generation; rebuild first')
     if detail.get('source_files_sha256') != source_snapshot(patient):
