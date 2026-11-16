@@ -135,16 +135,21 @@ def create(conn, workspace, output, password):
     return {'created': True, 'bytes': output.stat().st_size}
 
 
-def restore(source, destination, password):
-    """Restore only to a NEW empty folder after authenticating and verifying every file."""
+def restore(source, destination, password, preview_only=False):
+    """Verify a backup and optionally preview without writing to any live destination.
+
+    Restoration always targets a NEW isolated folder; preview uses the same
+    encrypted authentication, file digest and database integrity checks.
+    """
     source = Path(source).resolve()
-    destination = Path(destination).resolve()
+    destination = Path(destination).resolve() if not preview_only else None
     if not source.is_file():
         raise ValueError('Backup file not found')
-    if destination.exists():
-        raise FileExistsError('Restore destination must not already exist')
-    if _within(Path(db.BASE).resolve(), destination) or _within(Path(db.DATA_DIR).resolve(), destination):
-        raise ValueError('Restore into a separate folder outside the active workspace')
+    if not preview_only:
+        if destination.exists():
+            raise FileExistsError('Restore destination must not already exist')
+        if _within(Path(db.BASE).resolve(), destination) or _within(Path(db.DATA_DIR).resolve(), destination):
+            raise ValueError('Restore into a separate folder outside the active workspace')
     with source.open('rb') as raw:
         prefix = raw.read(len(MAGIC) + 16 + 12)
         if len(prefix) != len(MAGIC) + 28 or not prefix.startswith(MAGIC):
@@ -208,6 +213,17 @@ def restore(source, destination, password):
             with closing(sqlite3.connect(stage / 'data' / 'hmr.db')) as check:
                 if check.execute('PRAGMA integrity_check').fetchone()[0] != 'ok':
                     raise ValueError('Restored database failed integrity check')
+                if preview_only:
+                    patients = check.execute('SELECT COUNT(*) FROM patients').fetchone()[0]
+                    return {
+                        'verified': True,
+                        'format': manifest['format'],
+                        'patients': patients,
+                        'files': len(files),
+                        'bytes_uncompressed': size,
+                        'workspace_files': sum(name.startswith('workspace/') for name in files),
+                        'will_activate': False,
+                    }
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(stage), str(destination))
     return {'restored': True, 'destination': str(destination)}
