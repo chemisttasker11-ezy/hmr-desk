@@ -285,6 +285,7 @@ def find_tailscale_bin() -> Optional[str]:
 def verify_tailscale_peer(
     gateway_ip: str,
     status_cmd_runner: Optional[Callable[[], Tuple[int, str, str]]] = None,
+    ping_runner: Optional[Callable[[str], Tuple[int, str, str]]] = None,
 ) -> Tuple[bool, str]:
     """
     Verify that Tailscale daemon is Running, Self is Online, and target Tailscale peer is Online.
@@ -294,6 +295,7 @@ def verify_tailscale_peer(
     if gateway_ip == "127.0.0.1":
         return True, "Loopback (127.0.0.1) permitted for local mock/test harness."
 
+    custom_status_runner = status_cmd_runner is not None
     if status_cmd_runner is None:
         def default_runner() -> Tuple[int, str, str]:
             ts_bin = find_tailscale_bin()
@@ -337,11 +339,23 @@ def verify_tailscale_peer(
 
     # 2. Self node online check
     self_node = status_data.get("Self")
-    if isinstance(self_node, dict):
-        if not self_node.get("Online"):
-            return False, "Tailscale local client (Self) is not Online."
-    else:
+    if not isinstance(self_node, dict):
         return False, "Tailscale local client status missing from status output."
+    fallback = not self_node.get("Online")
+    if fallback:
+        try:
+            target_ip = ipaddress.ip_address(gateway_ip)
+            local_ips = self_node.get("TailscaleIPs")
+            if (self_node.get("Online") is not False or self_node.get("InNetworkMap") is not True or
+                    target_ip.version != 4 or target_ip not in TAILSCALE_CGNAT_NET or
+                    not isinstance(local_ips, list) or not any(
+                        isinstance(ip, str) and ipaddress.ip_address(ip) in TAILSCALE_CGNAT_NET for ip in local_ips
+                    )):
+                return False, "Tailscale local client (Self) is not Online."
+        except (TypeError, ValueError):
+            return False, "Tailscale local client (Self) is not Online."
+        if custom_status_runner and ping_runner is None:
+            return False, "Tailscale local client (Self) is not Online."
 
     # 3. Target peer online check
     peer_dict = status_data.get("Peer") or status_data.get("Peers") or {}
@@ -355,13 +369,37 @@ def verify_tailscale_peer(
         if not isinstance(peer, dict):
             continue
         ts_ips = peer.get("TailscaleIPs", [])
-        if gateway_ip in ts_ips:
+        if isinstance(ts_ips, list) and gateway_ip in ts_ips:
+            if fallback:
+                if peer.get("Online") is not True:
+                    return False, "Tailscale peer verification failed."
+                if ping_runner is None:
+                    def ping_runner(target: str) -> Tuple[int, str, str]:
+                        ts_bin = find_tailscale_bin()
+                        if not ts_bin:
+                            return -1, "", ""
+                        try:
+                            proc = subprocess.run([ts_bin, "ping", "--c", "1", "--timeout", "2s", target],
+                                                  capture_output=True, text=True, timeout=3, check=False)
+                            return proc.returncode, proc.stdout, ""
+                        except (OSError, subprocess.TimeoutExpired):
+                            return -1, "", ""
+                try:
+                    ping_code, ping_output, _ = ping_runner(gateway_ip)
+                    matched = re.search(r"(?m)^pong from [^\r\n()]+ \(" + re.escape(gateway_ip) + r"\) (?:via|in) ", ping_output)
+                    if ping_code == 0 and matched:
+                        return True, "Tailscale peer reachability verified."
+                except Exception:
+                    pass
+                return False, "Tailscale peer verification failed."
             is_online = bool(peer.get("Online"))
             if is_online:
                 host_label = peer.get("HostName", "peer")
                 return True, f"Tailscale peer '{host_label}' ({gateway_ip}) is Online."
             return False, f"Tailscale peer ({gateway_ip}) was found but is currently Offline."
 
+    if fallback:
+        return False, "Tailscale peer verification failed."
     return False, f"Gateway IP '{gateway_ip}' is not present in Tailscale peer list."
 
 
