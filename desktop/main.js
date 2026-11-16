@@ -20,6 +20,8 @@ const config = { ...defaults, ...JSON.parse(fs.readFileSync(configPath, 'utf8'))
 let engineOwner = null;
 const { start: startEngine } = require('./src/engine-owner');
 const { verifyWorkspace } = require('./src/storage-choice');
+const { makeVault } = require('./src/draft-vault');
+const protectedDraftVault = makeVault(path.join(dataDir, 'encrypted-drafts'), safeStorage);
 const sites = {
   mhr: {
     url: 'https://proda.humanservices.gov.au/',
@@ -310,6 +312,19 @@ ipcMain.handle('open-patient-folder', async (e, id, file) => {
   }
   const error = await shell.openPath(openTarget);
   if (error) throw Error(error);
+});
+ipcMain.on('draft-store', (e, action, key, value) => {
+  if (e.sender !== win?.webContents) {
+    e.returnValue = { error: 'Unauthorised draft request' };
+    return;
+  }
+  try {
+    const permitted = { get: 'getItem', set: 'setItem', remove: 'removeItem', keys: 'keys' };
+    if (!Object.hasOwn(permitted, action)) throw Error('Invalid protected draft operation');
+    e.returnValue = { value: protectedDraftVault[permitted[action]](key, value) ?? null };
+  } catch (error) {
+    e.returnValue = { error: 'Protected draft storage failed (' + error.constructor.name + ')' };
+  }
 });
 ipcMain.handle('encrypted-backup', async (e, action, passphrase) => {
   if (e.sender !== win.webContents || !['create', 'restore'].includes(action) ||
