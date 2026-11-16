@@ -810,6 +810,7 @@ let followupId = '', followupNumber = '', followupRecord = null;
 const followupStatus = (text) => { if ($('followup-status')) $('followup-status').textContent = text; };
 const followupSaver = H.autosaver({
   getRecord: () => followupRecord, getId: () => followupId,
+  draftKey: () => `followup:${followupId}-${followupNumber}`,
   endpoint: (id, record) => hmr.api('POST', `/api/patients/${encodeURIComponent(id)}/followup/${followupNumber}`, record),
   status: followupStatus, errorText: (...args) => errorText(...args),
 });
