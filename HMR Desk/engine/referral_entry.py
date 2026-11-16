@@ -12,6 +12,8 @@ import app_paths
 import fitz
 
 MAX_PDF = 25 * 1024 * 1024
+MAX_PAGES = 150
+MAX_TEXT_PER_PAGE = 150000
 FIELDS = ('name', 'phone', 'address', 'suburb', 'gp', 'clinic', 'referral_date', 'dob', 'sex', 'medicare', 'irn', 'ihi')
 
 
@@ -47,7 +49,9 @@ def review(conn, paths):
             digest = hashlib.sha256(data).hexdigest()
             with fitz.open(stream=data, filetype='pdf') as doc:
                 if doc.needs_pass: raise ValueError('PDF is password protected')
-                pages = [p.get_text() for p in doc]
+                if not 1 <= doc.page_count <= MAX_PAGES:
+                    raise ValueError('PDF page count exceeds the 150-page intake limit')
+                pages = [p.get_text()[:MAX_TEXT_PER_PAGE] for p in doc]
             if not pages: raise ValueError('PDF has no pages')
             methods = ['text' if len(page.strip()) >= 25 else 'ocr' for page in pages]
             ocr_flags = []
@@ -74,11 +78,13 @@ def review(conn, paths):
             seen_hashes.add(digest)
             if key: seen_keys.add(key)
             token = uuid.uuid4().hex
-            item = {'source': source, 'sha256': digest, 'fields': fields, 'kind': kind}
+            excerpts = [{'page': i + 1, 'method': methods[i], 'text': text[:1200]}
+                        for i, text in enumerate(pages[:20])]
+            item = {'source': source, 'sha256': digest, 'fields': fields, 'kind': kind,
+                    'page_previews': excerpts, 'flags': flags}
             conn.execute('INSERT INTO meta(key,value) VALUES (?,?)', ('referral_review_' + token, json.dumps(item)))
             row.update(token=token, kind=kind, fields=fields, flags=flags,
-                       page_previews=[{'page': i + 1, 'method': methods[i],
-                                       'text': text[:1200]} for i, text in enumerate(pages[:20])],
+                       page_previews=excerpts,
                        status='duplicate' if duplicate or content_dup or batch_dup else ('review' if kind == 'referral' else 'manual'),
                        duplicate_kind='content' if content_dup or digest in {x.get('sha256') for x in result} else ('identity' if duplicate or batch_dup else None),
                        sha256=digest,
@@ -109,7 +115,22 @@ def commit(conn, token, fields, distinct_person=False, manual_referral=False):
     folder.mkdir(parents=True, exist_ok=False)
     try:
         target = folder / 'referral.pdf'
-        with target.open('xb') as f: f.write(data)
+        with target.open('xb') as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        source_record = {
+            'schema_version': 1, 'sha256': item['sha256'], 'original_filename': Path(item['source']).name,
+            'page_excerpts_unconfirmed': item.get('page_previews', []),
+            'extraction_flags': item.get('flags', []),
+            'confirmed_identity_fields': {k: v.strip() for k, v in fields.items()},
+            'manual_source_classification': bool(manual_referral),
+            'source_truth': 'original referral.pdf; extracted fields require pharmacist source review',
+        }
+        with (folder / 'referral_source.json').open('x', encoding='utf-8') as f:
+            json.dump(source_record, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
         conn.execute('BEGIN IMMEDIATE')
         if conn.execute("SELECT 1 FROM events WHERE type='referral_received' AND json_extract(detail, '$.sha256')=?", (item['sha256'],)).fetchone():
             raise ValueError('This exact referral was already added')
