@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import tempfile
 
+import clinical_review
 import db
 import jobs
 import referral
@@ -150,13 +151,15 @@ def blank(conn, patient):
     reviewed_source = folder / 'referral_source.json'
     if reviewed_source.is_file():
         reviewed = json.loads(reviewed_source.read_text(encoding='utf-8')).get('clinical_review', {})
-        if reviewed.get('confirmed') is True and reviewed.get('source_page', 0) >= 1:
-            origin = 'referral.pdf page ' + str(reviewed['source_page'])
+        if clinical_review.is_reviewed(reviewed):
             reviewer = reviewed.get('reviewed_by', '')
+            # Each fact cites its own original PDF page.
             if reviewed.get('conditions'):
+                origin = clinical_review.origin(reviewed, 'conditions')
                 record['conditions'] = reviewed['conditions']
                 record['sources'].append('Conditions confirmed: ' + origin + '; ' + reviewer)
             allergy_state = reviewed.get('allergies_status', 'unknown')
+            origin = clinical_review.origin(reviewed, 'allergies')
             if allergy_state == 'explicit_none':
                 record['allergies'] = 'No known allergies — explicitly documented in ' + origin
                 record['sources'].append('Allergy negative confirmed: ' + origin + '; ' + reviewer)
@@ -164,9 +167,11 @@ def blank(conn, patient):
                 record['allergies'] = reviewed['allergies']
                 record['sources'].append('Allergies confirmed: ' + origin + '; ' + reviewer)
             if reviewed.get('medicines'):
+                origin = clinical_review.origin(reviewed, 'medicines')
                 record['clarify'].append('Confirmed prescribed referral list from ' + origin +
                                          ' (actual use still to reconcile): ' + reviewed['medicines'][:9000])
             if reviewed.get('observations'):
+                origin = clinical_review.origin(reviewed, 'observations')
                 record['obs'].append(['Referral observation', reviewed['observations'], origin])
         elif any(reviewed.get(k) for k in ('conditions','medicines','observations','allergies')):
             record['clarify'].append('Unconfirmed source material was entered during intake; review original PDF')
