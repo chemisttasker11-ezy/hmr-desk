@@ -10,7 +10,7 @@ Rules that keep records safe:
     app's encryption. Export never overwrites an existing file.
 Word, PDF and source-file outputs are not stored here and stay plain files.
 """
-import datetime, hashlib, os, re
+import datetime, hashlib, json, os, re
 from pathlib import Path
 
 # Patient-folder files that hold patient-specific clinical content. Fixed templates, reference data and the
@@ -48,7 +48,7 @@ class Conflict(Exception):
 
 
 def _now():
-    return datetime.datetime.now().isoformat(timespec='seconds')
+    return datetime.datetime.now().isoformat(timespec='microseconds')
 
 
 def is_record_name(name):
@@ -164,3 +164,29 @@ def removable_files(conn, patient_id, folder):
     folder = Path(folder)
     return [folder / n for n in sorted(os.listdir(folder))
             if is_record_name(n) and (folder / n).is_file() and get(conn, patient_id, n) == (folder / n).read_bytes()]
+
+
+def stamp(conn, patient_id, name):
+    """When the record was last written (sortable text), or None. Replaces file modification times."""
+    ensure(conn)
+    row = conn.execute('SELECT updated_at FROM records WHERE patient_id=? AND name=?', (patient_id, _check(name))).fetchone()
+    return row[0] if row else None
+
+
+def names_like(conn, patient_id, prefix):
+    """Record names for a patient that start with prefix, case-insensitively."""
+    return [n for n in names(conn, patient_id) if n.lower().startswith(prefix.lower())]
+
+
+def get_json(conn, patient_id, name):
+    body = get(conn, patient_id, name)
+    return None if body is None else json.loads(body.decode('utf-8'))
+
+
+def dumps(data):
+    """Same layout the file-based code wrote (indent 2, real characters)."""
+    return json.dumps(data, ensure_ascii=False, indent=2).encode('utf-8')
+
+
+def put_json(conn, patient_id, name, data):
+    return put(conn, patient_id, name, dumps(data))
