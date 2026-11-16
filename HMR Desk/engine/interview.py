@@ -14,6 +14,7 @@ import tempfile
 import clinical_review
 import db
 import jobs
+import records
 import referral
 import settings
 
@@ -181,8 +182,9 @@ class Conflict(Exception):
     pass
 
 
-def revision(target):
-    return hashlib.sha256(target.read_bytes()).hexdigest() if target.exists() else 'missing'
+def revision(conn, patient):
+    """Conflict token for the saved interview record (sha256 of its exact bytes, or 'missing')."""
+    return records.revision(conn, patient['id'], 'interview.json')
 
 
 _lock = threading.RLock()
@@ -237,8 +239,8 @@ def signed_file(folder):
     return sorted(f.name for f in folder.iterdir() if f.is_file() and 'signed' in f.name.lower())
 
 def load(conn, patient):
-    target = jobs.patient_folder(patient) / 'interview.json'
-    content = target.read_bytes() if target.exists() else None
+    folder = jobs.patient_folder(patient)
+    content = records.get(conn, patient['id'], 'interview.json')
     data = json.loads(content) if content is not None else blank(conn, patient)
     data['revision'] = hashlib.sha256(content).hexdigest() if content is not None else 'missing'
     if 'details' not in data:
@@ -260,8 +262,8 @@ def load(conn, patient):
         for key, value in [('by', 'patient'), ('relationship', 0), ('authorised_name', '')]: data['consent'].setdefault(key, value)
     if isinstance(data.get('header'), dict):
         for key, setting in [('pharmacist', 'pharmacist_name'), ('pharmacist_phone', 'pharmacist_phone'), ('pharmacist_credential', 'pharmacist_credential')]: data['header'][key] = settings.get(conn, setting)
-    validate(data); data['saved'] = target.exists()
-    signed = signed_file(target.parent)
+    validate(data); data['saved'] = content is not None
+    signed = signed_file(folder)
     data['consent_file'] = signed[0] if signed else ''
     return data
 
@@ -270,8 +272,10 @@ def save(conn, patient, record, *, locked=False, signing=False):
         with record_lock(patient):
             folder = jobs.patient_folder(patient)
             name = re.sub(r'[<>:"/\\|?*]', '', patient['name']).rstrip(' .')
-            paths = [folder / 'interview.json', folder / 'interview.json.bak', folder / ('PPA Consent - ' + name + '.pdf')]
-            originals = [(path, path.read_bytes() if path.exists() else None) for path in paths]
+            # The interview records live in the encrypted database and roll back with the transaction.
+            # Only the consent PDF is still an ordinary file, so it is restored by hand.
+            pdf = folder / ('PPA Consent - ' + name + '.pdf')
+            pdf_original = pdf.read_bytes() if pdf.exists() else None
             old_revision = record.get('revision') if isinstance(record, dict) else None
             try:
                 result = save(conn, patient, record, locked=True, signing=signing)
@@ -279,35 +283,32 @@ def save(conn, patient, record, *, locked=False, signing=False):
                 return result
             except Exception:
                 conn.rollback()
-                for path, content in originals:
-                    if path.exists() and content is not None and path.read_bytes() == content: continue
-                    if content is None:
-                        path.unlink(missing_ok=True)
+                if not (pdf.exists() and pdf_original is not None and pdf.read_bytes() == pdf_original):
+                    if pdf_original is None:
+                        pdf.unlink(missing_ok=True)
                     else:
                         fd, temp = tempfile.mkstemp(dir=folder)
                         try:
-                            with os.fdopen(fd, 'wb') as out: out.write(content)
-                            os.replace(temp, path)
+                            with os.fdopen(fd, 'wb') as out: out.write(pdf_original)
+                            os.replace(temp, pdf)
                         finally:
                             if os.path.exists(temp): os.unlink(temp)
                 if isinstance(record, dict) and old_revision is not None: record['revision'] = old_revision
                 raise
     validate(record); data = {k: v for k, v in record.items() if k not in ('saved', 'consent_file', 'revision')}
-    target = jobs.patient_folder(patient) / 'interview.json'
-    if record.get('revision') != revision(target): raise Conflict('interview conflict')
-    previous = json.loads(target.read_text(encoding='utf-8')) if target.exists() else {}
+    folder = jobs.patient_folder(patient)
+    previous_bytes = records.get(conn, patient['id'], 'interview.json')
+    if record.get('revision') != records.digest(previous_bytes): raise Conflict('interview conflict')
+    previous = json.loads(previous_bytes.decode('utf-8')) if previous_bytes is not None else {}
     was_signed = previous.get('consent', {}).get('signed') is True
-    if not signing and was_signed and signed_file(target.parent) and (data['consent'] != previous['consent'] or data.get('consent_signed_draft', False)): raise ValueError('signed consent cannot be changed')
-    if target.exists():
-        fd, temp = tempfile.mkstemp(dir=target.parent); os.close(fd)
-        try: shutil.copyfile(target, temp); os.replace(temp, str(target) + '.bak')
-        finally:
-            if os.path.exists(temp): os.unlink(temp)
-    jobs.atomic_json(target, data)
-    record['revision'] = revision(target)
+    if not signing and was_signed and signed_file(folder) and (data['consent'] != previous['consent'] or data.get('consent_signed_draft', False)): raise ValueError('signed consent cannot be changed')
+    if previous_bytes is not None:
+        records.put(conn, patient['id'], 'interview.json.bak', previous_bytes)
+    records.put(conn, patient['id'], 'interview.json', json.dumps(data, ensure_ascii=False, indent=2).encode('utf-8'))
+    record['revision'] = revision(conn, patient)
     name = re.sub(r'[<>:"/\\|?*]', '', patient['name']).rstrip(' .')
-    consent_path = target.parent / ('PPA Consent - ' + name + '.pdf')
-    if consent_path.exists() and not was_signed and not data['consent']['signed'] and not signed_file(target.parent): fill_consent(conn, patient, data, consent_path)
+    consent_path = folder / ('PPA Consent - ' + name + '.pdf')
+    if consent_path.exists() and not was_signed and not data['consent']['signed'] and not signed_file(folder): fill_consent(conn, patient, data, consent_path)
     conn.execute('UPDATE patients SET has_sheet=1,updated_at=? WHERE id=?', (db.now(), patient['id']))
     db.log(conn, patient['id'], 'interview_saved', {}, 'api')
     if data['consent']['signed'] and not was_signed: db.log(conn, patient['id'], 'consent_signed', {'date': data['consent']['date']}, 'api')
