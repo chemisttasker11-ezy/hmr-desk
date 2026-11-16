@@ -52,6 +52,18 @@ async function saveSettings(form) {
 let agentMessage = '';
 let agentEntries = [];
 let addAgentOpen = false;
+async function recordsCardLoad() {
+  const output = $('records-result'), pick = $('records-patient');
+  if (!output) return;
+  try {
+    const status = await hmr.api('GET', '/api/records/status');
+    const list = await hmr.api('GET', '/api/patients');
+    if (pick) pick.replaceChildren(...(list.patients || []).map(p => { const o = document.createElement('option'); o.value = String(p.id); o.textContent = p.name; return o; }));
+    output.textContent = status.records_in_encrypted_store + ' records in the encrypted store. ' +
+      status.plain_copies_matching_store + ' plain copies still on disk match them and ' + status.plain_files_differing_or_not_stored +
+      ' plain files differ or are not stored yet. Saved records are not protected while plain copies remain.';
+  } catch (error) { output.textContent = errorText(error); }
+}
 async function settings() {
   const [c, signIns, data, practice, health] = await Promise.all([
     hmr.config(),
@@ -157,6 +169,7 @@ async function settings() {
     <label>Environment, NAME=value per line<textarea name="env"></textarea></label></div>
     <label><span>Enabled <input type="checkbox" name="enabled" checked></span></label>
     <p class="error" role="alert"></p><button class="primary">Add agent</button></form><details><summary>Technical details</summary><p>Base folder: ${esc(c.base)}</p><p>Engine API: ${esc(c.api)}</p></details>`;
+  recordsCardLoad();
 }
 function askEncryptedBackupPassphrase(action) {
   // A browser prompt exposes its value as visible plaintext. Use an actual
@@ -286,12 +299,7 @@ async function agentClick(b) {
     b.disabled = true;
     try {
       if (b.dataset.recordsRefresh !== undefined) {
-        const status = await hmr.api('GET', '/api/records/status');
-        const list = await hmr.api('GET', '/api/patients');
-        if (pick) pick.replaceChildren(...(list.patients || []).map(p => { const o = document.createElement('option'); o.value = String(p.id); o.textContent = p.name; return o; }));
-        if (output) output.textContent = status.records_in_encrypted_store + ' records in the encrypted store. ' +
-          status.plain_copies_matching_store + ' plain copies still on disk match them and ' + status.plain_files_differing_or_not_stored +
-          ' plain files differ or are not stored yet. Saved records are not protected while plain copies remain.';
+        await recordsCardLoad();
       } else {
         const id = pick ? Number(pick.value) : 0;
         if (!id) { if (output) output.textContent = 'Check record storage first, then choose a patient.'; }
@@ -389,4 +397,4 @@ async function agentSubmit(form) {
   } catch (error) {
     (form.querySelector('.error') || $('agent-message')).textContent = errorText(error);
   }
-      }
+}
