@@ -555,7 +555,7 @@ def recent_tasks(conn, patient_id=None, limit=200):
 def approved_layout_available():
     try:
         import template_report_builder
-        template_report_builder.approved_template(app_paths.engine_assets() / 'templates')
+        template_report_builder.approved_template(template_report_builder.active_template_root())
         return True
     except (FileNotFoundError, ValueError, OSError, KeyError, TypeError):
         return False
