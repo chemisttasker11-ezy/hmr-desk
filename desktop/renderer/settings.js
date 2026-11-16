@@ -71,6 +71,7 @@ async function settings() {
       .map((a) => `<option value="${esc(a.name)}" ${a.name === selected ? 'selected' : ''}>${esc(a.name)}</option>`)
       .join('');
   $('screen').innerHTML = `<h2>Settings</h2>${practiceFields()}
+    <section class="card"><h2>Encrypted patient-data backup</h2><p>Back up the database and all files in the configured patient workspace. Store the backup outside that workspace and keep your passphrase safely: it cannot be recovered.</p><div class="actions"><button type="button" data-hmr-backup="create">Back up now</button><button type="button" data-hmr-backup="restore">Restore into a separate folder</button></div><p id="backup-result" role="status"></p></section>
     <section id="saved-sign-ins"><h2>Saved sign-ins</h2><p>Sign-ins save by themselves.</p>
     <p>Stored encrypted for your Windows account on this PC only. Anyone who can use your Windows account can use them.</p>
     <p>PRODA still asks for your 2-step code each time.</p>
@@ -128,6 +129,26 @@ async function settings() {
     <p class="error" role="alert"></p><button class="primary">Add agent</button></form><details><summary>Technical details</summary><p>Base folder: ${esc(c.base)}</p><p>Engine API: ${esc(c.api)}</p></details>`;
 }
 async function agentClick(b) {
+  if (b.dataset.hmrBackup) {
+    const action = b.dataset.hmrBackup;
+    const password = prompt(action === 'create'
+      ? 'Enter a new backup passphrase (at least 12 characters). Keep it safe.'
+      : 'Enter the passphrase for the selected encrypted backup.');
+    if (password == null) return true;
+    const output = $('backup-result');
+    b.disabled = true;
+    if (output) output.textContent = 'Processing encrypted backup...';
+    try {
+      const result = await hmr.encryptedBackup(action, password);
+      if (output) output.textContent = result.cancelled ? 'Cancelled' : action === 'create'
+        ? 'Backup completed and encrypted' : 'Backup verified and restored into: ' + result.destination;
+    } catch (error) {
+      if (output) output.textContent = errorText(error);
+    } finally {
+      b.disabled = false;
+    }
+    return true;
+  }
   if (b.dataset.addAgent !== undefined) {
     addAgentOpen = !addAgentOpen;
     await settings();
