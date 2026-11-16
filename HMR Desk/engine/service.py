@@ -167,14 +167,15 @@ def main():
         logging.warning('Database empty at start: re-importing from the plan and logs')
         importer.run(conn)
     api_token(conn)
+    hook = None
     try:
-        hook = hook_server(8766, token(conn))
+        hook = hook_server(int(os.environ.get('HMR_WEBHOOK_PORT', '8766')), token(conn))
     except OSError:
-        print('Service port 8766 is already in use; another instance may be running.')
-        conn.close()
-        return
+        # SMS webhook ingress is an optional authenticated integration, not a
+        # dependency of the pharmacist's fully manual offline clinical workflow.
+        logging.warning('Optional SMS webhook listener unavailable')
     api.jobs.ensure_worker(recover=True)
-    threading.Thread(target=hook.serve_forever, daemon=True).start()
+    if hook: threading.Thread(target=hook.serve_forever, daemon=True).start()
     # Never expose the patient workspace over an unauthenticated static HTTP server.
     # The app's API gets its own port, bound without address reuse: on Windows an old
     # `python -m http.server 8765` can share port 8765 and swallow API requests (seen 12 Nov).
@@ -185,7 +186,8 @@ def main():
         threading.Thread(target=api_server.serve_forever, daemon=True).start()
     except OSError:
         logging.error('API port is in use; refusing to start without an authenticated listener')
-        hook.shutdown(); hook.server_close(); conn.close()
+        if hook: hook.shutdown(); hook.server_close()
+        conn.close()
         raise
     logging.info('Local clinical engine started')
     last_poll = 0
@@ -249,8 +251,9 @@ def main():
     finally:
         api_server.shutdown()
         api_server.server_close()
-        hook.shutdown()
-        hook.server_close()
+        if hook:
+            hook.shutdown()
+            hook.server_close()
         conn.close()
 
 
