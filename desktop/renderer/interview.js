@@ -231,10 +231,11 @@ function interviewUseControls(key, i, meta) {
 function interviewMedicineRow(key, row, meta, i, notUsing = false) {
   const other = key === 'other_meds', expanded = interviewExpanded.has(meta);
   const field = (j, hidden = false) => `<textarea rows="1" ${hidden ? 'hidden' : ''} data-field="${key}" data-row="${i}" data-col="${j}" placeholder="${esc(interviewTables[key][j])}" aria-label="${esc(interviewTables[key][j])} row ${i + 1}">${esc(row[j] || '')}</textarea>`;
+  const labelled = (text, control) => `<label class="med-field"><span class="med-field-label">${text}</span>${control}</label>`;
   const badge = (label, show, kind) => `<button type="button" class="interview-badge" data-interview-badge="${key}" data-row="${i}" data-badge-kind="${kind}" ${show ? '' : 'hidden'}>${esc(label)}</button>`;
   return `<tr class="${meta.checked ? 'interview-medicine-checked' : ''}"><td><div class="interview-medicine-main">
     <label class="interview-check"><input type="checkbox" ${other ? 'data-other-checked' : 'data-med-detail="checked"'} data-row="${i}" aria-label="Checked in interview for progress only; does not confirm use" ${meta.checked ? 'checked' : ''}> Checked</label>
-    ${field(0)}${typeof interviewLookupControls === 'function' ? interviewLookupControls(key, meta, i) : ''}${other ? '' : field(1)}<div class="interview-actual">${field(other ? 1 : 2, notUsing)}<span ${notUsing ? 'hidden' : ''}><select data-usage-preset="${key}" data-row="${i}" aria-label="Usage preset row ${i + 1}"><option value="">Usage preset</option>${interviewUsagePresets.map(([code, text]) => `<option value="${esc(code)}" ${interviewPresetMatch(row[other ? 1 : 2] || '')?.[0] === code ? 'selected' : ''}>${esc(code)} — ${esc(text)}</option>`).join('')}</select></span></div>
+    ${labelled('Medicine', field(0))}${typeof interviewLookupControls === 'function' ? interviewLookupControls(key, meta, i) : ''}${other ? '' : labelled('Directions on referral', field(1))}<div class="interview-actual">${notUsing ? '' : '<span class="med-field-label">' + (other ? 'Directions' : 'Actually taking') + '</span>'}${field(other ? 1 : 2, notUsing)}<span ${notUsing ? 'hidden' : ''}><select data-usage-preset="${key}" data-row="${i}" aria-label="Usage preset row ${i + 1}"><option value="">Usage preset</option>${interviewUsagePresets.map(([code, text]) => `<option value="${esc(code)}" ${interviewPresetMatch(row[other ? 1 : 2] || '')?.[0] === code ? 'selected' : ''}>${esc(code)} — ${esc(text)}</option>`).join('')}</select></span></div>
     ${other ? `<fieldset class="interview-choices interview-chips"><legend>Medicine kind</legend>${[['prescribed','Prescribed elsewhere'],['otc','Over the counter'],['complementary','Complementary or vitamin']].map(([v,l]) => `<label><input type="radio" name="kind-${i}" data-use-field="kind" data-use-table="other_meds" data-row="${i}" value="${v}" ${meta.kind === v ? 'checked' : ''}> ${l}</label>`).join('')}</fieldset>` : `<label data-prn-row="${i}" ${(meta.prn_use || (interviewPrnVisible(row[2]) && !notUsing)) ? '' : 'hidden'}>How often used<input data-med-detail="prn_use" data-row="${i}" value="${esc(meta.prn_use)}"></label>`}
     <div class="interview-medicine-actions">${interviewUseControls(key, i, meta)}${!other && !notUsing ? `<button type="button" class="${meta.as_instructed ? 'primary' : ''}" data-interview-as-instructed="${i}" ${row[1]?.trim() ? '' : 'disabled title="No referral directions to copy"'}>${meta.as_instructed ? '✓ ' : ''}As instructed</button>` : ''}
     <button type="button" data-interview-details="${key}" data-row="${i}" aria-expanded="${expanded}">Details</button></div>
@@ -866,4 +867,4 @@ async function followupClick(b) {
     return true;
   }
   return false;
-}
+  }
