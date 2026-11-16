@@ -17,6 +17,7 @@ function renderReferrals() {
   target.innerHTML = `${referralRows.length ? `<p>${esc(counts)}</p>` : ''}` + referralRows.map((row, i) => `<article class="card"><h3>${esc(row.file)}</h3><p><strong>${esc(({review:'Ready for review',manual:'Requires pharmacist classification',duplicate:'Possible duplicate',rejected:'Not recognised as a referral',error:'Could not read PDF',added:'Added'})[row.status] || row.status)}</strong>${row.message ? ': ' + esc(row.message) : ''}</p>
     ${row.status === 'duplicate' ? `<p>${row.duplicate_kind === 'identity' ? 'The extracted name matches an existing patient or another referral. Compare date of birth and identifiers before adding. A different person with the same name requires explicit acknowledgement.' : 'This PDF has already been reviewed or added.'}</p>` : ''}
     ${row.status === 'manual' ? '<p>This document was not recognised automatically. Verify the original PDF is a genuine Home Medicines Review referral before entering identifiers and creating a patient. No unknown information will be filled automatically.</p>' : ''}
+    ${row.token ? `<button type="button" data-referral-source="${esc(row.token)}">Open original PDF for visual page comparison</button>` : ''}
     ${row.flags?.length ? `<p class="flag">${row.flags.map(esc).join('<br>')}</p>` : ''}
     ${row.page_previews?.length ? `<details class="referral-source-preview"><summary>Review extracted PDF pages (${row.page_previews.length} shown)</summary><div class="referral-page-preview">${row.page_previews.map(page => `<section class="card"><h4>Source page ${esc(page.page)} — ${page.method === 'ocr' ? 'OCR (unconfirmed)' : 'PDF text (unconfirmed)'}</h4><pre style="white-space:pre-wrap;overflow-wrap:anywhere">${esc(page.text || 'No readable text; inspect the original PDF')}</pre></section>`).join('')}</div><p>Compare these unconfirmed values to the original PDF before adding the patient. OCR is not evidence of correctness.</p></details>` : ''}
     ${row.status === 'review' || row.status === 'manual' || (row.status === 'duplicate' && row.duplicate_kind === 'identity') ? `<form data-referral-commit="${i}" class="form">${['name','dob','gp','referral_date','clinic','phone','address','suburb','sex','medicare','irn','ihi'].map(k => `<label>${esc(labels[k] || k)}<input name="${k}" value="${esc(row.fields?.[k] || '')}"></label>`).join('')}${row.kind !== 'referral' ? '<fieldset><legend>Manual source classification</legend><label><input type="checkbox" data-manual-referral required> I inspected the original PDF and confirm it is an HMR referral for this patient. The document and all clinical details remain unconfirmed until reviewed.</label></fieldset>' : ''}
@@ -28,10 +29,11 @@ function renderReferrals() {
 }
 
 document.addEventListener('click', async event => {
-  const button = event.target.closest('[data-referral-pick], [data-referral-open]');
+  const button = event.target.closest('[data-referral-pick], [data-referral-open], [data-referral-source]');
   if (!button) return;
   try {
     if (button.dataset.referralOpen) return await openPatientWorkspace(Number(button.dataset.referralOpen), 'Overview', 'patient');
+    if (button.dataset.referralSource) return await hmr.openReviewedReferral(button.dataset.referralSource);
     button.disabled = true;
     $('referral-status').textContent = 'Reading referrals…';
     const result = await hmr.referralPick(button.dataset.referralPick);
