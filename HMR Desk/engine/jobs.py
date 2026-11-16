@@ -133,8 +133,16 @@ def interview_assist(patient_id):
     with connection() as conn:
         p = get_patient(conn, patient_id)
         record = interview.load(conn, p)
+    import clinical_privacy
     name = agents.selected('interview_assist')
-    prompt = 'Return JSON {"points": {medicine: text}, "clarify": [..]}. Suggest points to check only. Data: ' + json.dumps({k: record[k] for k in ('meds', 'conditions', 'allergies', 'pathology')}, ensure_ascii=False)
+    selected = agents.get(name)
+    if selected['type'] != 'api':
+        raise clinical_privacy.PrivacyBlocked('Clinical AI requires a restricted API agent; CLI agents are disabled for patient data')
+    clinical = clinical_privacy.project(record, sex=p['sex'] or '')
+    prompt = ('Use only this de-identified clinical JSON. Do not infer identities. '
+              'Return JSON {"points": {medicine: text}, "clarify": [..]}. '
+              'Suggestions are for pharmacist review only. Data: '
+              + json.dumps(clinical, ensure_ascii=False))
     reply = json_object(agents.run(name, prompt))
     points, clarify = reply.get('points'), reply.get('clarify')
     if not isinstance(points, dict) or any(not isinstance(k, str) or not isinstance(v, str) for k, v in points.items()) or not isinstance(clarify, list) or any(not isinstance(x, str) for x in clarify): raise ValueError('invalid assist response')
@@ -279,6 +287,10 @@ def json_object(reply):
     raise ValueError('Agent reply does not contain a valid JSON object')
 
 def agent_step(patient_id, name, output_path=None):
+    # Legacy full-report prompts and skill routes expose identifiable patient files.
+    # Keep them unavailable until a clinical-only adapter is implemented.
+    import clinical_privacy
+    raise clinical_privacy.PrivacyBlocked('Legacy patient-folder AI generation is disabled; use the manual report editor')
     import agents
     with connection() as conn:
         p = get_patient(conn, patient_id)
