@@ -14,6 +14,14 @@ const defaults = {
 };
 fs.mkdirSync(dataDir, { recursive: true });
 const configPath = path.join(dataDir, 'app-config.json');
+// Electron throws when Windows has no resolvable Documents folder (redirected or missing profile). Fall back so
+// backup and restore dialogs still open at a usable default instead of failing.
+function documentsDir() {
+  for (const name of ['documents', 'home']) {
+    try { const p = app.getPath(name); if (p) return p; } catch { /* try the next location */ }
+  }
+  return dataDir;
+}
 // Invalid historical configuration is retained under an .invalid-* copy.
 // Never guess or silently reassign a patient workspace.
 const loadedConfig = require('./src/config-load').loadConfig(configPath, defaults);
@@ -504,7 +512,7 @@ ipcMain.handle('encrypted-backup', async (e, action, passphrase) => {
     throw Error('Invalid backup request or passphrase (minimum 12 characters)');
   if (action === 'create') {
     const chosen = await dialog.showSaveDialog(win, { title: 'Save encrypted HMR backup',
-      defaultPath: path.join(app.getPath('documents'), 'hmr-backup.hmrbak'),
+      defaultPath: path.join(documentsDir(), 'hmr-backup.hmrbak'),
       filters: [{ name: 'Encrypted HMR backup', extensions: ['hmrbak'] }] });
     if (chosen.canceled || !chosen.filePath) return { cancelled: true };
     return api('POST', '/api/backups/create', { target: chosen.filePath, passphrase });
@@ -547,7 +555,7 @@ ipcMain.handle('activate-restored', async (e, passphrase) => {
     throw Error('Recovery integrity verification failed');
   const backup = await dialog.showSaveDialog(win, {
     title: 'Mandatory encrypted backup of CURRENT data before activating recovered cases',
-    defaultPath: path.join(app.getPath('documents'),'hmr-before-restore-activation.hmrbak'),
+    defaultPath: path.join(documentsDir(),'hmr-before-restore-activation.hmrbak'),
     filters:[{name:'Encrypted HMR backup',extensions:['hmrbak']}],
   });
   if (backup.canceled || !backup.filePath) return {cancelled:true};
@@ -628,7 +636,7 @@ ipcMain.handle('migrate-workspace', async (e, passphrase) => {
   const target = path.join(chosen.filePaths[0], 'HMR-Desk-Workspace-Migrated');
   const backup = await dialog.showSaveDialog(win, {
     title: 'Choose a separate location for the mandatory encrypted pre-migration backup',
-    defaultPath: path.join(app.getPath('documents'), 'hmr-before-migration.hmrbak'),
+    defaultPath: path.join(documentsDir(), 'hmr-before-migration.hmrbak'),
     filters: [{name:'Encrypted HMR backup',extensions:['hmrbak']}],
   });
   if (backup.canceled || !backup.filePath) return {cancelled:true};
@@ -717,7 +725,7 @@ if (hasLock)
       if (choice.response === 1) {
         const picked = await dialog.showOpenDialog({
           title: 'Select patient workspace', properties: ['openDirectory', 'createDirectory'],
-          defaultPath: app.getPath('documents'),
+          defaultPath: documentsDir(),
         });
         if (picked.canceled || !picked.filePaths[0]) { app.quit(); return; }
         config.base = picked.filePaths[0];
@@ -1171,4 +1179,4 @@ async function captureShots() {
     if (syntheticSignInListeners) { for (const listener of syntheticSignInListeners) ipcMain.on('sign-in-page', listener); signIns.update = originalSignInUpdate; signIns.reset = originalSignInReset; }
     if (win && !win.isDestroyed()) win.webContents.removeListener('console-message', onConsole);
   }
-}
+    }
