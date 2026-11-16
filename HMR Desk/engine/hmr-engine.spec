@@ -1,6 +1,8 @@
 # PyInstaller onedir specification; build from HMR Desk/engine on Windows x64.
 from pathlib import Path
-from PyInstaller.utils.hooks import collect_submodules, collect_data_files
+from PyInstaller.utils.hooks import collect_submodules, collect_data_files, collect_all
+
+sqlcipher_datas, sqlcipher_binaries, sqlcipher_hidden = collect_all('sqlcipher3')
 
 root = Path(SPECPATH)
 assets = root / 'assets'
@@ -18,9 +20,9 @@ for source in ('Android_SMS_Integration', 'MIMS Interaction Helper', 'PPA Claim 
 a = Analysis(
     [str(root / 'engine_main.py')],
     pathex=[str(root)],
-    binaries=[],
-    datas=datas + collect_data_files('medicine_data'),
-    hiddenimports=collect_submodules('fitz') + collect_submodules('medicine_data'),
+    binaries=sqlcipher_binaries,
+    datas=datas + collect_data_files('medicine_data') + sqlcipher_datas,
+    hiddenimports=collect_submodules('fitz') + collect_submodules('medicine_data') + sqlcipher_hidden,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
