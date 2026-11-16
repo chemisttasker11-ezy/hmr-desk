@@ -406,6 +406,65 @@ ipcMain.handle('encrypted-backup', async (e, action, passphrase) => {
   return api('POST', '/api/backups/restore',
     { source: chosen.filePaths[0], destination: dest, passphrase });
 });
+ipcMain.handle('migrate-workspace', async (e, passphrase) => {
+  if (e.sender !== win.webContents || typeof passphrase !== 'string' ||
+      passphrase.length < 12 || passphrase.length > 512 || !engineOwner)
+    throw Error('Invalid workspace migration request');
+  const chosen = await dialog.showOpenDialog(win, {
+    title: 'Choose destination parent for a new patient workspace',
+    properties: ['openDirectory', 'createDirectory'],
+  });
+  if (chosen.canceled || !chosen.filePaths.length) return {cancelled:true};
+  const target = path.join(chosen.filePaths[0], 'HMR-Desk-Workspace-Migrated');
+  const backup = await dialog.showSaveDialog(win, {
+    title: 'Choose a separate location for the mandatory encrypted pre-migration backup',
+    defaultPath: path.join(app.getPath('documents'), 'hmr-before-migration.hmrbak'),
+    filters: [{name:'Encrypted HMR backup',extensions:['hmrbak']}],
+  });
+  if (backup.canceled || !backup.filePath) return {cancelled:true};
+  const { inventory, prepareMigration } = require('./src/workspace-migration');
+  const scanned = await inventory(config.base);
+  if (!scanned.entries.length) throw Error('Current workspace has no files to migrate');
+  const confirmation = await dialog.showMessageBox(win, {
+    type: 'question',
+    title: 'Preserve patient data and migrate workspace',
+    message: 'Copy ' + scanned.entries.length + ' files (' + scanned.bytes + ' bytes) into a new local workspace?',
+    detail: 'HMR Desk will first create an encrypted recovery backup, close the clinical engine, copy and hash-check every file, then restart with the new folder. The original remains untouched.',
+    buttons: ['Back up and migrate', 'Cancel'], defaultId:1, cancelId:1, noLink:true,
+  });
+  if (confirmation.response !== 0) return {cancelled:true};
+  await api('POST', '/api/backups/create', {target:backup.filePath,passphrase});
+  engineShutdownStarted = true;
+  try {
+    await engineOwner.stop();
+    engineOwner = null;
+    await prepareMigration(config.base, target);
+    const nextConfig = {...config, base:target};
+    const temporaryConfig = configPath + '.migrating-' + process.pid;
+    try {
+      await fsp.writeFile(temporaryConfig, JSON.stringify(nextConfig, null, 2), {mode:0o600,flag:'wx'});
+      await fsp.rename(temporaryConfig, configPath);
+    } finally {
+      await fsp.rm(temporaryConfig,{force:true});
+    }
+    config.base = target;
+    app.relaunch();
+    app.quit();
+    return {restarting:true, destination:target};
+  } catch (error) {
+    engineShutdownStarted = false;
+    if (!engineOwner) {
+      try {
+        engineOwner = await startEngine({resourcesPath:process.resourcesPath,dataDir,
+          workspace:config.base,config,onCrash:restartEngineAfterCrash});
+      } catch {
+        win?.webContents?.send('engine-state',{ready:false,
+          reason:'Workspace migration interrupted; original patient files remain intact. Restart the application.'});
+      }
+    }
+    throw error;
+  }
+});
 ipcMain.handle('save-helper', saveHelper);
 const hasLock = app.requestSingleInstanceLock();
 if (!hasLock) app.quit();
