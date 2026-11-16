@@ -735,3 +735,9 @@ main:has(.interview-context) > header { height: 96px; min-height: 96px; }
 .interview-health .interview-entry { display: grid; grid-template-columns: minmax(180px, 1fr) auto; align-items: center; gap: 4px 12px; border-bottom: 1px solid #d0ded7; }
 .interview-health [data-entry-detail] { grid-column: 1 / -1; }
 @media (max-width: 600px) { .interview-health .interview-entry { grid-template-columns: 1fr; } }
+
+.med-lookup{flex:1 1 100%;display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.med-lookup-results{flex:1 1 100%}
+.med-lookup-results p{margin:4px 0}
+.med-lookup-result{display:flex;gap:12px;align-items:center;justify-content:space-between;padding:4px 0;border-top:1px solid #d9e0dd}
+.med-ref{font-size:.95em}
