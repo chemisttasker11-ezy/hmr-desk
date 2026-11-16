@@ -139,8 +139,7 @@ def _derived(conn, patient):
         if not result['test'].strip(): continue
         pathology_table.append([
             result['test'],
-            ' '.join(filter(None, (result['value'], result['unit']))),
-            result['reference_interval'], '',
+            result['value'], result['unit'], result['reference_interval'],
             ' | '.join(filter(None, (
                 'Verified by pharmacist' if result['verified'] else 'UNVERIFIED — check original source',
                 'Sample: ' + result['sample_date'] if result['sample_date'] else '',
