@@ -188,6 +188,7 @@ async function pharmacistReportSignoff(patientId) {
       <p>Choose the exact Word/PDF pair you have read. The clinical data, source revisions, template and file checksums are verified before sign-off. No report is sent automatically.</p>
       <label>Report version<select name="report" required>${versions.map((v,i) =>
         `<option value="${i}">${esc(v.file)} — ${esc(v.template_version)} — ${esc(v.created_at)}</option>`).join('')}</select></label>
+      <div class="actions"><button type="button" data-report-preview="pdf">Open selected PDF for review</button><button type="button" data-report-preview="docx">Open selected Word version</button></div>
       <label>Reviewing pharmacist<input name="reviewer" required minlength="3" maxlength="150" value="${esc(pharmacist)}" autocomplete="name"></label>
       <label><input type="checkbox" name="checked" required> I reviewed the selected Word and PDF, confirmed the patient-specific clinical assertions, and authorise this exact revision for finalisation.</label>
       <p class="error" role="alert"></p>
@@ -205,6 +206,16 @@ async function pharmacistReportSignoff(patientId) {
     dialog.querySelector('[data-report-signoff-cancel]').addEventListener('click', () => finish(false));
     dialog.addEventListener('cancel', event => {event.preventDefault();finish(false);});
     const form = dialog.querySelector('form');
+    dialog.querySelectorAll('[data-report-preview]').forEach(button =>
+      button.addEventListener('click', async () => {
+        const selected = versions[Number(form.elements.namedItem('report').value)];
+        if (!selected) return;
+        try {
+          await hmr.openReportVersion(Number(patientId), selected.file, button.dataset.reportPreview);
+        } catch (error) {
+          form.querySelector('[role=alert]').textContent = errorText(error);
+        }
+      }));
     form.addEventListener('submit', async event => {
       event.preventDefault();
       const selected = versions[Number(form.elements.namedItem('report').value)];
