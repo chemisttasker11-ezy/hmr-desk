@@ -39,13 +39,16 @@ def token(conn):
 
 
 def api_token(conn):
-    value = get_meta(conn, 'api_token')
+    value = os.environ.get('HMR_SESSION_TOKEN') or get_meta(conn, 'api_token')
+    if os.environ.get('HMR_SESSION_TOKEN'):
+        set_meta(conn, 'api_token', value)
     if not value:
         value = secrets.token_urlsafe(32)
         set_meta(conn, 'api_token', value)
     os.makedirs(db.DATA_DIR, exist_ok=True)
     with open(os.path.join(db.DATA_DIR, 'api_token'), 'w', encoding='utf-8') as f:
         f.write(value)
+    if os.name != 'nt': os.chmod(os.path.join(db.DATA_DIR, 'api_token'), 0o600)
     return value
 
 
@@ -149,7 +152,10 @@ def main():
     handler = logging.handlers.RotatingFileHandler(os.path.join(log_dir, 'engine.log'), maxBytes=1000000, backupCount=1, encoding='utf-8')
     logging.basicConfig(level=logging.INFO, handlers=[handler], format='%(asctime)s %(levelname)s %(message)s', force=True)
     conn = db.connect()
-    if not conn.execute('SELECT COUNT(*) FROM patients').fetchone()[0]:  # empty database: rebuild from the source files first
+    if os.environ.get('HMR_WORKSPACE') and not os.environ.get('HMR_IMPORT_LEGACY'):
+        # Empty, app-owned workspaces must not silently import a former source checkout.
+        pass
+    elif not conn.execute('SELECT COUNT(*) FROM patients').fetchone()[0]:  # empty database: rebuild from the source files first
         import importer
         logging.warning('Database empty at start: re-importing from the plan and logs')
         importer.run(conn)
@@ -168,10 +174,12 @@ def main():
     class ApiServer(http.server.ThreadingHTTPServer):
         allow_reuse_address = False
     try:
-        api_server = ApiServer(('127.0.0.1', 8767), QuietStatic)
+        api_server = ApiServer(('127.0.0.1', int(os.environ.get('HMR_API_PORT', '8767'))), QuietStatic)
         threading.Thread(target=api_server.serve_forever, daemon=True).start()
     except OSError:
-        logging.warning('API port 8767 is in use')
+        logging.error('API port is in use; refusing to start without an authenticated listener')
+        hook.shutdown(); hook.server_close(); conn.close()
+        raise
     logging.info('Service started: %s patients, db %s', conn.execute('SELECT COUNT(*) FROM patients').fetchone()[0], db.db_path())
     last_poll = 0
     online = None
@@ -232,6 +240,8 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
+        api_server.shutdown()
+        api_server.server_close()
         hook.shutdown()
         hook.server_close()
         conn.close()
