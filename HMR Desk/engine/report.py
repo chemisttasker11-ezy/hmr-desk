@@ -12,6 +12,7 @@ import brainstorm
 import db
 import interview
 import jobs
+import records
 import manual_defaults
 
 WIDTHS = {'meds': 4, 'otc': 3, 'ceased': 3, 'path': 5}
@@ -29,14 +30,13 @@ def validate(data):
     if 'needs_review' in data and (not isinstance(data['needs_review'], list) or any(x not in REVIEW for x in data['needs_review'])): raise ValueError('invalid needs_review')
 
 def load(conn, patient, ai=False):
-    target = jobs.patient_folder(patient) / ('report_spec.ai.json' if ai else 'report_spec.json')
-    if not target.is_file(): return {'saved': False}
-    data = json.loads(target.read_text(encoding='utf-8'))
+    data = records.get_json(conn, patient['id'], 'report_spec.ai.json' if ai else 'report_spec.json')
+    if data is None: return {'saved': False}
     validate(data)
-    if not ai: data['interview_newer'] = 'interview_revision' in data and interview.revision(jobs.patient_folder(patient) / 'interview.json') != data['interview_revision']
+    if not ai: data['interview_newer'] = 'interview_revision' in data and interview.revision(conn, patient) != data['interview_revision']
     if not ai:
         import pathology_records
-        data['pathology_newer'] = 'pathology_revision' in data and pathology_records.revision(pathology_records.file_for(patient)) != data['pathology_revision']
+        data['pathology_newer'] = 'pathology_revision' in data and pathology_records.revision(conn, patient) != data['pathology_revision']
     return data
 
 def save(conn, patient, data):
@@ -45,14 +45,11 @@ def save(conn, patient, data):
 def _save(conn, patient, data):
     validate(data)
     data = {k: v for k, v in data.items() if k not in ('interview_newer', 'pathology_newer')}
-    target = jobs.report_spec_path(patient)
-    if target.exists():
-        fd, temp = tempfile.mkstemp(dir=target.parent); os.close(fd)
-        try: shutil.copyfile(target, temp); os.replace(temp, str(target) + '.bak')
-        finally:
-            if os.path.exists(temp): os.unlink(temp)
-    jobs.atomic_json(target, data)
+    previous = records.get(conn, patient['id'], 'report_spec.json')
+    if previous is not None: records.put(conn, patient['id'], 'report_spec.json.bak', previous)
+    records.put_json(conn, patient['id'], 'report_spec.json', data)
     db.log(conn, patient['id'], 'report_saved', {}, 'api')
+    conn.commit()
     return data
 
 def placeholders(data):
@@ -105,15 +102,15 @@ def intro_text(record, name, visit):
     return ' '.join(sentences)
 
 def _derived(conn, patient):
-    folder = jobs.patient_folder(patient); target = jobs.report_spec_path(patient)
+    folder = jobs.patient_folder(patient)
     import api
     with interview.record_lock(patient):
-        has_interview = (folder / 'interview.json').is_file()
-        if not (folder / 'confirmed_meds.json').is_file(): raise ValueError('confirm the medicine list first')
-        if not api.confirmed_medicines_current(patient): raise ValueError('Medicine use changed; review and confirm medicines first')
+        has_interview = records.exists(conn, patient['id'], 'interview.json')
+        if not records.exists(conn, patient['id'], 'confirmed_meds.json'): raise ValueError('confirm the medicine list first')
+        if not api.confirmed_medicines_current(conn, patient): raise ValueError('Medicine use changed; review and confirm medicines first')
         record = interview.load(conn, patient); p = dict(patient); h = record['header']
     if not has_interview:
-        confirmed = json.loads((folder / 'confirmed_meds.json').read_text(encoding='utf-8'))
+        confirmed = records.get_json(conn, patient['id'], 'confirmed_meds.json')
         record['meds'] = [[r[0], '', '', '', 'Brand: ' + r[1] if r[1] else ''] for r in confirmed['meds']]
         record['details']['meds'] = [{'packed': '', 'as_instructed': False} for _ in record['meds']]
         record['allergies'] = '\n'.join(confirmed['allergies'])
@@ -132,7 +129,7 @@ def _derived(conn, patient):
     def referral_note(r, m):
         return '\n'.join(filter(None, (r[4], 'DAA: ' + m['packed'] if m['packed'] else '')))
     import pathology_records
-    clinical_pathology = pathology_records.load(patient)
+    clinical_pathology = pathology_records.load(conn, patient)
     verified_pathology = clinical_pathology['records']
     verification = clinical_pathology.get('verification', {})
     def _date_key(raw):
@@ -181,8 +178,8 @@ def _derived(conn, patient):
     return record, dict(conditions=record['conditions'], allergies=record['allergies'], obs=observations(record), meds=[[r[0], actual(r, m), referral_note(r, m), ''] for r, m in zip(referral_rows, referral_meta) if any(r) and m.get('use_status') != 'not_using'] + [[r[0], other_actual(r, m), ' | '.join(filter(None, r[2:])), ''] for r, m in zip(other_rows, other_meta) if any(r) and m.get('use_status') != 'not_using' and m.get('kind') not in ('otc', 'complementary')], otc=[[r[0], other_actual(r, m), ' | '.join(filter(None, r[2:]))] for r, m in zip(other_rows, other_meta) if any(r) and m.get('use_status') != 'not_using' and m.get('kind') in ('otc', 'complementary')], ceased=[[r[0], r[1], ' | '.join(filter(None, ['Referral medicine', r[2], '\n'.join(filter(None, (referral_note(r, m), interview.use_text(m))))]))] for r, m in zip(referral_rows, referral_meta) if any(r) and m.get('use_status') == 'not_using'] + [[r[0], r[1], ' | '.join(filter(None, ['Found during interview', other_note(r, m)]))] for r, m in zip(other_rows, other_meta) if any(r) and m.get('use_status') == 'not_using'], path=pathology_table), ', '.join(dates)
 
 def start(conn, patient):
-    folder = jobs.patient_folder(patient); target = jobs.report_spec_path(patient)
-    if target.exists(): raise FileExistsError('report spec already exists')
+    folder = jobs.patient_folder(patient)
+    if records.exists(conn, patient['id'], 'report_spec.json'): raise FileExistsError('report spec already exists')
     record, derived, dates = _derived(conn, patient); p = dict(patient); h = record['header']
     name = p['name']; gp = p.get('gp') or h['gp'] or ''
     data = manual_defaults.initial_text(name, gp)
@@ -192,27 +189,29 @@ def start(conn, patient):
     import steps
     visit = steps.event_date(conn, patient, 'visited') or p.get('visit_date') or h['visit'].split(' ')[0]
     data.update(out=str(folder / ('HMR ' + re.sub(r'[<>:"/\\|?*]', '', name).rstrip(' .') + '.docx')), name=name, assess_date=visit, report_date=dt.date.today().strftime('%d/%m/%Y'), patient='\n'.join(patient_lines), doctor='\n'.join(filter(None, doctor_lines)), dear='Dear ' + gp + ',', path_date=dates, issues=[], needs_review=REVIEW.copy())
-    data.update(derived, interview_revision=record['revision'], interview_reason=record['details']['reason'], pathology_revision=__import__('pathology_records').revision(__import__('pathology_records').file_for(patient)))
+    data.update(derived, interview_revision=record['revision'], interview_reason=record['details']['reason'], pathology_revision=__import__('pathology_records').revision(conn, patient))
     intro = intro_text(record, name, visit)
     if intro: data['intro'] = intro
     if record['details']['reason'].strip():
         data['reason'] = record['details']['reason']; data['needs_review'].remove('reason')
     validate(data)
-    with target.open('x', encoding='utf-8') as f: json.dump(data, f, ensure_ascii=False, indent=2)
+    try: records.put(conn, patient['id'], 'report_spec.json', records.dumps(data), expected_revision='missing')
+    except records.Conflict: raise FileExistsError('report spec already exists')
     db.log(conn, patient['id'], 'report_started', {}, 'job')
+    conn.commit()
     return data
 
 def refresh(conn, patient):
     with _lock: return _refresh(conn, patient)
 
 def _refresh(conn, patient):
-    target = jobs.report_spec_path(patient)
-    if not target.is_file(): raise ValueError('report spec does not exist')
-    data = json.loads(target.read_text(encoding='utf-8')); validate(data)
+    data = records.get_json(conn, patient['id'], 'report_spec.json')
+    if data is None: raise ValueError('report spec does not exist')
+    validate(data)
     record, derived, _ = _derived(conn, patient)
     import pathology_records
     data.update(derived, interview_revision=record['revision'], interview_reason=record['details']['reason'],
-                pathology_revision=pathology_records.revision(pathology_records.file_for(patient)))
+                pathology_revision=pathology_records.revision(conn, patient))
     save(conn, patient, data)
     db.log(conn, patient['id'], 'report_refreshed', {}, 'job')
     return data
