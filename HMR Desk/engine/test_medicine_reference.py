@@ -52,6 +52,19 @@ def test_unreadable_reference_degrades():
         assert ref.status()['installed'] is False
         assert ref.search('exam')['installed'] is False
 
+def test_chosen_reference_is_validated_and_carried_into_report_rows():
+    import interview
+    ref = {'source': 'amt', 'code': '1001', 'display': 'Examplestatin 20 mg tablet', 'release': '20260101'}
+    ok = {'packed': '', 'as_instructed': False, 'checked': False, 'priority': 0, 'reference': ref}
+    assert interview.valid_use(ok, {'packed', 'as_instructed', 'checked', 'priority'}, {'prn_use'})
+    assert interview.valid_use({'checked': False, 'priority': 0, 'reference': ref}, {'checked', 'priority'}, {'kind'})
+    for bad in ({**ref, 'extra': 'x'}, {**ref, 'code': ''}, {**ref, 'code': 5}, 'amt 1001', {k: v for k, v in ref.items() if k != 'release'}):
+        assert not interview.valid_use({**ok, 'reference': bad}, {'packed', 'as_instructed', 'checked', 'priority'}, {'prn_use'})
+    rows = interview.medicine_rows({'meds': [['Examplestatin', '1 daily', '', '', '']], 'details': {'meds': [ok]}})
+    assert 'Reference: Examplestatin 20 mg tablet (AMT 1001, release 20260101)' in rows[0][4]
+    plain = interview.medicine_rows({'meds': [['Free text', '', '', '', '']], 'details': {'meds': [{'packed': '', 'as_instructed': False}]}})
+    assert 'Reference' not in plain[0][4]
+
 if __name__ == '__main__':
     for n, f in list(globals().items()):
         if n.startswith('test_'): f()
