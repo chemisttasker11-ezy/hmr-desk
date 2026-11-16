@@ -71,7 +71,7 @@ async function settings() {
       .map((a) => `<option value="${esc(a.name)}" ${a.name === selected ? 'selected' : ''}>${esc(a.name)}</option>`)
       .join('');
   $('screen').innerHTML = `<h2>Settings</h2>${practiceFields()}
-    <section class="card"><h2>Encrypted patient-data backup</h2><p>Back up the database and all files in the configured patient workspace. Store the backup outside that workspace and keep your passphrase safely: it cannot be recovered.</p><div class="actions"><button type="button" data-hmr-backup="create">Back up now</button><button type="button" data-hmr-backup="preview">Verify and preview a backup</button><button type="button" data-hmr-backup="restore">Restore into a separate folder</button></div><p id="backup-result" role="status"></p></section>
+    <section class="card"><h2>Encrypted patient-data backup</h2><p>Back up the database and all files in the configured patient workspace. Store the backup outside that workspace and keep your passphrase safely: it cannot be recovered.</p><div class="actions"><button type="button" data-hmr-backup="create">Back up now</button><button type="button" data-hmr-backup="preview">Verify and preview a backup</button><button type="button" data-hmr-backup="restore">Restore into a separate folder</button><button type="button" data-restored-activate>Activate a verified isolated restored dataset (with rollback)</button></div><p id="backup-result" role="status"></p></section>
     <section class="card"><h2>Migrate existing patient workspace</h2><p>Move to a different local drive or folder without losing the originals. The clinical engine is stopped for the verified copy, an encrypted recovery backup is created first, and HMR Desk restarts after updating its workspace.</p><button type="button" data-workspace-migrate>Migrate current workspace safely</button><p role="status" id="migration-result"></p></section>
     <section id="saved-sign-ins"><h2>Saved sign-ins</h2><p>Sign-ins save by themselves.</p>
     <p>Stored encrypted for your Windows account on this PC only. Anyone who can use your Windows account can use them.</p>
@@ -165,6 +165,23 @@ function askEncryptedBackupPassphrase(action) {
 }
 
 async function agentClick(b) {
+  if (b.dataset.restoredActivate !== undefined) {
+    const passphrase = await askEncryptedBackupPassphrase('create');
+    if (passphrase == null) return true;
+    const output = $('backup-result');
+    b.disabled = true;
+    if (output) output.textContent = 'Verifying isolated case files and preparing a recoverable activation...';
+    try {
+      const result = await hmr.activateRestored(passphrase);
+      if (output) output.textContent = result.cancelled
+        ? 'Activation cancelled; live patient files are unchanged'
+        : 'Verified recovered data activated, previous database retained. HMR Desk is restarting.';
+    } catch(error) {
+      if (output) output.textContent = errorText(error);
+      b.disabled = false;
+    }
+    return true;
+  }
   if (b.dataset.workspaceMigrate !== undefined) {
     const passphrase = await askEncryptedBackupPassphrase('create');
     if (passphrase == null) return true;
