@@ -114,3 +114,27 @@ def test_plaintext_staging_uses_private_data_root(tmp_path, monkeypatch):
     if os.name != 'nt':
         assert private.stat().st_mode & 0o777 == 0o700
     conn.close()
+
+
+def test_read_only_backup_preview_verifies_patient_scope_and_never_restores(tmp_path, monkeypatch):
+    workspace = tmp_path / 'workspace'
+    workspace.mkdir()
+    (workspace / 'synthetic.json').write_text('{"test":true}')
+    data = tmp_path / 'data'
+    monkeypatch.setattr(db, 'BASE', str(workspace))
+    monkeypatch.setattr(db, 'DATA_DIR', str(data))
+    conn = db.connect(str(data / 'hmr.db'))
+    with conn:
+        conn.execute("INSERT INTO patients(key,name) VALUES ('synthetic','Synthetic Example')")
+    backup = tmp_path / 'test.hmrbak'
+    backup_bundle.create(conn, workspace, backup, 'synthetic-strong-passphrase')
+    before = sorted(tmp_path.iterdir())
+    preview = backup_bundle.restore(backup, None, 'synthetic-strong-passphrase', preview_only=True)
+    assert preview['verified'] is True
+    assert preview['patients'] == 1
+    assert preview['workspace_files'] == 1
+    assert preview['will_activate'] is False
+    assert sorted(tmp_path.iterdir()) == before
+    with pytest.raises(ValueError, match='Wrong passphrase'):
+        backup_bundle.restore(backup, None, 'not-the-right-passphrase', preview_only=True)
+    conn.close()
