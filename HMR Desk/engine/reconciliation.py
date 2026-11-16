@@ -90,3 +90,25 @@ def digest(record):
               "details": {k: (record.get("details") or {}).get(k, [])
                           for k in ("meds", "other_meds")}}
     return hashlib.sha256(json.dumps(subset, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+
+def review_status(record, saved=None):
+    """Only a pharmacist acknowledgement for the current digest is valid."""
+    current = digest(record)
+    saved = saved if isinstance(saved, dict) else {}
+    reviewed = saved.get('source_hash') == current and bool(saved.get('reviewed_at'))
+    return {'source_hash': current, 'reviewed': reviewed,
+            'stale': bool(saved.get('reviewed_at')) and not reviewed,
+            'reviewed_at': saved.get('reviewed_at') if reviewed else None,
+            'reviewed_by': saved.get('reviewed_by') if reviewed else None}
+
+
+def acknowledge(record, source_hash, reviewed_by):
+    """Persist an explicit, version-bound review; never mark unknown medicines taking."""
+    import datetime
+    if source_hash != digest(record):
+        raise ValueError('Medicines changed; reload the reconciliation before acknowledging')
+    if not isinstance(reviewed_by, str) or not reviewed_by.strip() or len(reviewed_by) > 120:
+        raise ValueError('Pharmacist identity required for acknowledgement')
+    return {'version': VERSION, 'source_hash': source_hash,
+            'reviewed_by': reviewed_by.strip(),
+            'reviewed_at': datetime.datetime.now(datetime.timezone.utc).isoformat()}
