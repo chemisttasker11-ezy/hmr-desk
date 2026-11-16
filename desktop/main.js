@@ -17,7 +17,7 @@ const configPath = path.join(dataDir, 'app-config.json');
 // Invalid historical configuration is retained under an .invalid-* copy.
 // Never guess or silently reassign a patient workspace.
 const loadedConfig = require('./src/config-load').loadConfig(configPath, defaults);
-const isFirstRun = loadedConfig.firstRun;
+let isFirstRun = loadedConfig.firstRun;
 // Do not save first-run configuration until the user explicitly selects it.
 const config = loadedConfig.config;
 let engineOwner = null;
@@ -591,6 +591,7 @@ if (hasLock)
     // Recover interrupted SQLite/config activation before any engine opens data.
     if (await require('./src/restore-activation').recoverInterruptedRestore(dataDir,configPath)) {
       Object.assign(config, JSON.parse(await fsp.readFile(configPath,'utf8')));
+      isFirstRun = false;
     }
     if (isFirstRun && app.isPackaged && !process.env.HMR_SMOKE_DATA && !process.env.HMR_API) {
       const choice = await dialog.showMessageBox({
