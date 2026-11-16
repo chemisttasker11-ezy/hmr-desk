@@ -1,5 +1,12 @@
 """Authenticated, passphrase-encrypted, full-workspace HMR backup and isolated restore.
 
+A backup holds the SQLite database (which also stores every app setting), the
+whole patient workspace, and the locally registered approved report template
+folder (approved template, its approval manifest and revision history) under
+``data/templates/``. Machine-specific files such as app-config.json (an
+absolute workspace path) and the per-session API token are deliberately not
+included.
+
 Format: HMRBKP1 + 16 byte scrypt salt + 12 byte AES-256-GCM nonce +
 streamed ciphertext + 16 byte GCM tag. No key or password is written to disk.
 """
@@ -25,6 +32,36 @@ MAGIC = b'HMRBKP1'
 CHUNK = 1024 * 1024
 MAX_FILES = 25000
 MAX_UNPACKED = 16 * 1024 ** 3
+TEMPLATE_PREFIX = ('data', 'templates')
+
+
+def _safe_data_entry(parts):
+    """Only the database and the approved-template folder may live under data/."""
+    if parts[0] == 'workspace':
+        return True
+    return parts == ('data', 'hmr.db') or (len(parts) >= 3 and parts[:2] == TEMPLATE_PREFIX)
+
+
+def _template_files(data_root):
+    folder = data_root / 'templates'
+    if folder.is_symlink():
+        raise ValueError('Unsafe template folder')
+    found = []
+    if folder.is_dir():
+        for item in sorted(folder.rglob('*')):
+            if item.is_symlink():
+                raise ValueError('Template folder contains a symlink; remove it before backup')
+            if item.is_file() and not item.name.startswith('.approved-'):
+                found.append(('data/templates/' + item.relative_to(folder).as_posix(), item))
+    return found
+
+
+def _scan(workspace, templates):
+    scanned = {('workspace/' + item.relative_to(workspace).as_posix()):
+               (item.stat().st_size, item.stat().st_mtime_ns)
+               for item in workspace.rglob('*') if item.is_file() and not item.is_symlink()}
+    scanned.update({name: (path.stat().st_size, path.stat().st_mtime_ns) for name, path in templates})
+    return scanned
 
 
 def key_for(password, salt):
@@ -84,6 +121,8 @@ def create(conn, workspace, output, password):
         zipped = root / 'snapshot.zip'
         index = {}
         paths = [('data/hmr.db', database)]
+        templates = _template_files(data_root)
+        paths.extend(templates)
         for item in sorted(workspace.rglob('*')):
             if item.is_symlink():
                 raise ValueError('Workspace contains a symlink; remove it before backup')
@@ -92,8 +131,7 @@ def create(conn, workspace, output, password):
         # Capture the complete file set and metadata. If a parallel interview,
         # referral or report save changes anything, abort rather than publish
         # a deceptively successful but inconsistent multi-file archive.
-        before = {name: (item.stat().st_size, item.stat().st_mtime_ns)
-                  for name, item in paths[1:]}
+        before = _scan(workspace, templates)
         if len(paths) > MAX_FILES:
             raise ValueError('Too many files to back up')
         with zipfile.ZipFile(zipped, 'w', zipfile.ZIP_DEFLATED, allowZip64=True) as archive:
@@ -121,9 +159,7 @@ def create(conn, workspace, output, password):
                 encrypted.write(encryptor.tag)
                 encrypted.flush()
                 os.fsync(encrypted.fileno())
-            current = {('workspace/' + item.relative_to(workspace).as_posix()):
-                       (item.stat().st_size, item.stat().st_mtime_ns)
-                       for item in workspace.rglob('*') if item.is_file() and not item.is_symlink()}
+            current = _scan(workspace, _template_files(data_root))
             if current != before or conn.total_changes != total_changes or (
                     conn.execute('PRAGMA data_version').fetchone()[0] != data_version):
                 raise ValueError('Patient workspace or database changed during backup; retry when no edits are pending')
@@ -195,7 +231,8 @@ def restore(source, destination, password, preview_only=False):
                 size = 0
                 for name in names[:-1]:
                     part = Path(name)
-                    if part.is_absolute() or '..' in part.parts or part.parts[0] not in ('data', 'workspace'):
+                    if (part.is_absolute() or '..' in part.parts or len(part.parts) < 2 or
+                            part.parts[0] not in ('data', 'workspace') or not _safe_data_entry(part.parts)):
                         raise ValueError('Unsafe archive path')
                     size += archive.getinfo(name).file_size
                     if size > MAX_UNPACKED:
@@ -223,6 +260,7 @@ def restore(source, destination, password, preview_only=False):
                         'files': len(files),
                         'bytes_uncompressed': size,
                         'workspace_files': sum(name.startswith('workspace/') for name in files),
+                        'template_files': sum(name.startswith('data/templates/') for name in files),
                         'will_activate': False,
                     }
             # The independently restored directory carries the authenticated
@@ -260,7 +298,7 @@ def verify_isolated(destination):
             raise ValueError('Unsafe recovery entry')
         parts = Path(filename)
         if (parts.is_absolute() or len(parts.parts) < 2 or '..' in parts.parts or
-                parts.parts[0] not in ('data', 'workspace')):
+                parts.parts[0] not in ('data', 'workspace') or not _safe_data_entry(parts.parts)):
             raise ValueError('Unsafe recovery file path')
         original = destination.joinpath(*parts.parts)
         if original.is_symlink() or not original.is_file() or not _within(destination, original.resolve()):
@@ -282,7 +320,8 @@ def verify_isolated(destination):
             raise ValueError('Isolated restored SQLite failed integrity check')
     if not (destination / 'workspace').is_dir():
         raise ValueError('Recovered workspace missing')
-    return {'verified': True, 'files': len(entries), 'bytes': total, 'patients': _patient_count(database)}
+    return {'verified': True, 'files': len(entries), 'bytes': total, 'patients': _patient_count(database),
+            'template_files': sum(name.startswith('data/templates/') for name in entries)}
 
 
 def _patient_count(database):
