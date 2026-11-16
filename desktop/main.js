@@ -467,6 +467,57 @@ ipcMain.handle('encrypted-backup', async (e, action, passphrase) => {
   return api('POST', '/api/backups/restore',
     { source: chosen.filePaths[0], destination: dest, passphrase });
 });
+ipcMain.handle('activate-restored', async (e, passphrase) => {
+  if (e.sender !== win.webContents || typeof passphrase !== 'string' ||
+      passphrase.length < 12 || passphrase.length > 512 || !engineOwner || engineShutdownStarted)
+    throw Error('Invalid recovery activation request');
+  const chosen = await dialog.showOpenDialog(win, {
+    title: 'Choose an isolated restored dataset containing data and workspace folders',
+    properties: ['openDirectory'],
+  });
+  if (chosen.canceled || !chosen.filePaths.length) return {cancelled:true};
+  const recovery = require('./src/restore-activation');
+  const inventory = await recovery.verifyRestored(chosen.filePaths[0]);
+  const backup = await dialog.showSaveDialog(win, {
+    title: 'Mandatory encrypted backup of CURRENT data before activating recovered cases',
+    defaultPath: path.join(app.getPath('documents'),'hmr-before-restore-activation.hmrbak'),
+    filters:[{name:'Encrypted HMR backup',extensions:['hmrbak']}],
+  });
+  if (backup.canceled || !backup.filePath) return {cancelled:true};
+  const confirmation = await dialog.showMessageBox(win, {
+    type:'warning',title:'Activate restored HMR dataset',
+    message:'Replace active patient database with ' + inventory.files +
+      ' verified files (' + inventory.bytes + ' bytes)?',
+    detail:'First, HMR Desk encrypts a complete CURRENT backup. It then stops the engine, preserves the old SQLite database and old workspace for rollback, installs the verified recovered data and restarts. No existing patient files are deleted.',
+    buttons:['Back up and activate', 'Cancel'], defaultId:1,cancelId:1,noLink:true,
+  });
+  if (confirmation.response !== 0) return {cancelled:true};
+  await api('POST','/api/backups/create',{target:backup.filePath,passphrase});
+  engineShutdownStarted=true;
+  try {
+    await engineOwner.stop();
+    engineOwner=null;
+    const outcome=await recovery.activateRestored(chosen.filePaths[0],dataDir,configPath);
+    config.base=outcome.workspace;
+    app.relaunch();
+    app.quit();
+    return {restarting:true,previousDataPreserved:true};
+  } catch(error) {
+    engineShutdownStarted=false;
+    if (!engineOwner) {
+      try {
+        const disk=JSON.parse(await fsp.readFile(configPath,'utf8'));
+        config.base=disk.base;
+        engineOwner=await startEngine({resourcesPath:process.resourcesPath,dataDir,
+          workspace:config.base,config,onCrash:restartEngineAfterCrash});
+      } catch {
+        win?.webContents?.send('engine-state',{ready:false,reason:
+          'Recovery activation did not complete. The prior database and workspace have been preserved. Restart HMR Desk.'});
+      }
+    }
+    throw error;
+  }
+});
 ipcMain.handle('migrate-workspace', async (e, passphrase) => {
   if (e.sender !== win.webContents || typeof passphrase !== 'string' ||
       passphrase.length < 12 || passphrase.length > 512 || !engineOwner)
@@ -537,6 +588,10 @@ app.on('second-instance', () => {
 });
 if (hasLock)
   app.whenReady().then(async () => {
+    // Recover interrupted SQLite/config activation before any engine opens data.
+    if (await require('./src/restore-activation').recoverInterruptedRestore(dataDir,configPath)) {
+      Object.assign(config, JSON.parse(await fsp.readFile(configPath,'utf8')));
+    }
     if (isFirstRun && app.isPackaged && !process.env.HMR_SMOKE_DATA && !process.env.HMR_API) {
       const choice = await dialog.showMessageBox({
         type: 'question', title: 'HMR Desk — first-run storage',
