@@ -29,6 +29,7 @@ def main():
         process = subprocess.Popen(cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         try:
             health = None
+            last_error = 'not yet attempted'
             until = time.monotonic() + 35
             while time.monotonic() < until:
                 if process.poll() is not None:
@@ -39,9 +40,17 @@ def main():
                     with urlopen(req, timeout=1.5) as resp:
                         health = json.load(resp)
                     break
-                except (OSError, ValueError):
+                except (OSError, ValueError) as exc:
+                    last_error = type(exc).__name__ + ': ' + str(exc)[:120]
                     time.sleep(0.25)
-            assert health and health['ready'], 'No authenticated health response'
+            if not health:
+                log = data / 'engine.log'
+                print('Engine process state:', process.poll(), 'Last health error:', last_error)
+                print('Token file exists:', (data / 'api_token').is_file())
+                if log.is_file():
+                    print('Synthetic engine log tail:', '\\n'.join(log.read_text(errors='replace').splitlines()[-18:]))
+                raise AssertionError('No authenticated health response')
+            assert health['ready']
             assert health['engine_version'] == '0.1.0'
             assert (data / 'hmr.db').is_file()
             assert (data / 'api_token').is_file()
