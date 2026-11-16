@@ -107,7 +107,7 @@ def project(record, *, sex=""):
         # Pathology date, report header and free-text comments stay local.
         # Only clearly numeric results are eligible; everything else is withheld.
         value = row[1].strip() if isinstance(row[1], str) else ""
-        if not re.fullmatch(r"-?\\d+(?:\\.\\d+)?", value):
+        if not re.fullmatch(r"-?\d+(?:\.\d+)?", value):
             continue
         pathology.append({"id": "lab_" + str(i + 1),
                           "test": clean(row[0], label=True),
