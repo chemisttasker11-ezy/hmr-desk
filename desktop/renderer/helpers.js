@@ -322,16 +322,47 @@ const H = (() => {
   function tableInput(key, title, columns, rows, prefix) {
     return `<div class="interview-table"><table><thead><tr>${columns.map((c) => `<th scope="col">${esc(c)}</th>`).join('')}<th>Remove</th></tr></thead><tbody>${(rows || []).map((row, i) => `<tr>${columns.map((c, j) => `<td>${prefix === 'report' && !(key === 'meds' && j >= 2) ? `<input data-field="${esc(key)}" data-row="${i}" data-col="${j}" aria-label="${esc(c)} row ${i + 1}" value="${esc(row[j] || '')}">` : `<textarea data-field="${esc(key)}" data-row="${i}" data-col="${j}" aria-label="${esc(c)} row ${i + 1}">${esc(row[j] || '')}</textarea>`}${j === 0 && (key === 'meds' || (prefix === 'interview' && key === 'other_meds')) ? `<button type="button" data-amh-row aria-label="Search AMH for ${esc(c)} row ${i + 1}">AMH</button>` : ''}</td>`).join('')}<td><button type="button" data-${prefix}-remove="${esc(key)}" data-row="${i}" aria-label="Remove ${esc(title)} row ${i + 1}">Remove</button></td></tr>`).join('')}</tbody></table></div><button type="button" data-${prefix}-add="${esc(key)}">Add row</button>`;
   }
+  function draftStorage() {
+    // Plaintext localStorage is a legacy source only. In the packaged app
+    // DPAPI-protected Electron IPC is the *sole* destination for new drafts.
+    const vault = typeof window !== 'undefined' && window.hmr?.draftStore;
+    if (!vault) return localStorage; // pure Node unit harness without Electron
+    const legacyKeys = () => Array.from({ length: localStorage.length }, (_, i) => localStorage.key(i))
+      .filter(key => key?.startsWith('hmr-draft:'));
+    const allKeys = () => [...new Set([...vault.keys(), ...legacyKeys()])];
+    return {
+      get length() { return allKeys().length; },
+      key: index => allKeys()[index] || null,
+      getItem(key) {
+        const secured = vault.getItem(key);
+        if (secured != null) return secured;
+        const old = localStorage.getItem(key);
+        if (old != null) {
+          vault.setItem(key, old); // persist encrypted before removing legacy source
+          localStorage.removeItem(key);
+        }
+        return old;
+      },
+      setItem(key, value) {
+        vault.setItem(key, value);
+        localStorage.removeItem(key);
+      },
+      removeItem(key) {
+        vault.removeItem(key);
+        localStorage.removeItem(key);
+      },
+    };
+  }
   function interviewDrafts() {
     const drafts = [], prefix = 'hmr-draft:interview:';
     try {
-      for (let i = 0; i < localStorage.length; i++) {
-        const key = localStorage.key(i);
+      for (let i = 0; i < draftStorage().length; i++) {
+        const key = draftStorage().key(i);
         if (!key || !key.startsWith(prefix)) continue;
         const id = key.slice(prefix.length);
         if (!/^[1-9][0-9]*$/.test(id)) continue;
         try {
-          const entry = JSON.parse(localStorage.getItem(key));
+          const entry = JSON.parse(draftStorage().getItem(key));
           if (!entry || typeof entry.base !== 'string' || typeof entry.snapshot !== 'string' || !Array.isArray(entry.conflicts || [])) continue;
           const record = JSON.parse(entry.snapshot);
           if (!record || typeof record !== 'object' || Array.isArray(record)) continue;
@@ -355,7 +386,7 @@ const H = (() => {
     function writeDraft() {
       if (!draftKey || !key || !getRecord()) return true;
       try {
-        localStorage.setItem(key, JSON.stringify({ base: saved, snapshot: JSON.stringify(getRecord()), conflicts }));
+        draftStorage().setItem(key, JSON.stringify({ base: saved, snapshot: JSON.stringify(getRecord()), conflicts }));
         storageError = false;
         return true;
       } catch (_) {
@@ -367,8 +398,8 @@ const H = (() => {
     function removeDraft(snapshot, draftId) {
       if (!draftId) return;
       try {
-        const entry = JSON.parse(localStorage.getItem(draftId));
-        if (entry && (entry.snapshot === snapshot || equivalent?.(entry.snapshot, snapshot)) && (!entry.conflicts || !entry.conflicts.length)) localStorage.removeItem(draftId);
+        const entry = JSON.parse(draftStorage().getItem(draftId));
+        if (entry && (entry.snapshot === snapshot || equivalent?.(entry.snapshot, snapshot)) && (!entry.conflicts || !entry.conflicts.length)) draftStorage().removeItem(draftId);
       } catch (_) { /* Preserve an unreadable draft for manual recovery. */ }
     }
     function scheduleRetry() {
@@ -377,7 +408,7 @@ const H = (() => {
       timer = setTimeout(() => { retries++; save(); }, 10000);
     }
     function readDraft(draftId) {
-      const raw = localStorage.getItem(draftId);
+      const raw = draftStorage().getItem(draftId);
       if (!raw) return null;
       const entry = JSON.parse(raw);
       if (typeof entry.base !== 'string' || typeof entry.snapshot !== 'string' || !Array.isArray(entry.conflicts || [])) throw new Error();
@@ -560,9 +591,9 @@ const H = (() => {
         if (!record || !draft || typeof draft !== 'object' || Array.isArray(draft)) return false;
         try {
           const archiveKey = key + ':conflict-history';
-          const history = JSON.parse(localStorage.getItem(archiveKey) || '[]');
+          const history = JSON.parse(draftStorage().getItem(archiveKey) || '[]');
           history.push({ remote: JSON.stringify(record), local: conflicts[0] });
-          localStorage.setItem(archiveKey, JSON.stringify(history));
+          draftStorage().setItem(archiveKey, JSON.stringify(history));
         } catch (_) { status(storageMessage); return false; }
         if (choice === 'restore') {
           const remote = JSON.parse(saved);
