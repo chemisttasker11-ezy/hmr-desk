@@ -2,13 +2,14 @@
 Location: %USERPROFILE%\\HMR-Desk-data\\hmr.db (see DATA_DIR); override with env HMR_DB (tests).
 Run `python db.py` for a self-check."""
 import datetime, json, os, re, sqlite3
+import app_paths
 
-BASE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # ...\HMR Ongoing
+BASE = str(app_paths.workspace_root())
 
 
 # Not under AppData: Claude Desktop is a packaged app, so programs it launches get a private redirected copy of
 # AppData and a database there splits into two copies. Not under OneDrive either.
-DATA_DIR = os.environ.get('HMR_DATA_DIR') or os.path.join(os.environ['USERPROFILE'], 'HMR-Desk-data')
+DATA_DIR = str(app_paths.data_root())
 
 
 def db_path():
