@@ -1,0 +1,6 @@
+# Reference imports are local, licensed data, not source fixtures.
+__pycache__/
+*.zip
+*.csv
+*.sqlite*
+*.db*
