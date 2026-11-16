@@ -181,7 +181,7 @@ def now():
 def patient_key(name):
     """'Mr Alex Quinn Example' and 'alex example' -> 'alex example' (first + last word, letters only)."""
     original = unicodedata.normalize('NFKC', str(name or '')).casefold().strip()
-    original = re.sub(r'^(?:mr|mrs|ms|miss|dr)\\.?\\s+', '', original)
+    original = re.sub(r'^(?:mr|mrs|ms|miss|dr)\.?\s+', '', original)
     tokens = []
     for fragment in original.split():
         clean = ''.join(char for char in fragment
