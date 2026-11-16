@@ -134,10 +134,29 @@ def _derived(conn, patient):
     clinical_pathology = pathology_records.load(patient)
     verified_pathology = clinical_pathology['records']
     verification = clinical_pathology.get('verification', {})
+    def _date_key(raw):
+        raw = (raw or '').strip()
+        for fmt in ('%Y-%m-%d', '%d/%m/%Y', '%d-%m-%Y'):
+            try:
+                return dt.datetime.strptime(raw[:10], fmt).date().isoformat()
+            except ValueError:
+                pass
+        return raw.casefold()
+    def _legacy_key(row):
+        return (row[0].strip().casefold(), row[1].strip().casefold(), _date_key(row[2]))
+    structured_keys = {
+        (row['test'].strip().casefold(), row['value'].strip().casefold(),
+         _date_key(row['sample_date']))
+        for row in verified_pathology
+        if row['test'].strip() and row['value'].strip() and row['sample_date']
+    }
+    # Keep original legacy JSON unchanged. Show a matching structured record
+    # only once in the report; unresolved legacy rows stay visibly unverified.
     pathology_table = [[r[0], r[1], '', '',
                         'UNVERIFIED legacy interview entry — confirm against original source | ' +
                         ' '.join(filter(None, (r[3], ('Date: ' + r[2]) if r[2] else '')))]
-                       for r in record['pathology'] if any(r)]
+                       for r in record['pathology']
+                       if any(r) and _legacy_key(r) not in structured_keys]
     for result in verified_pathology:
         if not result['test'].strip(): continue
         pathology_table.append([
