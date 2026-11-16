@@ -415,7 +415,13 @@ if (hasLock)
       win = null;
     });
   });
-app.on('before-quit', () => { if (engineOwner) engineOwner.stop(); });
+let engineShutdownStarted = false;
+app.on('before-quit', event => {
+  if (!engineOwner || engineShutdownStarted) return;
+  event.preventDefault();
+  engineShutdownStarted = true;
+  engineOwner.stop().finally(() => app.quit());
+});
 app.on('window-all-closed', () => app.quit());
 
 async function captureShots() {
