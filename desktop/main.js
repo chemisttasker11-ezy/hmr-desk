@@ -14,11 +14,12 @@ const defaults = {
 };
 fs.mkdirSync(dataDir, { recursive: true });
 const configPath = path.join(dataDir, 'app-config.json');
-const isFirstRun = !fs.existsSync(configPath);
-// Do not save first-run configuration until the user accepts the workspace.
-// Cancellation must show the wizard again on the next launch, not silently
-// accept the default path.
-const config = { ...defaults, ...(isFirstRun ? {} : JSON.parse(fs.readFileSync(configPath, 'utf8'))) };
+// Invalid historical configuration is retained under an .invalid-* copy.
+// Never guess or silently reassign a patient workspace.
+const loadedConfig = require('./src/config-load').loadConfig(configPath, defaults);
+const isFirstRun = loadedConfig.firstRun;
+// Do not save first-run configuration until the user explicitly selects it.
+const config = loadedConfig.config;
 let engineOwner = null;
 const { start: startEngine } = require('./src/engine-owner');
 const { verifyWorkspace } = require('./src/storage-choice');
@@ -480,7 +481,8 @@ if (hasLock)
       const choice = await dialog.showMessageBox({
         type: 'question', title: 'HMR Desk — first-run storage',
         message: 'Choose where HMR patient files are kept',
-        detail: 'The recommended folder is on this Windows account. You may select a different writable local folder. Existing patient data is never imported or moved without a separate confirmed migration.',
+        detail: (loadedConfig.recovery ? loadedConfig.recovery + '\\n\\n' : '') +
+          'The recommended folder is on this Windows account. You may select a different writable local folder. Existing patient data is never imported or moved without a separate confirmed migration.',
         buttons: ['Use recommended folder', 'Choose a different folder', 'Exit'],
         defaultId: 0, cancelId: 2, noLink: true,
       });
