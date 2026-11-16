@@ -6,15 +6,24 @@ $root = Split-Path -Parent $PSScriptRoot
 $vendor = Join-Path $root 'vendor'
 $final = Join-Path $vendor 'libreoffice'
 $soffice = Join-Path $final 'program\\soffice.exe'
+$version = '25.8.7'
+$expected = 'ecdb65e76f5e91dc198b8c8dce5b5d6e1eb12fea6023553e52b591afd10b619d'
 if (Test-Path $soffice) {
-  Write-Host 'Bundled LibreOffice runtime already present'
+  $manifestFile = Join-Path $final 'HMR-BUNDLE-MANIFEST.json'
+  if (-not (Test-Path $manifestFile)) { throw 'Cached LibreOffice lacks verified provenance manifest' }
+  $cached = Get-Content $manifestFile -Raw | ConvertFrom-Json
+  $actualExe = (Get-FileHash $soffice -Algorithm SHA256).Hash.ToLowerInvariant()
+  $license = Get-ChildItem $final -Filter 'LICENSE*' -File -Recurse | Select-Object -First 1
+  if (-not $license -or $cached.version -ne $version -or
+      $cached.source_sha256 -ne $expected -or $cached.executable_sha256 -ne $actualExe) {
+    throw 'Cached LibreOffice version, hash or licence invalid; refusing unverified redistribution'
+  }
+  Write-Host 'Cached LibreOffice runtime and licence revalidated'
   exit 0
 }
 New-Item -ItemType Directory -Path $vendor -Force | Out-Null
 $work = Join-Path $env:TEMP ('hmr-libreoffice-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $work | Out-Null
-$version = '25.8.7'
-$expected = 'ecdb65e76f5e91dc198b8c8dce5b5d6e1eb12fea6023553e52b591afd10b619d'
 $url = 'https://download.documentfoundation.org/libreoffice/stable/25.8.7/win/x86_64/LibreOffice_25.8.7_Win_x86-64.msi'
 $download = Join-Path $work 'libreoffice.msi'
 $stage = Join-Path $work 'msi-content'
