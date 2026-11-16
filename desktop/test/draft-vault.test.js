@@ -40,3 +40,25 @@ test('missing OS encryption fails closed and refuses plaintext writes', () => {
     assert.ok(!fs.existsSync(path.join(dir, 'secure')));
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('vault refuses drafts until the DPAPI key is persisted (first-launch guard)', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hmr-draft-vault-'));
+  try {
+    let persisted = false;
+    const vault = makeVault(path.join(dir, 'secure'), fakeProtectedStore(), { keyPersisted: () => persisted });
+    const key = 'hmr-draft:report:7';
+    assert.throws(() => vault.setItem(key, '{}'), /still starting/);
+    assert.throws(() => vault.getItem(key), /still starting/);
+    assert.equal(fs.existsSync(path.join(dir, 'secure')), false);
+    persisted = true;
+    vault.setItem(key, '{"a":1}');
+    assert.equal(vault.getItem(key), '{"a":1}');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('report and follow-up editors keep protected drafts like the interview', () => {
+  const read = file => fs.readFileSync(path.join(__dirname, '..', 'renderer', file), 'utf8');
+  assert.match(read('report-editor.js'), /draftKey: \(\) => `report:\$\{reportId\}`/);
+  assert.match(read('interview.js'), /draftKey: \(\) => `followup:\$\{followupId\}-\$\{followupNumber\}`/);
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8'), /keyPersisted: osCryptKeyPersisted/);
+});
