@@ -15,8 +15,10 @@ const defaults = {
 fs.mkdirSync(dataDir, { recursive: true });
 const configPath = path.join(dataDir, 'app-config.json');
 const isFirstRun = !fs.existsSync(configPath);
-if (isFirstRun) fs.writeFileSync(configPath, JSON.stringify(defaults, null, 2));
-const config = { ...defaults, ...JSON.parse(fs.readFileSync(configPath, 'utf8')) };
+// Do not save first-run configuration until the user accepts the workspace.
+// Cancellation must show the wizard again on the next launch, not silently
+// accept the default path.
+const config = { ...defaults, ...(isFirstRun ? {} : JSON.parse(fs.readFileSync(configPath, 'utf8'))) };
 let engineOwner = null;
 const { start: startEngine } = require('./src/engine-owner');
 const { verifyWorkspace } = require('./src/storage-choice');
