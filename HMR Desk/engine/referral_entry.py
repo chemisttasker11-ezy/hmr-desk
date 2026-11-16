@@ -49,11 +49,11 @@ def review(conn, paths):
                 if doc.needs_pass: raise ValueError('PDF is password protected')
                 pages = [p.get_text() for p in doc]
             if not pages: raise ValueError('PDF has no pages')
-            methods = ['text' if len(page.strip()) >= 200 else 'ocr' for page in pages]
+            methods = ['text' if len(page.strip()) >= 25 else 'ocr' for page in pages]
             if 'ocr' in methods:
                 ocr = module.ocr_pdfs([Path(source)]).get(str(Path(source)), [])
                 if len(ocr) != len(pages): raise ValueError('OCR did not return every page')
-                pages = [page if len(page.strip()) >= 200 else ocr[i] for i, page in enumerate(pages)]
+                pages = [page if len(page.strip()) >= 25 else ocr[i] for i, page in enumerate(pages)]
                 if hashlib.sha256(read_pdf(source)).hexdigest() != digest: raise ValueError('Source changed during review; try again')
             kind, _, flags = module.classify('\n'.join(pages))
             fields = {}
