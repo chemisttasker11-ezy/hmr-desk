@@ -10,6 +10,10 @@ datas = [(str(assets), 'assets')] if assets.is_dir() else []
 legacy = root.parent.parent / 'scripts' / 'intake'
 if (legacy / 'intake.py').is_file():
     datas.append((str(legacy), 'scripts/intake'))
+for source in ('Android_SMS_Integration', 'MIMS Interaction Helper', 'PPA Claim Helper'):
+    own = root.parent.parent / source
+    if own.is_dir():
+        datas.append((str(own), source))
 
 a = Analysis(
     [str(root / 'engine_main.py')],
