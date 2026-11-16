@@ -31,7 +31,7 @@ def test_legacy_schema_upgrade_preserves_rows_and_does_not_reapply(tmp_path, mon
         assert upgraded.execute('PRAGMA user_version').fetchone()[0] == 1
         snapshots = list((tmp_path / 'userdata' / '.migration-snapshots').glob('before-schema-*.db'))
         assert len(snapshots) == 1
-        with sqlite3.connect(snapshots[0]) as previous:
+        with db.open_encrypted(snapshots[0]) as previous:
             assert previous.execute('PRAGMA user_version').fetchone()[0] == 0
             assert previous.execute("SELECT name FROM patients WHERE key='prior'").fetchone()[0] == 'Prior Synthetic'
         assert upgraded.execute("SELECT name FROM patients WHERE key='prior'").fetchone()[0] == 'Prior Synthetic'
@@ -51,7 +51,7 @@ def test_newer_database_refused_without_modification(tmp_path):
         future.execute("INSERT INTO sentinel VALUES ('untouched')")
     with pytest.raises(RuntimeError, match='newer'):
         db.connect(str(target))
-    with sqlite3.connect(target) as check:
+    with db.open_encrypted(target) as check:
         assert check.execute('PRAGMA user_version').fetchone()[0] == 999
         assert check.execute('SELECT payload FROM sentinel').fetchone()[0] == 'untouched'
 
@@ -63,8 +63,8 @@ def test_additive_migration_rolls_back_on_column_failure(tmp_path, monkeypatch):
         legacy.executescript(db.SCHEMA)
     original = db._ADDITIVE_COLUMNS
     monkeypatch.setattr(db, '_ADDITIVE_COLUMNS', original + (('patients', 'not_a_column', 'INVALID SQL ('),))
-    with pytest.raises(sqlite3.OperationalError):
+    with pytest.raises(db.sqlite3.OperationalError):
         db.connect(str(target))
-    with sqlite3.connect(target) as check:
+    with db.open_encrypted(target) as check:
         assert check.execute('PRAGMA user_version').fetchone()[0] == 0
         assert 'is_test' not in {r[1] for r in check.execute('PRAGMA table_info(patients)')}
