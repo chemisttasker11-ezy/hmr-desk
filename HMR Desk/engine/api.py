@@ -626,6 +626,21 @@ def handle(conn, method, path, query, body):
             if not isinstance(body, dict) or set(body) != {'source', 'destination', 'passphrase'}: raise ValueError('invalid restore input')
             # Restore into a new, isolated directory; NEVER replace an active database.
             return 200, backup_bundle.restore(body['source'], body['destination'], body['passphrase'])
+        if path == '/api/storage/status' and method == 'GET':
+            return 200, db.storage_status()
+        if path == '/api/storage/recovery-key' and method == 'POST':
+            import dbkey
+            try:
+                return 200, {'recovery_key': dbkey.reveal_recovery_key(db.db_path())}
+            except dbkey.RecoveryKeyError as exc:
+                return 409, {'error': str(exc)}
+        if path == '/api/storage/recovery-key/confirm' and method == 'POST':
+            import dbkey
+            return 200, dbkey.acknowledge_recovery_key(db.db_path())
+        if path == '/api/storage/rotate' and method == 'POST':
+            recovery = db.rotate_key(conn)
+            db.log(conn, None, 'storage_key_rotated', {}, 'app'); conn.commit()
+            return 200, {'recovery_key': recovery}
         if path == '/api/settings' and method == 'GET': return 200, {'settings': settings.listing(conn)}
         if path == '/api/settings' and method == 'POST':
             settings.update(conn, body); db.log(conn, None, 'settings_updated', {'keys': list(body)}, 'api'); conn.commit()
