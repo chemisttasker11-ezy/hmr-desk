@@ -13,6 +13,17 @@ $npm = Get-Content (Join-Path $root 'desktop\package.json') -Raw | ConvertFrom-J
 $python = & python --version
 $node = & node --version
 $sha = (& git -C $root rev-parse HEAD).Trim()
+$pythonFreeze = @(& python -m pip freeze)
+$pythonRequirements = (Get-FileHash (Join-Path $root 'requirements.txt') -Algorithm SHA256).Hash.ToLowerInvariant()
+$pythonBuildRequirements = (Get-FileHash (Join-Path $root 'requirements-build.txt') -Algorithm SHA256).Hash.ToLowerInvariant()
+$npmLock = (Get-FileHash (Join-Path $root 'desktop\\package-lock.json') -Algorithm SHA256).Hash.ToLowerInvariant()
+$vendorFile = Join-Path $root 'vendor\\libreoffice\\HMR-BUNDLE-MANIFEST.json'
+if (-not (Test-Path $vendorFile)) { throw 'Portable converter provenance manifest missing' }
+$converterProvenance = Get-Content $vendorFile -Raw | ConvertFrom-Json
+$notices = @(Get-ChildItem (Join-Path $root 'vendor\\libreoffice') -Recurse -File |
+  Where-Object { $_.Name -like 'LICENSE*' -or $_.Name -like 'NOTICE*' } |
+  ForEach-Object { [IO.Path]::GetRelativePath((Join-Path $root 'vendor\\libreoffice'),$_.FullName).Replace('\\','/') })
+if ($notices.Count -eq 0) { throw 'Converter attribution notice not bundled' }
 $files = @($installer) + @((Get-Item $engine),(Get-Item $lo))
 $checksums = @()
 $records = @()
@@ -32,6 +43,16 @@ $manifest = @{
   signing = 'unsigned engineering candidate; clinical release not approved'
   node_build_version = $node
   python_build_version = $python
+  source_integrity = @{
+    python_requirements_sha256 = $pythonRequirements
+    python_build_requirements_sha256 = $pythonBuildRequirements
+    npm_package_lock_sha256 = $npmLock
+    runtime_python_freeze = $pythonFreeze
+    converter_msi_sha256 = $converterProvenance.source_sha256
+    converter_version = $converterProvenance.version
+    converter_source_url = $converterProvenance.source_url
+    converter_notice_files = $notices
+  }
   files = $records
 }
 $checksums | Set-Content -Encoding ascii (Join-Path $dist 'SHA256SUMS.txt')
