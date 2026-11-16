@@ -32,8 +32,15 @@ try {
   $env:HMR_DPAPI_SMOKE_MODE = 'read'
   $stdout = Join-Path $tempRoot 'reader-out.txt'
   $stderr = Join-Path $tempRoot 'reader-err.txt'
-  $reader = Start-Process -FilePath $electron -ArgumentList ('"' + $probe + '"') -PassThru -Wait -WindowStyle Hidden -RedirectStandardOutput $stdout -RedirectStandardError $stderr
-  if ($reader.ExitCode -ne 0 -or -not ((Get-Content $stdout -Raw) -match 'SYNTHETIC_DPAPI_RECOVERY_PASS')) {
+  $reader = Start-Process -FilePath $electron -ArgumentList ('"' + $probe + '"') -PassThru -WindowStyle Hidden
+  if (-not $reader.WaitForExit(60000)) { Stop-Process -Id $reader.Id -Force -ErrorAction SilentlyContinue; Write-Host 'Reader timed out'; $timedOut = $true }
+  $resultFile = Join-Path $tempRoot 'reader-result.txt'
+  $errorFile = Join-Path $tempRoot 'reader-error.txt'
+  $resultText = if (Test-Path $resultFile) { (Get-Content $resultFile -Raw) } else { '' }
+  if ($resultText -notmatch 'SYNTHETIC_DPAPI_RECOVERY_PASS') {
+    if (Test-Path $errorFile) { Write-Host ('Reader error: ' + (Get-Content $errorFile -Raw)) }
+    Write-Host ('Reader exit code: ' + $reader.ExitCode)
+    Get-ChildItem $tempRoot -Recurse -Force -ErrorAction SilentlyContinue | Select-Object FullName,Length | Format-Table -AutoSize | Out-String | Write-Host
     throw 'Windows protected draft failed cross-process crash recovery'
   }
   Write-Host 'Real Windows Electron protected synthetic draft survived forced termination and restart'
