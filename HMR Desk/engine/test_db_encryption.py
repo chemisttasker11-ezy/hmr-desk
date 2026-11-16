@@ -1,5 +1,6 @@
 """Encrypted database (SQLCipher) regressions. Synthetic data only."""
 import os
+import contextlib
 import sqlite3
 
 import pytest
@@ -7,6 +8,17 @@ import pytest
 import backup_bundle
 import db
 import dbkey
+
+@contextlib.contextmanager
+def plain(path):
+    """A plain SQLite connection that is committed and really closed (Windows keeps files open otherwise)."""
+    conn = sqlite3.connect(path)
+    try:
+        yield conn
+        conn.commit()
+    finally:
+        conn.close()
+
 
 
 @pytest.fixture(autouse=True)
@@ -34,18 +46,19 @@ def test_new_database_is_encrypted_with_key_file(tmp_path, monkeypatch):
     assert b'Synthetic Person' not in target.read_bytes()
     assert (tmp_path / 'userdata' / dbkey.KEY_FILE).exists()
     with pytest.raises(sqlite3.DatabaseError):
-        sqlite3.connect(target).execute('SELECT count(*) FROM sqlite_master').fetchone()
+        with plain(target) as raw:
+            raw.execute('SELECT count(*) FROM sqlite_master').fetchone()
 
 
 def test_plain_database_is_migrated_and_plaintext_removed(tmp_path, monkeypatch):
     target = _paths(tmp_path, monkeypatch)
-    with sqlite3.connect(target) as legacy:
+    with plain(target) as legacy:
         legacy.executescript(db.SCHEMA)
         legacy.execute("INSERT INTO patients(key,name) VALUES ('s','Synthetic Person')")
         legacy.execute('PRAGMA user_version = 0')
     # an old rolling backup is plain too
     old = tmp_path / 'userdata' / 'hmr-backup-Mon.db'
-    with sqlite3.connect(old) as other:
+    with plain(old) as other:
         other.execute('CREATE TABLE t(x)')
         other.execute("INSERT INTO t VALUES ('Synthetic Backup')")
     with db.connect(str(target)) as conn:
@@ -59,7 +72,7 @@ def test_plain_database_is_migrated_and_plaintext_removed(tmp_path, monkeypatch)
 
 def test_failed_migration_leaves_original_untouched(tmp_path, monkeypatch):
     target = _paths(tmp_path, monkeypatch)
-    with sqlite3.connect(target) as legacy:
+    with plain(target) as legacy:
         legacy.execute('CREATE TABLE t(x)')
         legacy.execute("INSERT INTO t VALUES ('keep')")
     key = os.urandom(32)
@@ -70,7 +83,7 @@ def test_failed_migration_leaves_original_untouched(tmp_path, monkeypatch):
     with pytest.raises(ValueError):
         db.encrypt_plain_file(str(target), key)
     assert _is_plain(target)
-    with sqlite3.connect(target) as check:
+    with plain(target) as check:
         assert check.execute('SELECT x FROM t').fetchone()[0] == 'keep'
     assert not (tmp_path / 'userdata' / 'hmr.db.encrypting').exists()
 
