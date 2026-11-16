@@ -1,0 +1,54 @@
+{
+  "name": "hmr-desk",
+  "version": "0.1.0",
+  "private": true,
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test",
+    "smoke": "node dev/smoke.js",
+    "shots": "node dev/shots.js",
+    "dist": "electron-builder --win nsis --x64"
+  },
+  "devDependencies": {
+    "electron": "^45.3.0",
+    "electron-builder": "^26.18.0"
+  },
+  "build": {
+    "appId": "au.hmrdesk.app",
+    "productName": "HMR Desk",
+    "asar": true,
+    "files": [
+      "main.js",
+      "preload.js",
+      "view-preload.js",
+      "index.html",
+      "style.css",
+      "renderer.js",
+      "renderer/**/*",
+      "src/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "HMR Desk"
+    }
+  },
+  "dependencies": {
+    "leaflet": "^1.9.4"
+  }
+}

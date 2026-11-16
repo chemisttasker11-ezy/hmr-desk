@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HMR Desk</title>
+  <link rel="stylesheet" href="node_modules/leaflet/dist/leaflet.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <aside>
+    <div class="brand">HMR Desk</div>
+    <nav id="nav" aria-label="Main navigation"></nav>
+  </aside>
+  <main>
+    <header><div class="header-line"><div><button id="app-back" type="button" aria-label="Back to previous screen">Back</button> <h1 id="title" style="display:inline">Today</h1></div><div><span id="next-visit"></span> <time id="clock"></time></div></div><div id="health" class="connection-chips" role="status">Checking connections&hellip;</div></header>
+    <div id="section-tabs" class="chips"></div>
+    <div id="toolbar" hidden>
+      <button id="back">Page back</button><button id="reload">Reload</button>
+      <label class="address">Address <input id="address" readonly></label>
+      <button id="save-sign-in" hidden>Save sign-in</button>
+      <button id="tab-action" class="primary"></button>
+      <button id="one-off-add" hidden>Add someone not in the list</button>
+    </div>
+    <div id="results" hidden></div>
+    <section id="screen"></section>
+  </main>
+  <script src="node_modules/leaflet/dist/leaflet.js"></script>
+  <script src="renderer/helpers.js"></script>
+  <script src="renderer/today.js"></script>
+  <script src="renderer/dashboard.js"></script>
+  <script src="renderer/patients.js"></script>
+  <script src="renderer/messages.js"></script>
+  <script src="renderer/run.js"></script>
+  <script src="renderer/intake.js"></script>
+  <script src="renderer/reports.js"></script>
+  <script src="renderer/report-editor.js"></script>
+  <script src="renderer/settings.js"></script>
+  <script src="renderer/interview.js"></script>
+  <script src="renderer.js"></script>
+</body>
+</html>

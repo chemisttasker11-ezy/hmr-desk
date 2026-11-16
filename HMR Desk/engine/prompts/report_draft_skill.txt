@@ -1,0 +1,6 @@
+This run is unattended. Follow references/headless.md in your own australian-hmr-report skill copy.
+Use the australian-hmr-report skill and its references/report-runbook.md to prepare the report spec for patient folder: {folder}
+Write only this one new JSON output file: {target}
+Required top-level keys: {keys}
+Do not invent clinical facts. Send nothing. Move or delete nothing. If any input is missing, stop and give a clear message. Never overwrite an existing file.
+The pharmacist checks the full built document visually at sign-off.

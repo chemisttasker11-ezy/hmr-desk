@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "MIMS Interaction Helper",
+  "version": "0.1.0",
+  "description": "Runs each patient's medicine list through the eMIMSplus Interaction Checker and saves one result file per patient.",
+  "permissions": ["downloads"],
+  "host_permissions": ["https://app.emims.plus/*"],
+  "background": {"service_worker": "background.js"},
+  "content_scripts": [{"matches": ["https://app.emims.plus/*"], "js": ["lists.js", "content.js"]}]
+}

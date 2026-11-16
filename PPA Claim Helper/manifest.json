@@ -1,0 +1,8 @@
+{
+  "manifest_version": 3,
+  "name": "PPA Claim Helper",
+  "version": "0.1.0",
+  "description": "Fills the PPA HMR Service Claim form from the HMR register. Never saves or submits: the pharmacist checks and submits.",
+  "host_permissions": ["https://app.ppaonline.com.au/*"],
+  "content_scripts": [{"matches": ["https://app.ppaonline.com.au/*"], "js": ["claims.js", "content.js"]}]
+}
