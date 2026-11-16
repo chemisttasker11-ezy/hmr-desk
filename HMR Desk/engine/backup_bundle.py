@@ -14,6 +14,7 @@ import sqlite3
 import tempfile
 import zipfile
 
+from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 
@@ -137,7 +138,7 @@ def restore(source, destination, password):
                         remaining -= len(chunk)
                         out.write(decryptor.update(chunk))
                     out.write(decryptor.finalize())
-            except ValueError as exc:
+            except (ValueError, InvalidTag) as exc:
                 raise ValueError('Wrong passphrase or corrupt encrypted backup') from exc
             stage = temp / 'restored'
             stage.mkdir()
