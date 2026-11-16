@@ -582,6 +582,10 @@ def handle(conn, method, path, query, body):
             import backup_bundle
             if not isinstance(body, dict) or set(body) != {'target', 'passphrase'}: raise ValueError('invalid backup input')
             return 200, backup_bundle.create(conn, db.BASE, body['target'], body['passphrase'])
+        if path == '/api/backups/preview' and method == 'POST':
+            import backup_bundle
+            if not isinstance(body, dict) or set(body) != {'source', 'passphrase'}: raise ValueError('invalid backup preview')
+            return 200, backup_bundle.restore(body['source'], None, body['passphrase'], preview_only=True)
         if path == '/api/backups/restore' and method == 'POST':
             import backup_bundle
             if not isinstance(body, dict) or set(body) != {'source', 'destination', 'passphrase'}: raise ValueError('invalid restore input')
