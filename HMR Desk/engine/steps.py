@@ -87,6 +87,8 @@ def ai_off(name, conn):
 
 def ready(name, conn, p):
     if ai_off(name, conn): return (False, 'AI assist is off in Settings')
+    if name in ('interview_assist', 'report_draft', 'report_assist') and conn and not settings.get(conn, 'clinical_ai_privacy_ack'):
+        return (False, 'Clinical AI privacy approval required in Settings')
     if name in ('intake_dry', 'intake_apply'):
         return (False, 'Use New referrals to review PDFs before adding patients')
     if name in ('register_xlsx', 'sheet_sync', 'import_history', 'import_history_apply'): return (True, '')
