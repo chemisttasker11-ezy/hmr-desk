@@ -132,7 +132,10 @@ def run(conn, base=db.BASE, source='importer'):
 
     referrals = set()
     intake = newest(sorting.glob('intake_report_*.json'))
-    corrections = read(sorting / 'intake_corrections.json') if (sorting / 'intake_corrections.json').exists() else {}
+    import records
+    corrections = records.get_json(conn, records.GLOBAL_PATIENT, 'intake_corrections.json')
+    if corrections is None:
+        corrections = read(sorting / 'intake_corrections.json') if (sorting / 'intake_corrections.json').exists() else {}
     if intake:
         for entry in read(intake):
             if entry.get('kind') != 'referral':
