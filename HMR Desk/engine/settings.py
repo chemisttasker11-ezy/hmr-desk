@@ -4,8 +4,8 @@ import re
 
 DEFS = {
     'clinical_ai_privacy_ack': ('Enable clinical AI after reviewing de-identified data policy', 'bool', False),
-    'ai_interview_assist': ('AI interview assist', 'bool', True),
-    'ai_report_assist': ('AI report assist', 'bool', True),
+    'ai_interview_assist': ('AI interview assist', 'bool', False),
+    'ai_report_assist': ('AI report assist', 'bool', False),
     'ai_reply_reading': ('AI reply reading', 'select', 'ask', ['off', 'ask', 'auto']),
     'proda_auto_sms_login': ('Automatic PRODA SMS login', 'bool', False),
     'autopilot_paused': ('Pause messaging autopilot', 'bool', False),
