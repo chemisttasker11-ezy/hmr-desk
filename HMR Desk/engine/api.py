@@ -61,8 +61,9 @@ def report_data(conn, p):
 
 def proposal(conn, p):
     path = jobs.interview_spec_path(p)
-    spec = json.loads(path.read_text(encoding='utf-8')) if path.is_file() else {}
-    if not path.is_file():
+    stored_spec = records.get_json(conn, p['id'], 'interview_spec.json')
+    spec = stored_spec if stored_spec is not None else (json.loads(path.read_text(encoding='utf-8')) if path.is_file() else {})
+    if stored_spec is None and not path.is_file():
         saved = records.get_json(conn, p['id'], 'interview.json')
         if saved is not None:
             import interview
@@ -609,20 +610,20 @@ def handle(conn, method, path, query, body):
             if not isinstance(q, str): raise ValueError('invalid search')
             return 200, medicine_reference.search(q)
         if path == '/api/records/status' and method == 'GET':
-            return 200, records.status(conn, lambda row: jobs.patient_folder(row))
+            return 200, records.status(conn, lambda row: jobs.patient_folder(row), jobs.outside_files)
         if path == '/api/records/migrate' and method == 'POST':
-            return 200, records.migrate_all(conn, lambda row: jobs.patient_folder(row))
+            return 200, records.migrate_all(conn, lambda row: jobs.patient_folder(row), jobs.outside_files)
         if path == '/api/records/export' and method == 'POST':
             if not isinstance(body, dict) or set(body) != {'patient_id', 'destination'} or not isinstance(body['patient_id'], int): raise ValueError('invalid export input')
             row = conn.execute('SELECT * FROM patients WHERE id=?', (body['patient_id'],)).fetchone()
-            if not row: raise ValueError('patient not found')
+            if not row and body['patient_id'] != records.GLOBAL_PATIENT: raise ValueError('patient not found')
             dest = Path(body['destination']) if isinstance(body['destination'], str) else None
             if not dest or not dest.is_absolute() or dest.is_symlink(): raise ValueError('choose an export folder')
             resolved = dest.resolve()
             for guarded in (Path(db.DATA_DIR).resolve(), Path(db.BASE).resolve()):
                 if resolved == guarded or guarded in resolved.parents: raise ValueError('export outside the app data and the patient workspace')
-            result = records.export_folder(conn, row['id'], resolved)
-            db.log(conn, row['id'], 'records_exported', {'count': len(result)}, 'api')
+            result = records.export_folder(conn, body['patient_id'], resolved)
+            db.log(conn, row['id'] if row else None, 'records_exported', {'count': len(result)}, 'api')
             conn.commit()
             return 200, {'files': result, 'folder': str(resolved), 'warning': 'This copy is outside the encryption HMR Desk applies to its own storage.'}
         if path == '/api/backups/create' and method == 'POST':
