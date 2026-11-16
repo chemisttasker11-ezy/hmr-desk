@@ -13,6 +13,10 @@ $npm = Get-Content (Join-Path $root 'desktop\package.json') -Raw | ConvertFrom-J
 $python = & python --version
 $node = & node --version
 $sha = (& git -C $root rev-parse HEAD).Trim()
+# On a pull request the checkout is GitHub's synthetic merge commit; the branch head is a different SHA.
+# Record both so the artifact can be traced to the reviewed branch commit.
+$mergeSha = if ($env:HMR_MERGE_SHA) { $env:HMR_MERGE_SHA } else { $sha }
+$headSha = if ($env:HMR_PR_HEAD_SHA) { $env:HMR_PR_HEAD_SHA } else { $sha }
 $pythonFreeze = @(& python -m pip freeze)
 $pythonRequirements = (Get-FileHash (Join-Path $root 'requirements.txt') -Algorithm SHA256).Hash.ToLowerInvariant()
 $pythonBuildRequirements = (Get-FileHash (Join-Path $root 'requirements-build.txt') -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -38,6 +42,8 @@ $manifest = @{
   product = 'HMR Desk'
   version = $npm.version
   git_sha = $sha
+  checkout_merge_sha = $mergeSha
+  pull_request_head_sha = $headSha
   platform = 'win-x64'
   ci_host = 'windows-2022 (not Windows 11 clean VM)'
   signing = 'unsigned engineering candidate; clinical release not approved'
@@ -57,5 +63,5 @@ $manifest = @{
 }
 $checksums | Set-Content -Encoding ascii (Join-Path $dist 'SHA256SUMS.txt')
 $manifest | ConvertTo-Json -Depth 8 | Set-Content -Encoding utf8 (Join-Path $dist 'installer-manifest.json')
-Write-Host ('Engineering installer SHA256 generated for ' + $sha)
+Write-Host ('Engineering installer SHA256 generated for checkout ' + $sha + ' (PR head ' + $headSha + ')')
 Write-Host 'This manifest is not clinical acceptance evidence.'
