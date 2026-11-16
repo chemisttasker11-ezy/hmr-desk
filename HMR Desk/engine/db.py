@@ -85,21 +85,71 @@ STATES = {
 }
 
 
+SCHEMA_VERSION = 1
+
+# Migration 1 preserves historical table contents and upgrades only missing columns.
+# Future migrations must be appended as new numbered steps; never edit an applied step.
+_ADDITIVE_COLUMNS = (
+    ('tasks', 'format', "TEXT NOT NULL DEFAULT 'docx'"),
+    ('patients', 'is_test', 'INTEGER NOT NULL DEFAULT 0'),
+    ('patients', 'call_list', 'INTEGER NOT NULL DEFAULT 0'),
+    ('patients', 'archived_at', 'TEXT'),
+    ('patients', 'hold_from', 'TEXT'),
+    ('messages', 'visit_date', 'TEXT'),
+    ('messages', 'visit_time', 'TEXT'),
+    ('messages', 'ai_intent', 'TEXT'),
+    ('messages', 'ai_summary', 'TEXT'),
+    ('messages', 'ai_confidence', 'REAL'),
+    ('messages', 'ai_reply', 'TEXT'),
+    ('messages', 'ai_draft_id', 'TEXT'),
+)
+
+
+def migrate_schema(conn):
+    """Idempotent, versioned SQLite migration with atomic additive changes.
+
+    PRAGMA user_version is updated in the SAME transaction as ALTER TABLE.
+    A future database is refused rather than silently downgraded. The baseline
+    schema is created separately before this migration for older installations.
+    """
+    version = conn.execute('PRAGMA user_version').fetchone()[0]
+    if version > SCHEMA_VERSION:
+        raise RuntimeError('Database schema is newer than this version of HMR Desk; upgrade the application')
+    if version == SCHEMA_VERSION:
+        return
+    conn.execute('BEGIN IMMEDIATE')
+    try:
+        if version < 1:
+            for table, column, definition in _ADDITIVE_COLUMNS:
+                names = {row[1] for row in conn.execute(f'PRAGMA table_info({table})')}
+                if column not in names:
+                    conn.execute(f'ALTER TABLE {table} ADD COLUMN {column} {definition}')
+            conn.execute('PRAGMA user_version = 1')
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+
 def connect(path=None):
     path = path or db_path()
     os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
     conn = sqlite3.connect(path, timeout=30)
     conn.row_factory = sqlite3.Row
-    conn.execute('PRAGMA journal_mode=WAL')  # the service and one-off commands may open it together
-    conn.executescript(SCHEMA)
-    if 'format' not in {row[1] for row in conn.execute('PRAGMA table_info(tasks)')}:
-        conn.execute("ALTER TABLE tasks ADD COLUMN format TEXT NOT NULL DEFAULT 'docx'")
-    for table, column, definition in [('patients', 'is_test', 'INTEGER NOT NULL DEFAULT 0'), ('patients', 'call_list', 'INTEGER NOT NULL DEFAULT 0'), ('patients', 'archived_at', 'TEXT'), ('patients', 'hold_from', 'TEXT'), ('messages', 'visit_date', 'TEXT'), ('messages', 'visit_time', 'TEXT'), *[('messages', name, typ) for name, typ in [('ai_intent','TEXT'), ('ai_summary','TEXT'), ('ai_confidence','REAL'), ('ai_reply','TEXT'), ('ai_draft_id','TEXT')]]]:
-        if column not in {row[1] for row in conn.execute(f'PRAGMA table_info({table})')}:
-            conn.execute(f'ALTER TABLE {table} ADD COLUMN {column} {definition}')
-    conn.commit()
-    import_meetings(conn)
-    return conn
+    try:
+        conn.execute('PRAGMA journal_mode=WAL')
+        # executescript has its own transaction boundary; never start a schema
+        # migration transaction until the historical base tables exist.
+        version = conn.execute('PRAGMA user_version').fetchone()[0]
+        if version > SCHEMA_VERSION:
+            raise RuntimeError('Database schema is newer than this HMR Desk application')
+        conn.executescript(SCHEMA)
+        migrate_schema(conn)
+        import_meetings(conn)
+        return conn
+    except Exception:
+        conn.close()
+        raise
 
 
 def import_meetings(conn):
