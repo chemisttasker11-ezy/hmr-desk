@@ -21,7 +21,7 @@ function bundledEngine(resourcesPath) {
   return path.join(resourcesPath, 'engine', 'hmr-engine', 'hmr-engine.exe');
 }
 
-async function start({ resourcesPath, dataDir, workspace, config, timeoutMs = 20000 }) {
+async function start({ resourcesPath, dataDir, workspace, config, timeoutMs = 20000, onCrash = null }) {
   const engine = bundledEngine(resourcesPath);
   if (!fs.existsSync(engine)) throw Error('Bundled HMR clinical engine is missing. Reinstall the full application.');
   fs.mkdirSync(dataDir, { recursive: true });
@@ -37,9 +37,14 @@ async function start({ resourcesPath, dataDir, workspace, config, timeoutMs = 20
       HMR_SESSION_TOKEN: session, HMR_API_PORT: String(port),
       HMR_PDF_CONVERTER: path.join(resourcesPath, 'converter', 'libreoffice', 'program', 'soffice.exe') },
   });
-  let exited = false;
-  child.once('exit', () => { exited = true; });
-  child.once('error', () => { exited = true; });
+  let exited = false, ready = false, stopping = false;
+  const failed = () => {
+    exited = true;
+    if (ready && !stopping && typeof onCrash === 'function')
+      Promise.resolve().then(() => onCrash()).catch(() => {});
+  };
+  child.once('exit', failed);
+  child.once('error', failed);
   const deadline = Date.now() + timeoutMs;
   try {
     while (Date.now() < deadline) {
@@ -53,9 +58,12 @@ async function start({ resourcesPath, dataDir, workspace, config, timeoutMs = 20
           const status = await response.json();
           if (!status.ready || status.engine_version !== '0.1.0')
             throw Error('Engine version mismatch. Reinstall the matching application version.');
+          if (exited) throw Error('Bundled engine exited before readiness was established');
           config.api = url;
           config.tokenFile = tokenFile;
+          ready = true;
           return { child, url, status, stop: async () => {
+            stopping = true;
             if (exited) return;
             try {
               await fetch(url + '/api/engine/stop', {
