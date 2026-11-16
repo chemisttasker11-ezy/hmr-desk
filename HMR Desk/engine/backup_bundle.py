@@ -171,7 +171,7 @@ def restore(source, destination, password):
                             out.write(chunk)
                     if copied != files[name]['size'] or h.hexdigest() != files[name]['sha256']:
                         raise ValueError('Backup checksum mismatch')
-            with sqlite3.connect(stage / 'data' / 'hmr.db') as check:
+            with closing(sqlite3.connect(stage / 'data' / 'hmr.db')) as check:
                 if check.execute('PRAGMA integrity_check').fetchone()[0] != 'ok':
                     raise ValueError('Restored database failed integrity check')
             destination.parent.mkdir(parents=True, exist_ok=True)
