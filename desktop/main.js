@@ -180,7 +180,9 @@ prodaLogin = require('./src/proda-login')({
   getWindow: () => win,
 });
 ipcMain.handle('api', async (e, method, p, b) => {
-  if (e.sender !== win.webContents || p === '/api/referrals/review' || p.startsWith('/api/backups/') || require('./src/control').isPrivateApiRoute(p)) throw Error('Forbidden');
+  if (e.sender !== win.webContents || p === '/api/referrals/review' || p.startsWith('/api/backups/') ||
+      (method === 'POST' && p.endsWith('/pathology/sources')) ||
+      require('./src/control').isPrivateApiRoute(p)) throw Error('Forbidden');
   return api(method, p, b);
 });
 ipcMain.handle('referral-pick', async (e, kind) => {
@@ -334,6 +336,41 @@ ipcMain.handle('one-off', async (e, action, site, value) => {
     oneOffs[site].push(entry);
   }
   return oneOffs[site].map((p) => p.folder);
+});
+ipcMain.handle('pathology-source-pick', async (e, patientId) => {
+  if (e.sender !== win.webContents || !Number.isSafeInteger(patientId) || patientId < 1)
+    throw Error('Invalid patient');
+  const picked = await dialog.showOpenDialog(win, {
+    title: 'Select a pathology PDF to import as an unconfirmed source',
+    properties: ['openFile'], filters: [{name:'PDF documents',extensions:['pdf']}],
+  });
+  if (picked.canceled || !picked.filePaths[0]) return {cancelled:true};
+  return api('POST', `/api/patients/${patientId}/pathology/sources`,
+    {path:picked.filePaths[0]});
+});
+ipcMain.handle('open-pathology-source', async (e, patientId, sourceId) => {
+  if (e.sender !== win.webContents || !Number.isSafeInteger(patientId) || patientId < 1 ||
+      typeof sourceId !== 'string' || !/^[a-f0-9]{32}$/.test(sourceId)) throw Error('Invalid source');
+  const sourceIndex = await api('GET', `/api/patients/${patientId}/pathology/sources`);
+  const source = sourceIndex.sources?.find(item => item.id === sourceId);
+  if (!source || !/^[a-f0-9]{64}$/.test(source.sha256 || '') ||
+      path.basename(source.name) !== source.name || !source.name.toLowerCase().endsWith('.pdf'))
+    throw Error('Source not found');
+  const patient = await api('GET', `/api/patients/${patientId}`);
+  const base = await fsp.realpath(config.base);
+  const folder = await fsp.realpath(path.resolve(base, patient.folder_path || patient.folder));
+  if (!require('./src/folder').inside(base, folder)) throw Error('Patient folder outside workspace');
+  const pathology = await fsp.realpath(path.join(folder,'Pathology'));
+  if (path.dirname(pathology) !== folder) throw Error('Invalid pathology folder');
+  const target = await fsp.realpath(path.join(pathology, source.name));
+  if (path.dirname(target) !== pathology || !(await fsp.stat(target)).isFile())
+    throw Error('Untrusted pathology source path');
+  const crypto = require('node:crypto');
+  const hash = crypto.createHash('sha256').update(await fsp.readFile(target)).digest('hex');
+  if (hash !== source.sha256) throw Error('Original source changed since import');
+  const failure = await shell.openPath(target);
+  if (failure) throw Error('Windows could not open the source PDF viewer');
+  return {opened:true};
 });
 ipcMain.handle('open-report-version', async (e, patientId, reportFile, format) => {
   if (e.sender !== win.webContents || !Number.isSafeInteger(patientId) || patientId < 1 ||
