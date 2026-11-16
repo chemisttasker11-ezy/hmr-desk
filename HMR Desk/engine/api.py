@@ -797,6 +797,20 @@ def handle(conn, method, path, query, body):
             p = conn.execute('SELECT * FROM patients WHERE id=?', (int(match[1]),)).fetchone()
             if not p: return 404, {'error': 'patient not found'}
             return 200, {'versions': report_auth.generated_versions(conn, p)}
+        match = re.fullmatch(r'/api/patients/(\d+)/pathology/sources', path)
+        if match and method in ('GET', 'POST'):
+            import pathology_import
+            p = conn.execute('SELECT * FROM patients WHERE id=?', (int(match[1]),)).fetchone()
+            if not p: return 404, {'error': 'patient not found'}
+            if method == 'GET':
+                return 200, pathology_import.sources(p)
+            if not isinstance(body, dict) or set(body) != {'path'} or not isinstance(body['path'], str):
+                raise ValueError('Invalid pathology import')
+            result = pathology_import.import_pdf(p, body['path'])
+            db.log(conn, p['id'], 'pathology_source_imported',
+                   {'sha256': result['sha256'], 'pages': result['page_count'], 'name': result['name']}, 'api')
+            conn.commit()
+            return 200, result
         match = re.fullmatch(r'/api/patients/(\d+)/pathology-records', path)
         if match and method in ('GET', 'POST'):
             import pathology_records
