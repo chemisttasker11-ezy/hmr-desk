@@ -56,3 +56,27 @@ def test_backup_fails_inside_active_data(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match='outside'):
         backup_bundle.create(conn, workspace, workspace / 'unsafe.hmrbak', 'twelve chars')
     conn.close()
+
+
+def test_backup_rejects_concurrent_workspace_modification(tmp_path, monkeypatch):
+    workspace = tmp_path / 'active'
+    workspace.mkdir()
+    item = workspace / 'interview.json'
+    item.write_text('{"version":1}')
+    data = tmp_path / 'data'
+    data.mkdir()
+    monkeypatch.setattr(db, 'BASE', str(workspace))
+    monkeypatch.setattr(db, 'DATA_DIR', str(data))
+    conn = db.connect(str(data / 'hmr.db'))
+    original_fsync = backup_bundle.os.fsync
+
+    def simulated_concurrent_save(fd):
+        item.write_text('{"version":2,"modified":true}')
+        return original_fsync(fd)
+
+    monkeypatch.setattr(backup_bundle.os, 'fsync', simulated_concurrent_save)
+    output = tmp_path / 'should-not-exist.hmrbak'
+    with pytest.raises(ValueError, match='changed during backup'):
+        backup_bundle.create(conn, workspace, output, 'a-long-backup-password')
+    assert not output.exists()
+    conn.close()
