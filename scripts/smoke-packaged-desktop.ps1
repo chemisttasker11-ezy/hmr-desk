@@ -2,7 +2,7 @@
 # This is NOT a clean Windows 11 VM acceptance test.
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
-$exe = Join-Path $root 'desktop\\dist\\win-unpacked\\HMR Desk.exe'
+$exe = Join-Path $root 'desktop\dist\win-unpacked\HMR Desk.exe'
 if (-not (Test-Path $exe)) { throw 'Unpacked HMR Desktop executable not found' }
 $originalHome = $env:USERPROFILE
 $originalPath = $env:PATH
@@ -14,7 +14,7 @@ New-Item -ItemType Directory -Force -Path $data, $workspace | Out-Null
 $process = $null
 try {
   $env:USERPROFILE = $isolated
-  $env:PATH = "$env:SystemRoot\\System32;$env:SystemRoot\\System32\\WindowsPowerShell\\v1.0;$env:SystemRoot"
+  $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot\System32\WindowsPowerShell\v1.0;$env:SystemRoot"
   $process = Start-Process -FilePath $exe -PassThru
   $engine = $null
   $mainWindow = [IntPtr]::Zero
@@ -34,7 +34,7 @@ try {
     }
   }
   if (-not $engine) { throw 'Packaged UI/engine did not become ready from isolated workspace' }
-  if ($engine.CommandLine -notmatch '--port\\s+(\\d+)') { throw 'Engine did not select a loopback API port' }
+  if ($engine.CommandLine -notmatch '--port\s+(\d+)') { throw 'Engine did not select a loopback API port' }
   $port = [int]$Matches[1]
   $token = (Get-Content -Raw (Join-Path $data 'api_token')).Trim()
   $result = Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/health" -Headers @{ 'X-HMR-Token' = $token } -TimeoutSec 5
