@@ -39,7 +39,7 @@ def render(data, target):
         ("Current medicines", "meds", ("Medicine", "Actual use", "Notes", "Review")),
         ("Non-prescription medicines", "otc", ("Medicine", "Use", "Notes")),
         ("Ceased medicines", "ceased", ("Medicine", "Referral directions", "Notes")),
-        ("Pathology", "path", ("Test", "Result", "Range", "Flag", "Notes")),
+        ("Pathology", "path", ("Test", "Result", "Unit", "Reference range", "Source / notes")),
     ):
         if not data[key]:
             continue
