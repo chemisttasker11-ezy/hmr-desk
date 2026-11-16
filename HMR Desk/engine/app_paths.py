@@ -6,7 +6,10 @@ from pathlib import Path
 
 def resource_root():
     """Installed assets are read-only; never write patient data here."""
-    return Path(getattr(sys, '_MEIPASS', Path(__file__).resolve().parent)).resolve()
+    if getattr(sys, 'frozen', False):
+        return Path(sys._MEIPASS).resolve()
+    # Source checkout root includes bundled application-owned helpers/scripts.
+    return Path(__file__).resolve().parents[2]
 
 
 def data_root():
@@ -37,4 +40,5 @@ def ensure_writable(path):
 
 
 def engine_assets():
-    return resource_root() / 'assets'
+    if getattr(sys, 'frozen', False): return resource_root() / 'assets'
+    return Path(__file__).resolve().parent / 'assets'
