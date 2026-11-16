@@ -6,6 +6,10 @@ reports or a developer example as the clinical template. This module contains
 no drug rules and performs no clinical assertion generation.
 """
 import hashlib
+import datetime as dt
+import os
+import shutil
+import uuid
 import json
 import re
 from pathlib import Path
@@ -28,6 +32,102 @@ TABLE_FIELDS = {
 }
 ISSUES_ANCHOR = '{{HMR_ISSUES}}'
 MARKER = re.compile(r'\{\{HMR_[A-Z_]+\}\}')
+
+
+def active_template_root():
+    """User-approved template supersedes read-only bundle, never a patient report."""
+    import app_paths
+    import db
+    local = Path(db.DATA_DIR) / 'templates'
+    if (local.joinpath('approved-hmr.docx').exists() or local.joinpath('approved-hmr.json').exists()):
+        return local
+    return app_paths.engine_assets() / 'templates'
+
+
+def validate_layout(template):
+    """Require complete named placeholders before accepting a new owner template."""
+    doc = Document(template)
+    occurrences = {}
+    for paragraph in _paragraphs(doc):
+        for marker in MARKER.findall(paragraph.text):
+            occurrences[marker] = occurrences.get(marker, 0) + 1
+    required = {'{{HMR_' + key + '}}' for key in TEXT_FIELDS} | {
+        '{{HMR_' + key + '}}' for key in TABLE_FIELDS} | {ISSUES_ANCHOR}
+    missing = required - occurrences.keys()
+    if missing:
+        raise ValueError('Template needs the following HMR placeholders: ' + ', '.join(sorted(missing)))
+    for marker in TABLE_FIELDS:
+        name = '{{HMR_' + marker + '}}'
+        if occurrences[name] != 1:
+            raise ValueError('Table placeholder must occur exactly once: ' + name)
+    if occurrences[ISSUES_ANCHOR] != 1:
+        raise ValueError('HMR_ISSUES placeholder must occur exactly once')
+    return True
+
+
+def register(source_path, version, approved_by, owner_authorised):
+    """Local-only owner-authorised template installation with revision history."""
+    import db
+    if owner_authorised is not True:
+        raise ValueError('Explicit owner authorisation and permission to use template required')
+    if not isinstance(version, str) or not 1 <= len(version.strip()) <= 80:
+        raise ValueError('Template version is required')
+    if not isinstance(approved_by, str) or not 3 <= len(approved_by.strip()) <= 150:
+        raise ValueError('Approving owner name is required')
+    source = Path(source_path)
+    if not source.is_absolute() or source.is_symlink() or not source.is_file() or source.suffix.lower() != '.docx':
+        raise ValueError('Select an editable regular HMR DOCX template')
+    if source.stat().st_size > 20 * 1024 * 1024:
+        raise ValueError('Template is too large')
+    validate_layout(source)
+    original = source.read_bytes()
+    sha = hashlib.sha256(original).hexdigest()
+    template_dir = Path(db.DATA_DIR) / 'templates'
+    template_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if template_dir.is_symlink():
+        raise ValueError('Unsafe template folder')
+    active = template_dir / 'approved-hmr.docx'
+    manifest = template_dir / 'approved-hmr.json'
+    old_template = active.read_bytes() if active.is_file() else None
+    old_meta = manifest.read_bytes() if manifest.is_file() else None
+    if old_template is not None and old_meta is not None:
+        history = template_dir / 'history'
+        history.mkdir(mode=0o700, exist_ok=True)
+        old_sha = hashlib.sha256(old_template).hexdigest()
+        prior = history / (old_sha + '.docx')
+        prior_meta = history / (old_sha + '.json')
+        if not prior.exists():
+            prior.write_bytes(old_template)
+        if not prior_meta.exists():
+            prior_meta.write_bytes(old_meta)
+    info = {
+        'version': version.strip(), 'sha256': sha, 'approved_by': approved_by.strip(),
+        'approved_on': dt.date.today().isoformat(),
+        'approved_for': 'HMR Desk manual AI-off report layout',
+        'approval_method': 'explicit local owner attestation; external release sign-off still required',
+    }
+    token = uuid.uuid4().hex
+    pending_doc = template_dir / ('.approved-' + token + '.docx')
+    pending_json = template_dir / ('.approved-' + token + '.json')
+    try:
+        with pending_doc.open('xb') as file:
+            file.write(original)
+            file.flush()
+            os.fsync(file.fileno())
+        with pending_json.open('x', encoding='utf-8') as file:
+            json.dump(info, file, sort_keys=True)
+            file.flush()
+            os.fsync(file.fileno())
+        if hashlib.sha256(pending_doc.read_bytes()).hexdigest() != sha:
+            raise ValueError('Template changed while being copied')
+        os.replace(pending_doc, active)
+        os.replace(pending_json, manifest)
+        approved_template(template_dir)
+    finally:
+        pending_doc.unlink(missing_ok=True)
+        pending_json.unlink(missing_ok=True)
+    return {'registered': True, 'version': info['version'], 'sha256': sha,
+            'approved_by': info['approved_by'], 'previous_version_preserved': old_template is not None}
 
 
 def approved_template(root):
