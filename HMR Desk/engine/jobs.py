@@ -133,6 +133,9 @@ def interview_assist(patient_id):
     with connection() as conn:
         p = get_patient(conn, patient_id)
         record = interview.load(conn, p)
+        import settings
+        if not settings.get(conn, 'clinical_ai_privacy_ack'):
+            raise ValueError('Clinical AI privacy approval is required in Settings')
     import clinical_privacy
     name = agents.selected('interview_assist')
     selected = agents.get(name)
@@ -310,6 +313,9 @@ def report_assist(patient_id):
     import report
     with connection() as conn:
         patient = get_patient(conn, patient_id)
+        import settings
+        if not settings.get(conn, 'clinical_ai_privacy_ack'):
+            raise ValueError('Clinical AI privacy approval is required in Settings')
         folder = patient_folder(patient)
         record = interview.load(conn, patient)
         clinical = clinical_privacy.project(record, sex=patient['sex'] or '')
