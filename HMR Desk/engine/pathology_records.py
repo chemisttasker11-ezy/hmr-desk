@@ -9,7 +9,7 @@ import json
 import re
 from pathlib import Path
 
-import jobs
+import records
 
 FIELDS = {'id', 'test', 'value', 'unit', 'reference_interval', 'sample_date', 'source',
           'verified', 'comment'}
@@ -17,19 +17,17 @@ MAX_ROWS = 120
 MAX_HISTORY = 2000
 
 
-def file_for(patient):
-    return jobs.patient_folder(patient) / 'pathology_records.json'
+NAME = 'pathology_records.json'
 
 
-def revision(path):
-    return hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else 'missing'
+def revision(conn, patient):
+    return records.revision(conn, patient['id'], NAME)
 
 
-def load(patient):
-    path = file_for(patient)
-    if not path.is_file():
+def load(conn, patient):
+    content = records.get_json(conn, patient['id'], NAME)
+    if content is None:
         return {'version': 2, 'revision': 'missing', 'records': [], 'verification': {}, 'history': []}
-    content = json.loads(path.read_text(encoding='utf-8'))
     if content.get('version', 1) not in (1, 2):
         raise ValueError('Unsupported pathology file version')
     validate(content['records'])
@@ -37,7 +35,7 @@ def load(patient):
     verification = content.get('verification', {})
     if not isinstance(history, list) or len(history) > MAX_HISTORY or not isinstance(verification, dict):
         raise ValueError('Invalid pathology audit metadata')
-    return {'version': content.get('version', 1), 'revision': revision(path),
+    return {'version': content.get('version', 1), 'revision': revision(conn, patient),
             'records': content['records'], 'verification': verification, 'history': history}
 
 
@@ -65,14 +63,13 @@ def validate(records):
     return True
 
 
-def save(patient, data, reviewer=''):
+def save(conn, patient, data, reviewer=''):
     if not isinstance(data, dict) or set(data) != {'revision', 'records'}:
         raise ValueError('Invalid pathology save')
-    path = file_for(patient)
-    if data['revision'] != revision(path):
+    if data['revision'] != revision(conn, patient):
         raise ValueError('Pathology changed; reload before saving')
     validate(data['records'])
-    previous = load(patient)
+    previous = load(conn, patient)
     old = {r['id']: r for r in previous['records']}
     new = {r['id']: r for r in data['records']}
     verification = dict(previous['verification'])
@@ -97,6 +94,7 @@ def save(patient, data, reviewer=''):
                         'before': before, 'after': after})
     if len(history) > MAX_HISTORY:
         raise ValueError('Pathology audit history limit reached; archive old entries before continuing')
-    jobs.atomic_json(path, {'version': 2, 'records': data['records'],
-                            'verification': verification, 'history': history})
-    return load(patient)
+    records.put_json(conn, patient['id'], NAME, {'version': 2, 'records': data['records'],
+                                                  'verification': verification, 'history': history})
+    conn.commit()
+    return load(conn, patient)
