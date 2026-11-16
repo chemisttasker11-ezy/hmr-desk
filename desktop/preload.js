@@ -29,6 +29,7 @@ contextBridge.exposeInMainWorld('hmr', {
   openPatientFolder: (id, file) => ipcRenderer.invoke('open-patient-folder', id, file),
   oneOff: (action, site, value) => ipcRenderer.invoke('one-off', action, site, value),
   referralPick: (kind) => ipcRenderer.invoke('referral-pick', kind),
+  openReviewedReferral: token => ipcRenderer.invoke('open-reviewed-referral', token),
   onReferralDrop: (fn) => {
     document.addEventListener('drop', async (event) => {
       if (!event.target.closest?.('#referral-drop')) return;
