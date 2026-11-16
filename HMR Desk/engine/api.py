@@ -782,13 +782,13 @@ def handle(conn, method, path, query, body):
                 except interview.Conflict:
                     conn.rollback(); return 409, {'error': 'interview conflict'}
                 return 200, result
-        match = re.fullmatch(r'/api/patients/(\\d+)/report-versions', path)
+        match = re.fullmatch(r'/api/patients/(\d+)/report-versions', path)
         if match and method == 'GET':
             import report_auth
             p = conn.execute('SELECT * FROM patients WHERE id=?', (int(match[1]),)).fetchone()
             if not p: return 404, {'error': 'patient not found'}
             return 200, {'versions': report_auth.generated_versions(conn, p)}
-        match = re.fullmatch(r'/api/patients/(\\d+)/pathology-records', path)
+        match = re.fullmatch(r'/api/patients/(\d+)/pathology-records', path)
         if match and method in ('GET', 'POST'):
             import pathology_records
             p = conn.execute('SELECT * FROM patients WHERE id=?', (int(match[1]),)).fetchone()
@@ -804,7 +804,7 @@ def handle(conn, method, path, query, body):
                    {'count': len(result['records']), 'revision': result['revision']}, 'api')
             conn.commit()
             return 200, result
-        match = re.fullmatch(r'/api/patients/(\\d+)/reconciliation', path)
+        match = re.fullmatch(r'/api/patients/(\d+)/reconciliation', path)
         if match and method in ('GET', 'POST'):
             import interview
             import reconciliation
