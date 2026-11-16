@@ -19,7 +19,7 @@ permissions:
 jobs:
   windows-package:
     runs-on: windows-2022
-    timeout-minutes: 45
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -43,6 +43,11 @@ jobs:
         run: python -m PyInstaller --clean --noconfirm hmr-engine.spec
       - name: Smoke actual frozen engine without Python subprocess runtime
         run: python scripts/smoke-packaged-engine.py "HMR Desk/engine/dist/hmr-engine/hmr-engine.exe"
+      - name: Bundle pinned, checksum-verified offline PDF converter
+        shell: pwsh
+        run: ./scripts/bundle-libreoffice.ps1
+      - name: Convert a real synthetic DOCX and verify offline PDF
+        run: python scripts/smoke-pdf.py
       - name: Build NSIS installer with engine resources
         working-directory: desktop
         run: npm run dist
@@ -51,7 +56,10 @@ jobs:
         run: |
           $engine = 'desktop/dist/win-unpacked/resources/engine/hmr-engine/hmr-engine.exe'
           if (-not (Test-Path $engine)) { throw 'NSIS application missing Python engine' }
+          $converter = 'desktop/dist/win-unpacked/resources/converter/libreoffice/program/soffice.exe'
+          if (-not (Test-Path $converter)) { throw 'NSIS application missing offline DOCX-PDF converter' }
           Get-FileHash $engine -Algorithm SHA256 | Format-List
+          Get-FileHash $converter -Algorithm SHA256 | Format-List
       - name: Upload unsigned engineering artifact (not clinical release)
         uses: actions/upload-artifact@v4
         with:
