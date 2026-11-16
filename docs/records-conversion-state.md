@@ -1,18 +1,25 @@
-# Clinical record conversion - state (WIP, unverified, not installed)
+# Saved record conversion (WIP, unverified, not installed)
 
-Branch: wip/m3-records-unverified. Status: saved clinical records are NOT protected. Nothing here ships.
+Branch: wip/m3-records-unverified. Saved records are NOT yet verified as protected. Do not merge or install.
 
-Done: engine/records.py (store, import, export, name patterns) + test_records.py (8 tests, local only);
-documents-path fallback in desktop/main.js.
+## Implemented, tested locally with synthetic data only
 
-Scope (Es approved "saved clinical records"): patient-folder interview.json, report_spec(.ai).json, confirmed_meds.json,
-followup1/2.json, pathology_sources.json, pathology_records.json, reconciliation_review.json (+ .bak), MIMS interactions*.txt.
-Also patient-derived files outside the folder: history-import-plan.json, Scheduled/_interview specs/*.json,
-TO SORT/intake_corrections.json (need their own identity key, not patient id).
-Not records: templates, drug_classes.json, clinics.json, Word/PDF/consent/source documents (separate design, stay plain).
+- Saved interview, report spec, confirmed medicine, follow-up, pathology, reconciliation and MIMS text records use the SQLCipher database. Patient-derived interview specs, shared intake corrections and history-import plans use the same store. Free-text medicine entry remains valid.
+- Startup migration copies recognized files and reads them back. Repeat-safe: it never replaces a differing stored record and never deletes files at startup.
+- Settings shows tracked plain-copy counts. Export requires an explicit choice of patient or shared records. Shared records may cover multiple patients. A native dialog chooses the output folder. Exports are labelled outside the app's encryption; existing files are not overwritten. MIMS content stays under its licence.
+- Explicit removal is separate from migration and export. A cancel-by-default native warning explains ordinary deletion, external editors, backups, synced copies and unchanged source documents. The generic page API cannot call this mutation.
+- Removal reopens the committed SQLCipher database independently, checks integrity, and holds a writer lock while checking each file. Only exact byte matches are removed. Different/missing records, links, changed files and errors remain for review. Active tasks or unsaved database changes stop removal. There is no silent plain backup, no automatic conflict resolution and no secure-erasure claim.
+- Synthetic regression tests cover removal followed by database reopen and readable export, shared files, conflicts, active tasks, unsaved changes, failed verification, links and a file changed during checking. The existing encrypted backup round-trip includes the records table.
+- Medicine reference lookup is connected to the interview with an explicit pharmacist-selected link and an unlink action. Links carry source/code/display/release through saved records and report rows. Same-concept duplicate warnings do not change clinical use status. No licensed medicine data is bundled.
+- Latest local Linux engine run: 129 passed, 5 dependency warnings. Desktop node suite: 240 passed. CI fast list now includes records, medicine reference and pathology tests. These results are not Windows or clinical acceptance.
 
-Next: thread conn into steps.exists and report_auth/jobs/report revision checks; convert interview.py load/save
-(DB transaction replaces file lock and manual rollback); then report.py, consent_sign, api, suggest, followup, pathology_*;
-startup migration (verify-then-mark, conflicts left alone, plain files kept until verified retirement, no secure-erasure claim);
-backup bundle; export API/UI labelled "outside the app's encryption"; docs; run fast list + affected suites.
-Release status stays "saved records not protected" until conversion, migration and retirement are verified on Windows CI.
+## Still unverified or out of this conversion
+
+- This WIP has not had Windows CI, installed-app restart/migration/removal, native-dialog visual checks, or Word/PDF continuity testing. A separate earlier integration baseline passed CI; that does not verify this branch.
+- Real AMT release installation and end-to-end lookup remain blocked on the data transfer. Synthetic lookup is not real-data acceptance. PBS/ARTG/signature interfaces, broader brand/generic relationships and deeper medicine-linked follow-up are not complete.
+- Word/PDF, consent and original source/import files are still plain files. Legacy appointment plans, intake reports, SMS logs and referral_source.json are source/import files, not silently removed by this record conversion. Other backups, cloud copies, exports and disk remnants are outside the tracked-file check.
+- A changed legacy record is deliberately retained rather than overwritten or deleted. Review/export of such conflicts remains a user task before claiming that tracked plain copies are gone.
+- Linux renderer screenshots use a stub engine and synthetic data. They are not the packaged Windows application.
+- Status remains conservative even after a synthetic removal succeeds. No clinical-ready, parity, all-data encryption or secure-erasure claim is made.
+
+No PR, CI run, install or change to the test account is authorized by this file.
