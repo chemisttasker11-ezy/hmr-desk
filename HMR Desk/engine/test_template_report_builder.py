@@ -83,3 +83,38 @@ def test_missing_anchor_rejected_without_output(tmp_path):
     with pytest.raises(ValueError, match='exactly one'):
         renderer.render(sample(), target, template)
     assert not target.exists()
+
+
+def test_owner_template_registration_preserves_old_layout_and_rejects_unapproved(tmp_path, monkeypatch):
+    import db
+    monkeypatch.setattr(db, 'DATA_DIR', str(tmp_path / 'userdata'))
+    source = tmp_path / 'source approved.docx'
+    make_template(source)
+    with pytest.raises(ValueError, match='Explicit owner authorisation'):
+        renderer.register(source, 'synthetic-1', 'Owner Test', False)
+    result = renderer.register(source, 'synthetic-1', 'Owner Test', True)
+    assert result['registered']
+    assert renderer.active_template_root() == tmp_path / 'userdata' / 'templates'
+    current, manifest = renderer.approved_template(renderer.active_template_root())
+    assert current.is_file() and manifest['version'] == 'synthetic-1'
+    # New approved revision must retain prior editable template and approval.
+    doc = Document(source)
+    doc.add_paragraph('SYNTHETIC NEW VERSION, NOT CLINICAL APPROVAL')
+    doc.save(source)
+    next_version = renderer.register(source, 'synthetic-2', 'Owner Test', True)
+    assert next_version['previous_version_preserved']
+    history = list((renderer.active_template_root() / 'history').glob('*.docx'))
+    assert len(history) == 1
+    assert renderer.approved_template(renderer.active_template_root())[1]['version'] == 'synthetic-2'
+
+
+def test_unmapped_docx_cannot_be_registered_as_owner_layout(tmp_path,monkeypatch):
+    import db
+    monkeypatch.setattr(db,'DATA_DIR',str(tmp_path / 'userdata'))
+    template = tmp_path / 'unmapped.docx'
+    doc=Document()
+    doc.add_paragraph('A sample old patient report without explicit placeholders')
+    doc.save(template)
+    with pytest.raises(ValueError,match='placeholders'):
+        renderer.register(template,'synthetic-unmapped','Synthetic Owner',True)
+    assert not (tmp_path / 'userdata' / 'templates' / 'approved-hmr.docx').exists()
