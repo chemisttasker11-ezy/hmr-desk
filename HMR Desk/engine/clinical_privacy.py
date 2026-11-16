@@ -111,7 +111,7 @@ def project(record, *, sex=""):
             continue
         pathology.append({"id": "lab_" + str(i + 1),
                           "test": clean(row[0], label=True),
-                          "value": value})
+                          "value": value, "unit_status": "unverified"})
     details = record.get("details") or {}
     symptoms = {}
     for key in ("sx_falls", "sx_dizziness", "sx_drowsiness", "sx_pain",
