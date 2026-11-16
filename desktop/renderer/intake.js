@@ -1,4 +1,23 @@
 let referralRows = [];
+const REFERRAL_IDENTITY_KEYS = ['name','dob','gp','referral_date','clinic','phone',
+  'address','suburb','sex','medicare','irn','ihi'];
+function referralReviewFields(form) {
+  const data = new FormData(form);
+  return {
+    fields: Object.fromEntries(REFERRAL_IDENTITY_KEYS.map(key => [key, String(data.get(key) || '')])),
+    clinical: {
+      conditions: String(data.get('clinical_conditions') || ''),
+      allergies: String(data.get('clinical_allergies') || ''),
+      medicines: String(data.get('clinical_medicines') || ''),
+      observations: String(data.get('clinical_observations') || ''),
+      allergies_status: String(data.get('clinical_allergies_status') || 'unknown'),
+      source_page: Number(data.get('clinical_source_page') || 0),
+      reviewed_by: String(data.get('clinical_reviewer') || ''),
+      confirmed: data.get('clinical_confirmed') === 'on',
+    },
+  };
+}
+
 
 async function intake() {
   $('screen').innerHTML = `<div class="actions"><button class="primary" data-referral-pick="inbox">Check TO SORT</button><button data-referral-pick="files">Choose PDFs</button><button data-referral-pick="folder">Choose inbox folder</button></div>
@@ -20,7 +39,22 @@ function renderReferrals() {
     ${row.token ? `<button type="button" data-referral-source="${esc(row.token)}">Open original PDF for visual page comparison</button>` : ''}
     ${row.flags?.length ? `<p class="flag">${row.flags.map(esc).join('<br>')}</p>` : ''}
     ${row.page_previews?.length ? `<details class="referral-source-preview"><summary>Review extracted PDF pages (${row.page_previews.length} shown)</summary><div class="referral-page-preview">${row.page_previews.map(page => `<section class="card"><h4>Source page ${esc(page.page)} — ${page.method === 'ocr' ? 'OCR (unconfirmed)' : 'PDF text (unconfirmed)'}</h4><pre style="white-space:pre-wrap;overflow-wrap:anywhere">${esc(page.text || 'No readable text; inspect the original PDF')}</pre></section>`).join('')}</div><p>Compare these unconfirmed values to the original PDF before adding the patient. OCR is not evidence of correctness.</p></details>` : ''}
-    ${row.status === 'review' || row.status === 'manual' || (row.status === 'duplicate' && row.duplicate_kind === 'identity') ? `<form data-referral-commit="${i}" class="form">${['name','dob','gp','referral_date','clinic','phone','address','suburb','sex','medicare','irn','ihi'].map(k => `<label>${esc(labels[k] || k)}<input name="${k}" value="${esc(row.fields?.[k] || '')}"></label>`).join('')}${row.kind !== 'referral' ? '<fieldset><legend>Manual source classification</legend><label><input type="checkbox" data-manual-referral required> I inspected the original PDF and confirm it is an HMR referral for this patient. The document and all clinical details remain unconfirmed until reviewed.</label></fieldset>' : ''}
+    ${row.status === 'review' || row.status === 'manual' || (row.status === 'duplicate' && row.duplicate_kind === 'identity') ? `<form data-referral-commit="${i}" class="form">${['name','dob','gp','referral_date','clinic','phone','address','suburb','sex','medicare','irn','ihi'].map(k => `<label>${esc(labels[k] || k)}<input name="${k}" value="${esc(row.fields?.[k] || '')}"></label>`).join('')}
+    <fieldset><legend>Clinical source review — not automatically inferred</legend>
+      <p>Only enter facts you can verify on the original PDF page. Unknown allergies are not the same as an explicitly documented absence of allergies.</p>
+      <label>Source page number<input name="clinical_source_page" type="number" min="0" step="1" value="${esc(row.clinical?.source_page ?? 0)}"></label>
+      <label>Reviewing pharmacist<input name="clinical_reviewer" value="${esc(row.clinical?.reviewed_by || '')}"></label>
+      <label>Conditions and indications<textarea name="clinical_conditions" rows="3">${esc(row.clinical?.conditions || '')}</textarea></label>
+      <label>Prescribed medicines / directions<textarea name="clinical_medicines" rows="4">${esc(row.clinical?.medicines || '')}</textarea></label>
+      <label>Observations / measurements<textarea name="clinical_observations" rows="3">${esc(row.clinical?.observations || '')}</textarea></label>
+      <label>Allergy documentation state<select name="clinical_allergies_status">
+        ${[['unknown','Unknown / not specified'],['explicit_none','Explicitly documented none'],['listed','Allergies listed']].map(([value,label]) =>
+          `<option value="${value}" ${(row.clinical?.allergies_status || 'unknown') === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label>
+      <label>Documented allergy details<textarea name="clinical_allergies" rows="2">${esc(row.clinical?.allergies || '')}</textarea></label>
+      <label><input type="checkbox" name="clinical_confirmed" ${row.clinical?.confirmed ? 'checked' : ''}>
+        I checked these clinical fields against the specified original PDF page. Preserve all other information as unconfirmed.</label>
+    </fieldset>
+    ${row.kind !== 'referral' ? '<fieldset><legend>Manual source classification</legend><label><input type="checkbox" data-manual-referral required> I inspected the original PDF and confirm it is an HMR referral for this patient. The document and all clinical details remain unconfirmed until reviewed.</label></fieldset>' : ''}
     ${row.status === 'duplicate' && row.duplicate_kind === 'identity' ? `<fieldset><legend>Same-name patient safety check</legend>
     ${row.duplicate_candidates?.length ? `<p>Existing local records to compare: ${row.duplicate_candidates.map(candidate => `#${Number(candidate.id)} · ${esc(candidate.name)} · DOB ${esc(candidate.dob || 'unknown')} · GP ${esc(candidate.gp || 'unknown')}`).join('; ')}</p>` : '<p>Another referral in this batch contains this name.</p>'}
     <label><input type="checkbox" data-distinct-person required> I compared reliable identifiers against the source PDF and confirm this is a different person (not a duplicate document).</label>
@@ -51,7 +85,12 @@ document.addEventListener('submit', async event => {
   const row = referralRows[Number(form.dataset.referralCommit)], button = form.querySelector('button');
   button.disabled = true;
   try {
-    const result = await hmr.api('POST', '/api/referrals/commit', { token: row.token, fields: Object.fromEntries(new FormData(form)), distinct_person: !!form.querySelector('[data-distinct-person]')?.checked, manual_referral: !!form.querySelector('[data-manual-referral]')?.checked });
+    const reviewed = referralReviewFields(form);
+    const result = await hmr.api('POST', '/api/referrals/commit', {
+      token: row.token, fields: reviewed.fields, clinical: reviewed.clinical,
+      distinct_person: !!form.querySelector('[data-distinct-person]')?.checked,
+      manual_referral: !!form.querySelector('[data-manual-referral]')?.checked,
+    });
     row.status = 'added'; row.patient_id = result.patient_id;
     row.dirty = false;
     if (page === 'intake') formOpen = referralRows.some(item => item.dirty && item.status !== 'added');
@@ -66,7 +105,9 @@ document.addEventListener('input', event => {
   const form = event.target.closest?.('[data-referral-commit]');
   if (!form) return;
   const row = referralRows[Number(form.dataset.referralCommit)];
-  row.fields = Object.fromEntries(new FormData(form));
+  const reviewed = referralReviewFields(form);
+  row.fields = reviewed.fields;
+  row.clinical = reviewed.clinical;
   row.dirty = true;
   formOpen = true;
 });
