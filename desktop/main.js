@@ -197,7 +197,7 @@ prodaLogin = require('./src/proda-login')({
   getWindow: () => win,
 });
 ipcMain.handle('api', async (e, method, p, b) => {
-  if (e.sender !== win.webContents || p === '/api/referrals/review' || p.startsWith('/api/backups/') || (p.startsWith('/api/storage/') && p !== '/api/storage/status') ||
+  if (e.sender !== win.webContents || p === '/api/referrals/review' || p.startsWith('/api/backups/') || (p.startsWith('/api/records/') && p !== '/api/records/status') || (p.startsWith('/api/storage/') && p !== '/api/storage/status') ||
       (method === 'POST' && p.endsWith('/pathology/sources')) ||
       (method === 'POST' && p === '/api/templates/register') ||
       require('./src/control').isPrivateApiRoute(p)) throw Error('Forbidden');
@@ -505,6 +505,15 @@ ipcMain.on('draft-store', (e, action, key, value) => {
   } catch (error) {
     e.returnValue = { error: 'Protected draft storage failed (' + error.constructor.name + ')' };
   }
+});
+// Record export gets its own channel: the folder is chosen in a native dialog here, never supplied by page code.
+ipcMain.handle('records-export', async (e, patientId) => {
+  if (e.sender !== win.webContents || !Number.isInteger(patientId) || patientId < 1) throw Error('Invalid export request');
+  const chosen = await dialog.showOpenDialog(win, { title: 'Choose a folder for the exported records (the copy will not be encrypted)',
+    properties: ['openDirectory', 'createDirectory'] });
+  if (chosen.canceled || !chosen.filePaths[0]) return { cancelled: true };
+  return api('POST', '/api/records/export', { patient_id: patientId,
+    destination: path.join(chosen.filePaths[0], 'HMR exported records - patient ' + patientId) });
 });
 ipcMain.handle('encrypted-backup', async (e, action, passphrase) => {
   if (e.sender !== win.webContents || !['create', 'restore', 'preview'].includes(action) ||
@@ -1179,4 +1188,4 @@ async function captureShots() {
     if (syntheticSignInListeners) { for (const listener of syntheticSignInListeners) ipcMain.on('sign-in-page', listener); signIns.update = originalSignInUpdate; signIns.reset = originalSignInReset; }
     if (win && !win.isDestroyed()) win.webContents.removeListener('console-message', onConsole);
   }
-}
+    }
