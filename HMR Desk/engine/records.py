@@ -279,5 +279,64 @@ def status(conn, folder_for, extra=None):
     return {'records_in_encrypted_store': stored, 'plain_copies_matching_store': plain_same,
             'plain_files_differing_or_not_stored': plain_other,
             'saved_records_protected': False,
-            'note': 'Plain record files remain in patient folders until they are removed. Word, PDF and source '
+            'note': 'Tracked plain record copies may remain in patient folders and shared storage until explicitly removed. Word, PDF and source '
                     'documents are not encrypted by the app.'}
+
+
+def retire_matching(conn, folder_for, extra=None):
+    """Remove only exact plain copies, after verifying the committed encrypted DB independently.
+
+    Explicit user action only, never startup. No overwrite, quarantine, plain backup or secure-erasure
+    promise. Divergent/missing records, symlinks, busy DBs and changed files are left alone.
+    The app's caller must not have unsaved DB changes. This does not retire source/import documents.
+    """
+    import contextlib, stat
+    import db
+    if conn.in_transaction:
+        raise ValueError('Save changes before removing plain copies')
+    dbfile = next((r[2] for r in conn.execute('PRAGMA database_list') if r[1] == 'main'), None)
+    if not dbfile or not getattr(conn, 'hmr_key', None) or db.dbkey.file_kind(dbfile) != 'encrypted':
+        raise ValueError('A persisted encrypted database is required')
+    result = {'removed': 0, 'different_or_missing': 0, 'skipped': 0, 'errors': 0}
+    conn.execute('BEGIN IMMEDIATE')  # block app database writers until the deletion check is done
+    try:
+        if conn.execute("SELECT 1 FROM tasks WHERE state IN ('queued','running','waiting') LIMIT 1").fetchone():
+            raise ValueError('Finish or cancel active tasks before removing plain copies')
+        with contextlib.closing(db.open_encrypted(dbfile, key=conn.hmr_key, readonly=True)) as verified:
+            if verified.execute('PRAGMA integrity_check').fetchone()[0] != 'ok':
+                raise ValueError('Encrypted database integrity check failed')
+            candidates = []
+            for patient in conn.execute('SELECT * FROM patients').fetchall():
+                folder = folder_for(patient)
+                if folder and Path(folder).is_dir():
+                    candidates.extend((patient['id'], n, Path(folder) / n)
+                                      for n in sorted(os.listdir(folder)) if is_record_name(n))
+            candidates.extend(extra(conn) if extra else ())
+            seen = set()
+            for pid, name, value in candidates:
+                path = Path(value)
+                if path in seen: continue
+                seen.add(path)
+                try:
+                    if not path.exists() and not path.is_symlink(): continue
+                    # Refuse link components as well as the leaf. No deletion outside the real location.
+                    if any(part.is_symlink() for part in [path, *path.parents]):
+                        result['skipped'] += 1; continue
+                    before = path.stat()
+                    if not stat.S_ISREG(before.st_mode):
+                        result['skipped'] += 1; continue
+                    stored = get(verified, pid, name)
+                    if stored is None or path.read_bytes() != stored:
+                        result['different_or_missing'] += 1; continue
+                    # Recheck bytes AND file identity immediately before unlink; concurrent external edits
+                    # are not supported. The native confirmation tells the user to stop other editors.
+                    again = path.stat()
+                    if before != again or path.read_bytes() != stored or path.is_symlink():
+                        result['skipped'] += 1; continue
+                    path.unlink()
+                    result['removed'] += 1
+                except OSError:
+                    result['errors'] += 1
+    finally:
+        conn.rollback()  # lock only; no unrelated data changes are committed
+    return result
