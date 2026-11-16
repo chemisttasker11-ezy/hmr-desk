@@ -49,8 +49,10 @@ def _private_stage_root():
     from the application's per-user data root still needs an installed-VM audit.
     """
     root = Path(db.DATA_DIR).resolve() / '.protected-backup-staging'
-    root.mkdir(mode=0o700, parents=True, exist_ok=True)
     if root.is_symlink():
+        raise ValueError('Unsafe staging directory')
+    root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if root.is_symlink() or not root.is_dir():
         raise ValueError('Unsafe staging directory')
     if os.name != 'nt':
         root.chmod(0o700)
