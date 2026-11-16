@@ -97,3 +97,32 @@ jobs:
             desktop/dist/installer-manifest.json
           if-no-files-found: error
           retention-days: 7
+
+  installed-smoke:
+    # Partial clean-machine evidence only: a fresh hosted runner, silent
+    # per-user NSIS install, launch from the installed location with Python
+    # and Node removed from PATH. Not a Windows 11 non-admin client acceptance test.
+    needs: windows-package
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: hmr-m2-windows-unsigned-engineering-build
+          path: installer
+      - name: Silent per-user install of the built installer
+        shell: pwsh
+        run: |
+          $setup = Get-ChildItem installer -Filter '*.exe' | Select-Object -First 1
+          if (-not $setup) { throw 'Installer artifact missing' }
+          Write-Host ('Installing ' + $setup.Name)
+          $p = Start-Process -FilePath $setup.FullName -ArgumentList '/S' -PassThru -Wait
+          if ($p.ExitCode -ne 0) { throw ('Installer exit code ' + $p.ExitCode) }
+          $exe = Get-ChildItem (Join-Path $env:LOCALAPPDATA 'Programs') -Recurse -Filter 'HMR Desk.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $exe) { throw 'Installed HMR Desk.exe not found under LOCALAPPDATA' }
+          Write-Host ('Installed at ' + $exe.FullName)
+          "HMR_SMOKE_EXE=$($exe.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Boot installed app, verify engine, crash recovery and clean exit
+        shell: pwsh
+        run: ./scripts/smoke-packaged-desktop.ps1
