@@ -15,12 +15,9 @@ import db
 STEPS = {"interview_assist", "report_draft", "report_assist"}
 
 def defaults():
-    home = Path(os.environ["USERPROFILE"])
-    entries = [
-        {"name":"Claude B", "type":"cli", "enabled":True, "route":"skill", "command":["claude", "-p"], "env":{"CLAUDE_CONFIG_DIR":str(home / ".claude-b")}, "stdin":True},
-        *[{"name":"Codex " + label, "type":"cli", "enabled":True, "route":"skill", "model":"gpt-6.1-terra", "effort":"high", "command":["codex", "exec", "-m", "gpt-6.1-terra", "-"], "env":{"CODEX_HOME":str(home / directory)}, "stdin":True} for label, directory in [("A", ".codex"), ("B", ".codex-b")]],
-        *[{"name":"agy g" + str(i), "type":"cli", "enabled":True, "route":"prompt", "command":["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", r"C:\dev\my-stack\bin\agy-profile.ps1", "g" + str(i), "--model", "gemini-3.8-flash-high", "--print"], "env":{}, "stdin":True, "note":"Disabled: g1 test reported profile access denied." + (" Shares quota with g1." if i == 4 else "")} for i in range(1,5)]]
-    return {"default":"Claude B", "per_step":{}, "agents":entries}
+    """No developer paths or enabled clinical agents in a new installation."""
+    return {"default": "", "per_step": {}, "agents": []}
+
 
 def save(data):
     from jobs import atomic_json
@@ -30,13 +27,8 @@ def load():
     path = Path(db.DATA_DIR) / "agents.json"
     if not path.exists(): save(defaults())
     data = json.loads(path.read_text(encoding="utf-8"))
-    changed = False
-    for seed in defaults()['agents'][3:]:
-        old = next ( (a for a in data['agents'] if a['name'] == seed['name']), None)
-        if old is None: data['agents'].append(seed); changed = True
-        elif old.get('enabled') is False and old.get('command') == []: old.update(seed); changed = True
+    # Existing configured integrations are preserved; never auto-install CLI agents.
     for a in data["agents"]: a.setdefault("route", default_route(a))
-    if changed: save(data)
     return data
 
 
