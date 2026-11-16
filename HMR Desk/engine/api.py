@@ -805,7 +805,7 @@ def handle(conn, method, path, query, body):
             if method == 'GET':
                 return 200, pathology_records.load(p)
             try:
-                result = pathology_records.save(p, body)
+                result = pathology_records.save(p, body, reviewer=settings.get(conn, 'pharmacist_name'))
             except ValueError as exc:
                 if 'changed; reload' in str(exc): return 409, {'error': str(exc)}
                 raise
