@@ -10,7 +10,7 @@ import fitz
 
 MAX_TOTAL_BYTES = 120 * 1024 * 1024
 MAX_PAGES = 150
-MIN_TEXT = 80
+MIN_TEXT = 20
 
 
 def extract(folder, image_dir):
