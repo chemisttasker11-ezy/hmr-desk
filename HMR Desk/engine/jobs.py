@@ -16,10 +16,12 @@ import importer
 import history
 
 INTAKE_SCRIPT = Path(db.BASE) / 'scripts' / 'intake' / 'intake.py'
-SKILL = Path(os.environ['USERPROFILE']) / '.claude' / 'skills' / 'australian-hmr-report'
-EXTRACT_SCRIPT = SKILL / 'scripts' / 'extract.py'
-BUILD_SCRIPT = SKILL / 'scripts' / 'build.py'
-INTERVIEW_SCRIPT = Path(os.environ['USERPROFILE']) / '.claude' / 'skills' / 'australian-hmr-report' / 'scripts' / 'make_interview.py'
+# Application-owned assets: never depend on an individual developer's Claude profile.
+APP_ASSETS = Path(__file__).resolve().parent / 'assets'
+SKILL = APP_ASSETS
+EXTRACT_SCRIPT = APP_ASSETS / 'scripts' / 'extract.py'
+BUILD_SCRIPT = APP_ASSETS / 'scripts' / 'build.py'
+INTERVIEW_SCRIPT = APP_ASSETS / 'scripts' / 'make_interview.py'
 FIELDS = {'name', 'sex', 'dob', 'medicare', 'irn', 'address', 'suburb', 'phone', 'gp', 'gp_initials', 'gp_provider', 'clinic', 'referral_date', 'ihi', 'notes'}
 _lock = threading.Lock()
 _jobs = {}
@@ -65,6 +67,8 @@ def atomic_json(path, data):
 
 
 def run_script(script, *args):
+    if not Path(script).is_file():
+        raise RuntimeError('Required application component is not bundled: ' + str(script))
     result = subprocess.run([sys.executable, str(script), *map(str, args)], capture_output=True, text=True,
                             encoding='utf-8', errors='replace', timeout=1800,
                             env={**os.environ, 'PYTHONIOENCODING': 'utf-8'})  # cp1252 console crashes on PDF symbols
