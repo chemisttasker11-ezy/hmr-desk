@@ -50,12 +50,19 @@ def review(conn, paths):
                 pages = [p.get_text() for p in doc]
             if not pages: raise ValueError('PDF has no pages')
             methods = ['text' if len(page.strip()) >= 25 else 'ocr' for page in pages]
+            ocr_flags = []
             if 'ocr' in methods:
-                ocr = module.ocr_pdfs([Path(source)]).get(str(Path(source)), [])
-                if len(ocr) != len(pages): raise ValueError('OCR did not return every page')
-                pages = [page if len(page.strip()) >= 25 else ocr[i] for i, page in enumerate(pages)]
+                try:
+                    ocr = module.ocr_pdfs([Path(source)]).get(str(Path(source)), [])
+                except Exception:
+                    ocr = []
+                if len(ocr) == len(pages):
+                    pages = [page if len(page.strip()) >= 25 else (ocr[i] or '') for i, page in enumerate(pages)]
+                else:
+                    ocr_flags.append('OCR unavailable or incomplete: inspect the original PDF and enter referral details manually')
                 if hashlib.sha256(read_pdf(source)).hexdigest() != digest: raise ValueError('Source changed during review; try again')
             kind, _, flags = module.classify('\n'.join(pages))
+            flags.extend(ocr_flags)
             fields = {}
             if kind == 'referral':
                 fields, more = module.extract_fields('\n'.join(pages[:3])); flags += more
@@ -72,7 +79,7 @@ def review(conn, paths):
             row.update(token=token, kind=kind, fields=fields, flags=flags,
                        page_previews=[{'page': i + 1, 'method': methods[i],
                                        'text': text[:1200]} for i, text in enumerate(pages[:20])],
-                       status='duplicate' if duplicate or content_dup or batch_dup else ('review' if kind == 'referral' else 'rejected'),
+                       status='duplicate' if duplicate or content_dup or batch_dup else ('review' if kind == 'referral' else 'manual'),
                        duplicate_kind='content' if content_dup or digest in {x.get('sha256') for x in result} else ('identity' if duplicate or batch_dup else None),
                        sha256=digest,
                        patient_id=(duplicate or content_dup)['id' if duplicate else 'patient_id'] if duplicate or content_dup else None,
@@ -85,14 +92,14 @@ def review(conn, paths):
     return {'rows': result}
 
 
-def commit(conn, token, fields, distinct_person=False):
+def commit(conn, token, fields, distinct_person=False, manual_referral=False):
     if not isinstance(token, str) or not re.fullmatch('[0-9a-f]{32}', token): raise ValueError('Invalid review')
-    if type(distinct_person) is not bool: raise ValueError('Invalid distinct-person acknowledgement')
+    if type(distinct_person) is not bool or type(manual_referral) is not bool: raise ValueError('Invalid pharmacist acknowledgement')
     if not isinstance(fields, dict) or not fields.keys() <= set(FIELDS) or any(not isinstance(v, str) for v in fields.values()): raise ValueError('Invalid fields')
     record = conn.execute('SELECT value FROM meta WHERE key=?', ('referral_review_' + token,)).fetchone()
     if not record: raise ValueError('Review expired; review the PDF again')
     item = json.loads(record['value'])
-    if item['kind'] != 'referral': raise ValueError('Only classified referrals can be added')
+    if item['kind'] != 'referral' and not manual_referral: raise ValueError('Unrecognised PDF requires explicit pharmacist confirmation as an HMR referral')
     data = read_pdf(item['source'])
     if hashlib.sha256(data).hexdigest() != item['sha256']: raise ValueError('Source changed; review the PDF again')
     name = fields.get('name', '').strip()
