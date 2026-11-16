@@ -277,7 +277,7 @@ def verify_isolated(destination):
         if h.hexdigest() != detail['sha256']:
             raise ValueError('Recovery source hash mismatch')
     database = destination / 'data' / 'hmr.db'
-    with closing(sqlite3.connect(f'file:{database.as_posix()}?mode=ro', uri=True)) as conn:
+    with closing(sqlite3.connect(database.as_uri() + '?mode=ro', uri=True)) as conn:
         if conn.execute('PRAGMA integrity_check').fetchone()[0] != 'ok':
             raise ValueError('Isolated restored SQLite failed integrity check')
     if not (destination / 'workspace').is_dir():
@@ -286,5 +286,5 @@ def verify_isolated(destination):
 
 
 def _patient_count(database):
-    with closing(sqlite3.connect(f'file:{database.as_posix()}?mode=ro', uri=True)) as conn:
+    with closing(sqlite3.connect(database.as_uri() + '?mode=ro', uri=True)) as conn:
         return conn.execute('SELECT COUNT(*) FROM patients').fetchone()[0]
