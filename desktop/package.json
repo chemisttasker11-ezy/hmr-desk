@@ -62,6 +62,13 @@
         "filter": [
           "**/*"
         ]
+      },
+      {
+        "from": "../vendor/libreoffice",
+        "to": "converter/libreoffice",
+        "filter": [
+          "**/*"
+        ]
       }
     ]
   },
