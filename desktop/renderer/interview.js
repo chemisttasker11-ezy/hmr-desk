@@ -115,7 +115,7 @@ async function interviewScreen() {
   if (page !== 'interview' || request !== interviewRequest) return;
   if (list.status === 'fulfilled') patients = list.value.patients || [];
   else patients = H.interviewDrafts().map(({ id, name }) => ({ id, name: name || `Patient ${id}` }));
-  interviewAi = settingsData.status !== 'fulfilled' || settingsData.value.settings?.find(x => x.key === 'ai_interview_assist')?.value !== false && settingsData.value.settings?.find(x => x.key === 'ai_interview_assist')?.value !== 'off';
+  interviewAi = settingsData.status === 'fulfilled' && settingsData.value.settings?.find(x => x.key === 'ai_interview_assist')?.value === true;
   const agentData = agents.status === 'fulfilled' ? agents.value : {};
   interviewAgent = agentData.per_step?.interview_assist || agentData.default || 'No agent selected';
   interviewId ||= H.defaultInterviewId(todayData.status === 'fulfilled' ? todayData.value.visits : [], new Date());
