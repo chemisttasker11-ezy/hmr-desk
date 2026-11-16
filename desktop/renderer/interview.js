@@ -35,6 +35,7 @@ const interviewTables = {
 let interviewId = '',
   interviewRecord = null;
 let interviewSaveStatus = 'Ready', interviewConflict = false, interviewProgressFilter = 'all';
+let interviewReconciliation = null;
 let interviewRequest = 0;
 const interviewExpanded = new WeakSet();
 function interviewEquivalent(a, b) {
@@ -66,6 +67,7 @@ function interviewChanged(field) {
   interviewEdited.add(field);
   document.querySelector(`[data-source="${field}"]`)?.remove();
   interviewSaver.changed();
+  if (['meds', 'other_meds', 'details'].includes(field)) interviewReconciliation = null;
   const summary = document.querySelector('#interview-outstanding');
   if (summary) summary.innerHTML = interviewOutstanding();
 }
@@ -154,6 +156,7 @@ async function interviewScreen() {
   interviewConflict = offline ? interviewSaver.hasConflict() : recovery.conflict;
   interviewEdited = new Set();
   interviewOutput = '';
+  interviewReconciliation = null;
   if (!offline && !recovery.recovered && !recovery.conflict && !recovery.storageError) interviewSaveStatus = interviewRecord.saved ? 'Saved' : 'Ready';
   renderInterview();
   $('interview-notes')?.focus();
@@ -353,7 +356,19 @@ function renderInterview() {
     return `<section id="section-${key}" class="interview-section"><h2 tabindex="-1">${esc(title)} ${source}</h2>${input}</section>`;
   };
   const sections = interviewSections.map(section);
-  const formSections = sections.join('');
+  const reconciliationRows = interviewReconciliation?.flags || [];
+  const reconciliationView = `<section id="section-reconciliation" class="interview-section">
+    <h2>Medicine reconciliation</h2>
+    <p>Compare prescribed and actual medicine use. Flags require pharmacist judgement; they are not treatment recommendations.</p>
+    ${interviewReconciliation
+      ? `<p role="status">${esc(interviewReconciliation.reviewed ? 'Reviewed and acknowledged for the saved medicines' : interviewReconciliation.stale ? 'Review is stale: medicines changed' : reconciliationRows.length + ' discrepancies require review')}</p>
+         <ul>${reconciliationRows.map(f => `<li><strong>${esc(f.medicine_id)}</strong>: ${esc(f.message)} <button type="button" data-interview-jump="meds">Go to medicines</button></li>`).join('')}</ul>`
+      : '<p>Save changes, then load the current reconciliation checklist.</p>'}
+    <div class="actions"><button type="button" data-reconciliation-load>Save and refresh checklist</button>
+    ${interviewReconciliation && !interviewReconciliation.reviewed && !interviewReconciliation.stale
+      ? '<button type="button" data-reconciliation-ack>Acknowledge reviewed discrepancies</button>' : ''}</div>
+    </section>`;
+  const formSections = sections.join('') + reconciliationView;
   $('screen').innerHTML =
     interviewPicker() + `<div class="interview-context"><span class="interview-context-patient" title="${esc(header[0])}">${esc(header[0])}</span><span id="interview-status" role="status">${esc(interviewSaveStatus)}</span><button type="button" data-interview-save>Save</button><div id="interview-outstanding">${interviewOutstanding()}</div></div>${record.details.reason?.trim() ? `<p>Reason for referral: ${esc(record.details.reason)}</p>` : ''}${header[1] ? `<p class="interview-header">${esc(header[1])}</p>` : ''}<div class="interview-layout"><div>${formSections}<div class="actions interview-actions"><button type="button" class="primary" data-interview-record-visit>Record visit</button><button type="button" data-interview-save>Save</button><details class="more-actions"><summary>More actions</summary><div class="actions"><button data-interview-export="docx">Export Word</button><button data-interview-export="pdf">Export PDF</button><button data-interview-export="both">Interview pack</button>${interviewAi ? `<button data-interview-assist title="${esc(interviewAgent)}">Suggest points (AI)</button>` : ''}<button data-interview-folder>Open folder</button></div></details></div><pre id="interview-output" role="status">${esc(interviewOutput)}</pre></div><nav class="interview-index" aria-label="Interview sections"><a href="#section-notes">Back to notes</a>${interviewSections
       .slice(1)
@@ -586,6 +601,30 @@ document.addEventListener('focusout', (event) => {
 });
 async function interviewClick(b) {
   if (page !== 'interview' || !interviewRecord) return false;
+  if (b.dataset.reconciliationLoad !== undefined) {
+    if (!(await saveInterview(true))) return true;
+    try { interviewReconciliation = await hmr.api('GET', `/api/patients/${encodeURIComponent(interviewId)}/reconciliation`); }
+    catch (error) { interviewOutput = errorText(error); }
+    renderInterview();
+    document.getElementById('section-reconciliation')?.scrollIntoView();
+    return true;
+  }
+  if (b.dataset.reconciliationAck !== undefined) {
+    if (!interviewReconciliation || !(await saveInterview(true))) return true;
+    try {
+      const reviewer = interviewRecord.header.pharmacist;
+      const result = await hmr.api('POST', `/api/patients/${encodeURIComponent(interviewId)}/reconciliation`,
+        { source_hash: interviewReconciliation.source_hash, reviewed_by: reviewer });
+      interviewReconciliation = { ...interviewReconciliation, ...result };
+      interviewOutput = 'Medicine reconciliation acknowledgement saved';
+    } catch (error) {
+      interviewReconciliation = null;
+      interviewOutput = errorText(error);
+    }
+    renderInterview();
+    document.getElementById('section-reconciliation')?.scrollIntoView();
+    return true;
+  }
   if (b.dataset.healthNo !== undefined) { interviewMarkRemainingNo(interviewRecord.details); interviewChanged('details'); renderInterview(); document.querySelector('[data-health-no]')?.focus(); return true; }
   if (b.dataset.interviewDetails || b.dataset.interviewBadge) {
     const key = b.dataset.interviewDetails || b.dataset.interviewBadge, meta = interviewRecord.details[key][Number(b.dataset.row)];
