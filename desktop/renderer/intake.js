@@ -11,7 +11,8 @@ function referralReviewFields(form) {
       medicines: String(data.get('clinical_medicines') || ''),
       observations: String(data.get('clinical_observations') || ''),
       allergies_status: String(data.get('clinical_allergies_status') || 'unknown'),
-      source_page: Number(data.get('clinical_source_page') || 0),
+      source_pages: Object.fromEntries(['conditions','allergies','medicines','observations'].map(key =>
+        [key, Number(data.get('clinical_page_' + key) || 0)])),
       reviewed_by: String(data.get('clinical_reviewer') || ''),
       confirmed: data.get('clinical_confirmed') === 'on',
     },
@@ -42,17 +43,20 @@ function renderReferrals() {
     ${row.status === 'review' || row.status === 'manual' || (row.status === 'duplicate' && row.duplicate_kind === 'identity') ? `<form data-referral-commit="${i}" class="form">${['name','dob','gp','referral_date','clinic','phone','address','suburb','sex','medicare','irn','ihi'].map(k => `<label>${esc(labels[k] || k)}<input name="${k}" value="${esc(row.fields?.[k] || '')}"></label>`).join('')}
     <fieldset><legend>Clinical source review — not automatically inferred</legend>
       <p>Only enter facts you can verify on the original PDF page. Unknown allergies are not the same as an explicitly documented absence of allergies.</p>
-      <label>Source page number<input name="clinical_source_page" type="number" min="0" step="1" value="${esc(row.clinical?.source_page ?? 0)}"></label>
       <label>Reviewing pharmacist<input name="clinical_reviewer" value="${esc(row.clinical?.reviewed_by || '')}"></label>
       <label>Conditions and indications<textarea name="clinical_conditions" rows="3">${esc(row.clinical?.conditions || '')}</textarea></label>
+      <label>Conditions source page<input name="clinical_page_conditions" type="number" min="0" step="1" value="${esc(row.clinical?.source_pages?.conditions ?? 0)}"></label>
       <label>Prescribed medicines / directions<textarea name="clinical_medicines" rows="4">${esc(row.clinical?.medicines || '')}</textarea></label>
+      <label>Medicines source page<input name="clinical_page_medicines" type="number" min="0" step="1" value="${esc(row.clinical?.source_pages?.medicines ?? 0)}"></label>
       <label>Observations / measurements<textarea name="clinical_observations" rows="3">${esc(row.clinical?.observations || '')}</textarea></label>
+      <label>Observations source page<input name="clinical_page_observations" type="number" min="0" step="1" value="${esc(row.clinical?.source_pages?.observations ?? 0)}"></label>
       <label>Allergy documentation state<select name="clinical_allergies_status">
         ${[['unknown','Unknown / not specified'],['explicit_none','Explicitly documented none'],['listed','Allergies listed']].map(([value,label]) =>
           `<option value="${value}" ${(row.clinical?.allergies_status || 'unknown') === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label>
       <label>Documented allergy details<textarea name="clinical_allergies" rows="2">${esc(row.clinical?.allergies || '')}</textarea></label>
+      <label>Allergies source page<input name="clinical_page_allergies" type="number" min="0" step="1" value="${esc(row.clinical?.source_pages?.allergies ?? 0)}"></label>
       <label><input type="checkbox" name="clinical_confirmed" ${row.clinical?.confirmed ? 'checked' : ''}>
-        I checked these clinical fields against the specified original PDF page. Preserve all other information as unconfirmed.</label>
+        I checked each clinical field against its own original PDF page (enter the page where that fact appears). Preserve all other information as unconfirmed.</label>
     </fieldset>
     ${row.kind !== 'referral' ? '<fieldset><legend>Manual source classification</legend><label><input type="checkbox" data-manual-referral required> I inspected the original PDF and confirm it is an HMR referral for this patient. The document and all clinical details remain unconfirmed until reviewed.</label></fieldset>' : ''}
     ${row.status === 'duplicate' && row.duplicate_kind === 'identity' ? `<fieldset><legend>Same-name patient safety check</legend>
