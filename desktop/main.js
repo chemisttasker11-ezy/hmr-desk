@@ -478,6 +478,9 @@ ipcMain.handle('activate-restored', async (e, passphrase) => {
   if (chosen.canceled || !chosen.filePaths.length) return {cancelled:true};
   const recovery = require('./src/restore-activation');
   const inventory = await recovery.verifyRestored(chosen.filePaths[0]);
+  const checked = await api('POST','/api/backups/validate-isolated',{destination:chosen.filePaths[0]});
+  if (!checked.verified || checked.files !== inventory.files || checked.bytes !== inventory.bytes)
+    throw Error('Recovery integrity verification failed');
   const backup = await dialog.showSaveDialog(win, {
     title: 'Mandatory encrypted backup of CURRENT data before activating recovered cases',
     defaultPath: path.join(app.getPath('documents'),'hmr-before-restore-activation.hmrbak'),
