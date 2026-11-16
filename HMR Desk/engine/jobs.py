@@ -203,6 +203,8 @@ def report_extract(patient_id):
         folder = patient_folder(get_patient(conn, patient_id))
     case, images = folder / 'case.txt', folder / 'case-images'
     if case.exists() or images.exists(): raise FileExistsError('Extraction output already exists')
+    if not EXTRACT_SCRIPT.is_file():
+        raise RuntimeError('Referral extraction is not yet bundled in this build; use the existing local referral/interview editor')
     output = run_script(EXTRACT_SCRIPT, folder, images)
     if (folder / 'interview.json').is_file():
         import interview
