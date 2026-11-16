@@ -45,8 +45,11 @@ async function inventory(root) {
   return { root:base, entries:result, bytes:total };
 }
 function nested(parent, child) {
-  const relative = path.relative(parent, child);
-  return relative === '' || (!relative.startsWith('..' + path.sep) && relative !== '..' && !path.isAbsolute(relative));
+  // Windows paths must be compared case-insensitively and against real parents.
+  const canonical = value => path.resolve(value).replaceAll(String.fromCharCode(92), '/').toLowerCase();
+  const upper = canonical(parent);
+  const lower = canonical(child);
+  return lower === upper || lower.startsWith(upper.replace(/\/$/, '') + '/');
 }
 async function prepareMigration(source, destination, {onBeforeActivation} = {}) {
   if (typeof source !== 'string' || typeof destination !== 'string' ||
@@ -54,11 +57,15 @@ async function prepareMigration(source, destination, {onBeforeActivation} = {}) 
     throw Error('Choose absolute local source and destination folders');
   const before = await inventory(source);
   const target = path.resolve(destination);
-  if (nested(before.root, target) || nested(target, before.root))
+  // Resolve the existing parent before comparing: junctions, case differences,
+  // and relative aliasing must never let migration stage inside its own source.
+  const parent = path.dirname(target);
+  const existingParent = await fs.realpath(parent);
+  const canonicalTarget = path.join(existingParent, path.basename(target));
+  if (nested(before.root, canonicalTarget) || nested(canonicalTarget, before.root))
     throw Error('Source and destination must be independent folders');
   try { await fs.lstat(target); throw Error('Destination exists; choose a new empty workspace'); }
   catch (error) { if (error.code !== 'ENOENT') throw error; }
-  const parent = path.dirname(target);
   await fs.mkdir(parent, {recursive:true});
   const stage = await fs.mkdtemp(path.join(parent, '.hmr-migrate-'));
   let activated = false;
