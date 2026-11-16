@@ -80,3 +80,37 @@ def test_backup_rejects_concurrent_workspace_modification(tmp_path, monkeypatch)
         backup_bundle.create(conn, workspace, output, 'a-long-backup-password')
     assert not output.exists()
     conn.close()
+
+
+def test_plaintext_staging_uses_private_data_root(tmp_path, monkeypatch):
+    """Never put decrypted patient case files in a system-wide temporary directory."""
+    import os
+    from pathlib import Path
+
+    data = tmp_path / 'user-private'
+    workspace = tmp_path / 'workspace'
+    workspace.mkdir()
+    (workspace / 'synthetic-interview.json').write_text('{"synthetic":true}')
+    monkeypatch.setattr(db, 'BASE', str(workspace))
+    monkeypatch.setattr(db, 'DATA_DIR', str(data))
+    real_temporary = backup_bundle.tempfile.TemporaryDirectory
+    stage_locations = []
+
+    def record_directory(*args, **kwargs):
+        stage_locations.append(Path(kwargs.get('dir')).resolve())
+        return real_temporary(*args, **kwargs)
+
+    monkeypatch.setattr(backup_bundle.tempfile, 'TemporaryDirectory', record_directory)
+    conn = db.connect(str(data / 'hmr.db'))
+    output = tmp_path / 'backup.hmrbak'
+    backup_bundle.create(conn, workspace, output, 'synthetic-passphrase-123')
+    target = tmp_path / 'isolated-restore'
+    backup_bundle.restore(output, target, 'synthetic-passphrase-123')
+    assert len(stage_locations) == 2
+    private = data / '.protected-backup-staging'
+    assert all(stage == private for stage in stage_locations)
+    assert (target / 'workspace' / 'synthetic-interview.json').exists()
+    assert not any(private.iterdir()), 'Temporary directories must be removed'
+    if os.name != 'nt':
+        assert private.stat().st_mode & 0o777 == 0o700
+    conn.close()
