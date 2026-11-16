@@ -15,6 +15,7 @@ import uuid
 import fitz
 
 import jobs
+import records
 
 MAX_FILE = 25 * 1024 * 1024
 MAX_PAGES = 100
@@ -22,21 +23,19 @@ MAX_SOURCES = 80
 _LOCK = threading.RLock()
 
 
-def index_path(patient):
-    return jobs.patient_folder(patient) / 'pathology_sources.json'
+NAME = 'pathology_sources.json'
 
 
-def sources(patient):
-    target = index_path(patient)
-    if not target.is_file():
+def sources(conn, patient):
+    index = records.get_json(conn, patient['id'], NAME)
+    if index is None:
         return {'version': 1, 'sources': []}
-    index = json.loads(target.read_text(encoding='utf-8'))
     if index.get('version') != 1 or not isinstance(index.get('sources'), list):
         raise ValueError('Invalid pathology source index')
     return index
 
 
-def import_pdf(patient, file_path):
+def import_pdf(conn, patient, file_path):
     source = Path(file_path)
     if not source.is_absolute() or source.is_symlink() or not source.is_file() or source.suffix.lower() != '.pdf':
         raise ValueError('Select a regular pathology PDF')
@@ -64,7 +63,7 @@ def import_pdf(patient, file_path):
     if hashlib.sha256(source.read_bytes()).hexdigest() != digest:
         raise ValueError('Source changed during import; review the updated PDF')
     with _LOCK:
-        index = sources(patient)
+        index = sources(conn, patient)
         if len(index['sources']) >= MAX_SOURCES:
             raise ValueError('Maximum pathology source count reached')
         if any(item['sha256'] == digest for item in index['sources']):
@@ -94,7 +93,8 @@ def import_pdf(patient, file_path):
                 'verification': 'unconfirmed; pharmacist to compare original image',
             }
             index['sources'].append(record)
-            jobs.atomic_json(index_path(patient), index)
+            records.put_json(conn, patient['id'], NAME, index)
+            conn.commit()
         except Exception:
             target.unlink(missing_ok=True)
             raise
