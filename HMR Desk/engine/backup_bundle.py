@@ -7,6 +7,7 @@ import hashlib
 from contextlib import closing
 import json
 import os
+import re
 from pathlib import Path
 import secrets
 import shutil
@@ -232,3 +233,58 @@ def restore(source, destination, password, preview_only=False):
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(stage), str(destination))
     return {'restored': True, 'destination': str(destination)}
+
+
+def verify_isolated(destination):
+    """Read-only manifest, file hash and SQLite integrity checks before activation.
+
+    Cannot operate on active workspace or data. Original encrypted passphrase
+    authentication was already performed during the isolated restore.
+    """
+    destination = Path(destination).resolve()
+    if _within(Path(db.BASE).resolve(), destination) or _within(Path(db.DATA_DIR).resolve(), destination):
+        raise ValueError('Cannot verify active clinical storage as an isolated recovery')
+    marker = destination / 'restore-manifest.json'
+    if not marker.is_file() or marker.is_symlink():
+        raise ValueError('Isolated restore manifest missing')
+    manifest = json.loads(marker.read_text(encoding='utf-8'))
+    entries = manifest.get('files')
+    if manifest.get('format') != 1 or not isinstance(entries, dict) or not 1 <= len(entries) <= MAX_FILES:
+        raise ValueError('Invalid isolated recovery manifest')
+    if 'data/hmr.db' not in entries:
+        raise ValueError('Recovery database missing from manifest')
+    total = 0
+    for filename, detail in entries.items():
+        if not isinstance(filename, str) or not isinstance(detail, dict) or not isinstance(detail.get('size'), int) or (
+                not isinstance(detail.get('sha256'), str)) or not re.fullmatch('[a-f0-9]{64}', detail['sha256']):
+            raise ValueError('Unsafe recovery entry')
+        parts = Path(filename)
+        if (parts.is_absolute() or len(parts.parts) < 2 or '..' in parts.parts or
+                parts.parts[0] not in ('data', 'workspace')):
+            raise ValueError('Unsafe recovery file path')
+        original = destination.joinpath(*parts.parts)
+        if original.is_symlink() or not original.is_file() or not _within(destination, original.resolve()):
+            raise ValueError('Recovery source missing or unsafe')
+        if original.stat().st_size != detail['size']:
+            raise ValueError('Recovery file length mismatch')
+        total += detail['size']
+        if total > MAX_UNPACKED:
+            raise ValueError('Recovery dataset exceeds size limit')
+        h = hashlib.sha256()
+        with original.open('rb') as file:
+            while chunk := file.read(CHUNK):
+                h.update(chunk)
+        if h.hexdigest() != detail['sha256']:
+            raise ValueError('Recovery source hash mismatch')
+    database = destination / 'data' / 'hmr.db'
+    with closing(sqlite3.connect(f'file:{database.as_posix()}?mode=ro', uri=True)) as conn:
+        if conn.execute('PRAGMA integrity_check').fetchone()[0] != 'ok':
+            raise ValueError('Isolated restored SQLite failed integrity check')
+    if not (destination / 'workspace').is_dir():
+        raise ValueError('Recovered workspace missing')
+    return {'verified': True, 'files': len(entries), 'bytes': total, 'patients': _patient_count(database)}
+
+
+def _patient_count(database):
+    with closing(sqlite3.connect(f'file:{database.as_posix()}?mode=ro', uri=True)) as conn:
+        return conn.execute('SELECT COUNT(*) FROM patients').fetchone()[0]
