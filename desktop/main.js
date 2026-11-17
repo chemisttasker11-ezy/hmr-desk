@@ -636,7 +636,7 @@ ipcMain.handle('activate-restored', async (e, passphrase) => {
     const failure={activation:{stage:(error && error.stage) || 'activate',error}};
     if (!engineOwner) {
       try {
-        const disk=JSON.parse(await fsp.readFile(configPath,'utf8'));
+        const disk=require('./src/restore-activation').parseJsonText(await fsp.readFile(configPath,'utf8'));
         config.base=disk.base;
         engineOwner=await startEngine({resourcesPath:process.resourcesPath,dataDir,
           workspace:config.base,config,onCrash:restartEngineAfterCrash});
@@ -755,14 +755,14 @@ if (hasLock)
   app.whenReady().then(async () => {
     // Recover interrupted SQLite/config activation before any engine opens data.
     if (await require('./src/restore-activation').recoverInterruptedRestore(dataDir,configPath)) {
-      Object.assign(config, JSON.parse(await fsp.readFile(configPath,'utf8')));
+      Object.assign(config, require('./src/restore-activation').parseJsonText(await fsp.readFile(configPath,'utf8')));
       isFirstRun = false;
     }
     try {
       // A restore activation that never launched healthy is rolled back automatically.
       const pending = await require('./src/restore-activation').checkPendingActivation(dataDir,configPath);
       if (pending.state === 'rolled-back') {
-        Object.assign(config, JSON.parse(await fsp.readFile(configPath,'utf8')));
+        Object.assign(config, require('./src/restore-activation').parseJsonText(await fsp.readFile(configPath,'utf8')));
         isFirstRun = false;
         activationRolledBackNotice = 'The restored data did not start correctly after ' + pending.attempts +
           ' attempts, so HMR Desk returned to your previous data. The restored files are kept in the recovery folder.';

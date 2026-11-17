@@ -18,6 +18,10 @@ const {prepareMigration} = require('./workspace-migration');
 const MAX_UNCONFIRMED_LAUNCHES = 2;
 const ACTIVATION_RECORD = 'last-activation.json';
 const FAILURE_RECORD = 'last-activation-failure.json';
+/** Parse JSON text that a Windows editor or PowerShell 5.1 may have saved with a UTF-8 byte order mark.
+    Startup (config-load.js) already tolerates the mark; activation and rollback must read the same file the same way.
+    Only parsing strips it: the raw text is stored and restored byte-for-byte. */
+function parseJsonText(text) { return JSON.parse(String(text).replace(/^\uFEFF/, '')); }
 /** Tag an operational error with the activation stage that raised it.
     Stage names and messages are operational only: no patient content, no key material. */
 function fail(stage, message) {
@@ -44,12 +48,14 @@ const REASONS = [
   [/configuration is invalid/i,'config-invalid'],
   [/outside the active app data|independent folders|Destination exists/i,'folder-conflict'],
   [/requires recovery/i,'journal-present'],
+  [/^SyntaxError/,'invalid-json'],
   [/changed during migration/i,'source-changed'],
 ];
 function safeFailure(error) {
   const message = String((error && error.message) || error || '');
+  const kind = error && error.name === 'SyntaxError' ? 'SyntaxError' : '';
   const code = error && typeof error.code === 'string' && /^[A-Z0-9_]{2,40}$/.test(error.code) ? error.code : null;
-  const hit = REASONS.find(([pattern]) => pattern.test(message));
+  const hit = REASONS.find(([pattern]) => pattern.test(message) || (kind && pattern.test(kind)));
   return {code, reason: hit ? hit[1] : (code ? 'os-error' : 'unclassified')};
 }
 /** Persist the last activation failure privately beside the data (mode 0600, atomic).
@@ -191,7 +197,7 @@ async function rollbackLastActivation(dataDir,configPath) {
   await writeAtomic(configPath,record.previousConfig);
   await writeRecord(data,{...record,status:'rolled-back',rolledBackAt:new Date().toISOString(),
     failedActivationFolder:failed});
-  return {rolledBack:true,workspace:JSON.parse(record.previousConfig).base,failedActivationFolder:failed};
+  return {rolledBack:true,workspace:parseJsonText(record.previousConfig).base,failedActivationFolder:failed};
 }
 /** Call once at every launch before the engine opens data. */
 async function checkPendingActivation(dataDir,configPath) {
@@ -218,12 +224,12 @@ async function activateRestored(restoredDir,dataDir,configPath) {
   const stamp = Date.now() + '-' + crypto.randomUUID();
   const previousConfig = await withStage('config', async () => {
     const raw = await fs.readFile(configPath,'utf8');
-    const parsed = JSON.parse(raw);
+    const parsed = parseJsonText(raw);
     if (!parsed || typeof parsed.base !== 'string' || !path.isAbsolute(parsed.base))
       throw Error('Current workspace configuration is invalid');
     return raw;
   });
-  const config = JSON.parse(previousConfig);
+  const config = parseJsonText(previousConfig);
   if (inside(restored.folder,data) || inside(data,restored.folder))
     fail('validate', 'Restore data must be outside the active app data directory');
   const targetWorkspace = path.join(data,'activated-workspaces','restore-'+stamp);
@@ -283,7 +289,7 @@ async function activateRestored(restoredDir,dataDir,configPath) {
     await fs.rm(stagedTemplates,{recursive:true,force:true});
   }
 }
-module.exports = {verifyRestored,activateRestored,recoverInterruptedRestore,
+module.exports = {parseJsonText,verifyRestored,activateRestored,recoverInterruptedRestore,
   hasUnconfirmedActivation,rollbackLastActivation,checkPendingActivation,
   markActivationHealthy,recordActivationFailure,MAX_UNCONFIRMED_LAUNCHES,
   FAILURE_RECORD};
