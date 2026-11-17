@@ -28,6 +28,16 @@ def validate(data):
     for key, width in WIDTHS.items():
         if not isinstance(data[key], list) or any(not isinstance(row, list) or len(row) != width or any(not isinstance(x, str) for x in row) for row in data[key]): raise ValueError('invalid ' + key + ' rows')
     if not isinstance(data['issues'], list) or any(not isinstance(i, dict) or any(not isinstance(i.get(k), str) or not i[k].strip() for k in ('title', 'rec', 'rationale')) for i in data['issues']): raise ValueError('invalid issues')
+    for issue in data['issues']:
+        if 'suggestion_source' not in issue: continue
+        origin = issue['suggestion_source']
+        if (not isinstance(origin, dict) or set(origin) != {'version','context_snapshot_sha256','evidence'} or
+            origin['version'] != 1 or not isinstance(origin['context_snapshot_sha256'],str) or
+            not re.fullmatch('[a-f0-9]{64}',origin['context_snapshot_sha256']) or
+            not isinstance(origin['evidence'],list) or len(origin['evidence']) > 500 or
+            any(not isinstance(e,dict) or not isinstance(e.get('id'),str) or not isinstance(e.get('text'),str) for e in origin['evidence']) or
+            len(json.dumps(origin,ensure_ascii=False)) > 2000000):
+            raise ValueError('invalid suggestion source evidence')
     if 'needs_review' in data and (not isinstance(data['needs_review'], list) or any(x not in REVIEW for x in data['needs_review'])): raise ValueError('invalid needs_review')
 
 def load(conn, patient, ai=False):
