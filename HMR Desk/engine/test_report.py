@@ -211,6 +211,19 @@ def test_report_workflow(monkeypatch):
             with patch('pdf_export.convert', side_effect=fake_convert) as converter: jobs.report_build(p['id'], pdf=True)
             assert converter.call_count == 1 and Path(spec['out']).with_suffix('.pdf').read_bytes() == MOCK_PDF
             assert Path(spec['out']).is_file() and Path(spec['out']).with_suffix('.pdf').is_file()
+            # Cleanup pending after a good conversion: output reported, event logged, folder name only.
+            def pending_convert(docx, pdf, timeout=120):
+                Path(pdf).write_bytes(MOCK_PDF); return {'created': True, 'bytes': len(MOCK_PDF), 'cleanup_pending': str(Path(pdf).parent / '.hmr-pdf-zz'), 'cleanup_error': 'OSError: locked'}
+            with patch('pdf_export.convert', side_effect=pending_convert):
+                output = jobs.report_build(p['id'], pdf=True)
+            assert 'PDF created' in output and '.hmr-pdf-zz' in output and str(root) not in output
+            def failing_convert(docx, pdf, timeout=120):
+                exc = RuntimeError('Bundled PDF conversion failed'); exc.cleanup_pending = '.hmr-pdf-yy'; exc.cleanup_error = 'OSError: locked'; raise exc
+            with patch('pdf_export.convert', side_effect=failing_convert):
+                try: jobs.report_build(p['id'], pdf=True); raise AssertionError('conversion failure must surface')
+                except RuntimeError as exc: assert 'conversion failed' in str(exc) and '.hmr-pdf-yy' in str(exc) and isinstance(exc.__cause__, RuntimeError)
+            logged = [r[0] for r in conn.execute("SELECT detail FROM events WHERE type='pdf_cleanup_pending' ORDER BY id")]
+            assert len(logged) == 2 and '.hmr-pdf-zz' in logged[0] and '"conversion": "ok"' in logged[0] and '.hmr-pdf-yy' in logged[1] and '"failed"' in logged[1]
             assert [s.name for s in steps.FLOW][-6:] == ['confirm_medicines','interactions','report_assist','report_start','report_build','claim']
             spec = report.load(conn, p); spec['issues'] = [{'title': 'Hand edited', 'rec': 'Review', 'rationale': 'Reason'}]; spec['intro'] = 'Intro ?'; spec['thanks'] = 'Thanks ?'; spec['reason'] = 'Edited reason'; spec['needs_review'] = [x for x in spec['needs_review'] if x != 'reason']
             report.save(conn, p, spec)
@@ -358,6 +371,19 @@ def test_convert_reports_cleanup_pending_after_success(tmp_path, monkeypatch):
     result = pdf_export.convert(source, tmp_path / 'r.pdf')
     assert result['created'] and (tmp_path / 'r.pdf').is_file()
     assert result['cleanup_pending'] and result['cleanup_error'] == 'OSError: locked'
+
+
+def test_convert_failure_keeps_primary_error_and_cleanup_evidence(tmp_path, monkeypatch):
+    import pdf_export, docx, subprocess
+    source = tmp_path / 'r.docx'; docx.Document().save(source)
+    fake = tmp_path / 'soffice.exe'; fake.write_bytes(b'x')
+    monkeypatch.setenv('HMR_PDF_CONVERTER', str(fake))
+    monkeypatch.setattr(pdf_export.subprocess, 'run', lambda cmd, **k: subprocess.CompletedProcess(cmd, 1, b'', b''))
+    monkeypatch.setattr(pdf_export, 'remove_tree', lambda p, **k: 'OSError: locked')
+    with pytest.raises(RuntimeError, match='conversion failed') as info: pdf_export.convert(source, tmp_path / 'r.pdf')
+    assert info.value.cleanup_pending.startswith('.hmr-pdf-') and '/' not in info.value.cleanup_pending and info.value.cleanup_error == 'OSError: locked'
+    assert not (tmp_path / 'r.pdf').exists()
+    monkeypatch.undo()
 
 
 def test_followup_review_binding_and_key_validation(tmp_path):

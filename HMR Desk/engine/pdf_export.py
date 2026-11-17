@@ -82,11 +82,22 @@ def convert(docx, pdf, timeout=120):
         if target.exists():
             raise FileExistsError('PDF appeared during conversion; refusing overwrite')
         os.replace(converted, target)
-    finally:
+    except BaseException as exc:
         failure = remove_tree(directory)
+        if failure:
+            # Keep the primary error; add the cleanup evidence beside it (folder name only, no patient path).
+            exc.cleanup_pending = Path(directory).name
+            exc.cleanup_error = failure
+        raise
+    failure = remove_tree(directory)
     result = {'created': True, 'bytes': target.stat().st_size, 'cleanup_pending': None}
     if failure:
         # Conversion succeeded; the scratch folder is still locked. Report it, do not hide it.
         result['cleanup_pending'] = str(directory)
         result['cleanup_error'] = failure
     return result
+
+
+def pending_note(name):
+    return ('Temporary PDF working folder ' + name + ' could not be removed yet (Windows still holds files). '
+            'Close other programs using the report folder, then delete that folder.')

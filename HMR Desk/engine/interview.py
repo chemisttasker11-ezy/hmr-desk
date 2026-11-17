@@ -454,7 +454,15 @@ def export(conn, patient, fmt):
     with target.open('xb') as f: doc.save(f)
     if fmt in ('pdf', 'both'):
         import pdf_export
-        pdf_export.convert(target, folder / (stem + '.pdf'))
+        try:
+            converted = pdf_export.convert(target, folder / (stem + '.pdf'))
+        except Exception as exc:
+            left = getattr(exc, 'cleanup_pending', None)
+            if left:
+                db.log(conn, patient['id'], 'pdf_cleanup_pending', {'folder': left, 'conversion': 'failed', 'error': exc.cleanup_error}, 'engine'); conn.commit()
+            raise
+        if isinstance(converted, dict) and converted.get('cleanup_pending'):
+            db.log(conn, patient['id'], 'pdf_cleanup_pending', {'folder': Path(converted['cleanup_pending']).name, 'conversion': 'ok', 'error': converted.get('cleanup_error', '')}, 'engine'); conn.commit()
     return str(target)
 
 def consent_template():
