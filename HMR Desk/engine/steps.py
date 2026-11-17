@@ -68,6 +68,10 @@ def interactions_result_current(conn, p, name):
             and hashlib.sha256(confirmed).hexdigest() == match[1]
             and hashlib.sha256(result).hexdigest() == match[2])
 
+def medicines_current(conn, p):
+    import api
+    return api.confirmed_medicines_current(conn, p)
+
 def interactions_done(conn, p):
     confirmed = records.get(conn, p['id'], 'confirmed_meds.json')
     if confirmed is not None:
@@ -130,7 +134,7 @@ def ready(name, conn, p):
         return (False, 'confirm the medicine list first')
     elif name == 'report_start':
         if p['state'] not in POST: return (False, 'visit not recorded')
-        if not exists(conn, p, 'confirmed_meds.json'): return (False, 'confirm the medicine list first')
+        if not medicines_current(conn, p): return (False, 'confirm the medicine list first')
         if not interactions_done(conn, p): return (False, 'run the eMIMS interaction check first')
     elif name == 'report_assist':
         if p['state'] not in POST: return (False, 'visit not recorded')
@@ -138,7 +142,7 @@ def ready(name, conn, p):
         if not interactions_done(conn, p): return (False, 'run the eMIMS interaction check first')
     elif name == 'interactions':
         if p['state'] not in POST: return (False, 'visit not recorded')
-        if not exists(conn, p, 'confirmed_meds.json'): return (False, 'confirm the medicine list first')
+        if not medicines_current(conn, p): return (False, 'confirm the medicine list first')
     elif name == 'report_build':
         if p['state'] not in ('visited', 'report_drafted'): return (False, 'patient is not awaiting report')
         if not exists(conn, p, 'report_spec.json'): return (False, 'report spec missing')
@@ -165,7 +169,7 @@ def done(name, conn, p):
         return bool(f and any(x.is_file() and x.name.lower().startswith('hmr interview') and x.suffix.lower() in ('.docx', '.pdf') for x in f.iterdir()))
     if name == 'report_extract': return exists(conn, p, 'case.txt')
     if name == 'report_draft': return exists(conn, p, 'report_spec.json')
-    if name == 'confirm_medicines': return exists(conn, p, 'confirmed_meds.json')
+    if name == 'confirm_medicines': return medicines_current(conn, p)
     if name == 'report_start': return exists(conn, p, 'report_spec.json')
     if name == 'report_assist': return exists(conn, p, 'report_spec.ai.json')
     if name == 'interactions': return interactions_done(conn, p)
