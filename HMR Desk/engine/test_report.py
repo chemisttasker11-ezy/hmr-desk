@@ -358,6 +358,19 @@ def test_pdf_cleanup_retries_then_reports_without_hiding(tmp_path, monkeypatch):
     assert 'not empty' in err and d.exists()  # kept, reported, never ignored or force-removed
 
 
+def test_remove_tree_never_reports_success_while_folder_remains(tmp_path, monkeypatch):
+    import pdf_export, shutil
+    d = tmp_path / 'scratch'; d.mkdir()
+    monkeypatch.setattr(shutil, 'rmtree', lambda path, *a, **k: None)  # claims success, removes nothing
+    t = [0.0]
+    def clock(): t[0] += 3; return t[0]
+    assert 'still present' in pdf_export.remove_tree(d, wait=10, sleep=lambda s: None, clock=clock) and d.exists()
+    def vanished(path, *a, **k): raise FileNotFoundError(2, 'nested entry vanished')
+    monkeypatch.setattr(shutil, 'rmtree', vanished)
+    t[0] = 0.0
+    assert 'FileNotFoundError' in pdf_export.remove_tree(d, wait=10, sleep=lambda s: None, clock=clock) and d.exists()
+
+
 def test_convert_reports_cleanup_pending_after_success(tmp_path, monkeypatch):
     import pdf_export, docx, subprocess
     source = tmp_path / 'r.docx'; docx.Document().save(source)

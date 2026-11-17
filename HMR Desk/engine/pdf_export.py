@@ -25,14 +25,19 @@ def remove_tree(path, wait=None, sleep=time.sleep, clock=time.monotonic):
     while True:
         try:
             shutil.rmtree(path)
-            return None
-        except FileNotFoundError:
-            return None
-        except OSError as exc:
-            if clock() >= deadline:
-                return type(exc).__name__ + ': ' + str(exc)
-            sleep(delay)
-            delay = min(delay * 2, 1.0)
+            if not path.exists():
+                return None
+            exc = OSError('directory still present after removal reported success')
+        except FileNotFoundError as caught:
+            if not path.exists():
+                return None  # the folder itself is gone
+            exc = caught  # a nested entry vanished mid-walk; the folder remains, so retry
+        except OSError as caught:
+            exc = caught
+        if clock() >= deadline:
+            return type(exc).__name__ + ': ' + str(exc)
+        sleep(delay)
+        delay = min(delay * 2, 1.0)
 
 
 def available():
