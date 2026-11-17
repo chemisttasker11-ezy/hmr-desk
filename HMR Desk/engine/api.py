@@ -829,13 +829,16 @@ def handle(conn, method, path, query, body):
             import report
             q = query.get('q', '')
             return 200, {'results': report.library(q[0] if isinstance(q, list) and q else q)}
-        match = re.fullmatch(r'/api/patients/(\d+)/suggestions', path)
+        match = re.fullmatch(r'/api/patients/(\d+)/suggestions(?:/context)?', path)
         if method == 'GET' and match:
             import suggest
             p = conn.execute('SELECT * FROM patients WHERE id=?', (int(match[1]),)).fetchone()
             if not p: return 404, {'error': 'patient not found'}
             context = suggest.context_for(conn, p)
-            return 200, {'suggestions': suggest.suggest(context), 'context_gaps': suggest.context_gaps(context)}
+            if path.endswith('/context'):
+                return 200, {'context_snapshot_sha256': context['context_snapshot_sha256']}
+            return 200, {'suggestions': suggest.suggest(context), 'context_gaps': suggest.context_gaps(context),
+                         'context_snapshot_sha256': context['context_snapshot_sha256']}
         match = re.fullmatch(r'/api/patients/(\d+)/report/refresh', path)
         if method == 'POST' and match:
             import report
