@@ -38,6 +38,7 @@ contextBridge.exposeInMainWorld('hmr', {
   openLocalReference: (hash,page) => ipcRenderer.invoke('local-reference-open', hash,page),
   pickPathologySource: id => ipcRenderer.invoke('pathology-source-pick', id),
   registerOwnerTemplate: details => ipcRenderer.invoke('register-owner-template', details),
+  installMedicineReference: () => ipcRenderer.invoke('install-medicine-reference'),
   openPathologySource: (id, sourceId) => ipcRenderer.invoke('open-pathology-source', id, sourceId),
   oneOff: (action, site, value) => ipcRenderer.invoke('one-off', action, site, value),
   referralPick: (kind) => ipcRenderer.invoke('referral-pick', kind),
