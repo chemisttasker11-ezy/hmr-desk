@@ -136,7 +136,7 @@ def build(conn, patient, today=None):
             unit=row['unit'], reference_interval=row['reference_interval'], comment=row['comment'],
             verification='named pharmacist verified' if verified else 'UNVERIFIED: check original',
             source=row['source'], test=row['test'], value=row['value'],
-            structured=pathology_values.structure(row['value'], row['reference_interval']) or {},
+            structured=pathology_values.structure(row['value'], row['reference_interval'], row['unit']) or {},
             verified_by=audit['verified_by'] if verified else '',
             verified_at=audit['verified_at'] if verified else '')
         item = evidence[-1] if evidence and evidence[-1]['id']=='pathology:'+row['id'] else None
