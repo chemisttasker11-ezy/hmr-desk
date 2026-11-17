@@ -5,6 +5,7 @@ unknown are distinct from pharmacist-confirmed absence. Every derived report
 snapshot is bound to exact source revisions and carries no prescribing decisions.
 """
 import hashlib
+import copy
 import json
 from pathlib import Path
 
@@ -63,6 +64,11 @@ def _medicine_rows(record, section):
             'verification': 'pharmacist_interview_record' if _text(actual) or
                             info.get('as_instructed') is True else 'unconfirmed_actual_use',
         })
+        # Preserve legacy canonical hashes until an explicit ID-bearing save.
+        # The full interview revision guard remains independent for all records.
+        if info.get('item_id'):
+            medicines[-1]['item_id'] = info['item_id']
+            medicines[-1]['reference'] = copy.deepcopy(info.get('reference'))
     return medicines
 
 
