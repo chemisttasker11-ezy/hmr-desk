@@ -719,20 +719,46 @@ document.addEventListener('focusout', (event) => {
   if (firstPlain && row !== firstPlain) tbody.insertBefore(row, firstPlain);
 });
 
+let interviewPathologySaveChain = Promise.resolve();
 async function savePathologyRecords() {
+  if (!interviewPathology || !interviewPathologyDirty) return true;
+  // Serialize saves for this screen: an older in-flight response must never
+  // overwrite a newer adopted revision.
+  const run = interviewPathologySaveChain.then(() => savePathologyRecordsNow());
+  interviewPathologySaveChain = run.catch(() => {});
+  return run;
+}
+async function savePathologyRecordsNow() {
   if (!interviewPathology || !interviewPathologyDirty) return true;
   // Guard patient + screen generation: a late save response after switching
   // patient must not install the old patient's records or clear its errors.
   const savePatient = interviewId, saveRequest = interviewRequest;
   const current = () => page === 'interview' && saveRequest === interviewRequest && savePatient === interviewId;
+  // Snapshot what is being sent; edits during the POST must never be
+  // overwritten by the response (that would silently lose pharmacist input).
+  const sentRecords = JSON.stringify(interviewPathology.records);
+  const sentRevision = interviewPathology.revision;
   try {
     const saved = await hmr.api('POST', `/api/patients/${encodeURIComponent(savePatient)}/pathology-records`,
-      {revision: interviewPathology.revision, records: interviewPathology.records});
+      {revision: sentRevision, records: JSON.parse(sentRecords)});
     if (!current()) return false;
-    interviewPathology = saved;
-    interviewPathologyDirty = false; interviewPathologyError = '';
+    if (JSON.stringify(interviewPathology.records) === sentRecords) {
+      interviewPathology = saved;
+      interviewPathologyDirty = false;
+      interviewPathologyError = '';
+      interviewInvalidateObservations();
+      return true;
+    }
+    // Same-patient edits landed while saving: keep them, adopt the newer
+    // server revision (never a lower one), and stay dirty. Report
+    // non-success so callers such as leaveInterview do not navigate away
+    // or proceed as though everything was stored.
+    interviewPathology = { ...saved, revision: Math.max(saved.revision, interviewPathology.revision),
+                           records: interviewPathology.records };
+    interviewPathologyDirty = true;
+    interviewPathologyError = 'Edits made while saving were kept; save again to store them.';
     interviewInvalidateObservations();
-    return true;
+    return false;
   } catch (e) {
     if (!current()) return false;
     interviewPathologyError = errorText(e); return false;
