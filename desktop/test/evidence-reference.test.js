@@ -44,3 +44,12 @@ test('report uses report patient id, not last interview patient id',async()=>{
 test('heading-only retrieval clearly distinguishes opening quote from body text match',()=>{
  const h=harness(),r=response();r.matches[0].quote_basis='heading_match_opening_passage';const html=h.ctx.evidenceReferenceHtml(r);assert.match(html,/not a claim that the matched words occur in it/);
 });
+
+test('checked rows with no literal match are listed as not assessed, escaped, never advice',()=>{
+ const h=harness(),r=response();
+ r.unmatched_evidence=[{id:'pathology:ee',kind:'pathology',text:'Potassium: 4.1 <b>not assessed</b>'}];
+ const html=h.ctx.evidenceReferenceHtml(r);
+ assert.match(html,/no literal reference match \(1\)/);assert.match(html,/does not rule out an issue/);assert.match(html,/does not assess them/);
+ assert.match(html,/Potassium: 4\.1 &lt;b&gt;not assessed&lt;\/b&gt;/);assert.doesNotMatch(html,/<b>not assessed<\/b>/);
+ const plain=h.ctx.evidenceReferenceHtml(response());assert.doesNotMatch(plain,/no literal reference match \(/);
+});
