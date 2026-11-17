@@ -41,3 +41,6 @@ test('late request errors cannot overwrite another patient or newer loaded match
 test('report uses report patient id, not last interview patient id',async()=>{
  const h=harness();h.ctx.page='report_editor';await h.ctx.refreshEvidenceReferences();assert.equal(h.calls[0][1],'/api/patients/2/reference-matches');
 });
+test('heading-only retrieval clearly distinguishes opening quote from body text match',()=>{
+ const h=harness(),r=response();r.matches[0].quote_basis='heading_match_opening_passage';const html=h.ctx.evidenceReferenceHtml(r);assert.match(html,/not a claim that the matched words occur in it/);
+});
