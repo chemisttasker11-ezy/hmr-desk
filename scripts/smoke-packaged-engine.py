@@ -1,5 +1,7 @@
 """Windows CI smoke test of the real frozen executable (synthetic workspace only)."""
 import json
+import hashlib
+import fitz
 import os
 from pathlib import Path
 import secrets
@@ -67,6 +69,36 @@ def main():
                 raise AssertionError('Patient files exposed over HTTP')
             except HTTPError as exc:
                 assert exc.code == 404
+            def reference_call(method, path, body=None):
+                request = Request(f'http://127.0.0.1:{port}'+path,
+                    headers={'X-HMR-Token': token, 'Content-Type': 'application/json'},
+                    data=json.dumps(body).encode() if body is not None else None, method=method)
+                with urlopen(request,timeout=10) as response: return json.load(response)
+            synthetic_pdf=Path(d)/'synthetic-private-reference.pdf'
+            document=fitz.open()
+            first=document.new_page()
+            first.insert_text((72,72),'Brainstorm synthetic acceptance heading',fontname='hebo',fontsize=16)
+            first.insert_text((72,110),'Synthetic first physical page context only, no clinical reference or patient data.')
+            second=document.new_page()
+            second.insert_text((72,100),'Continuation synthetic-marker-alpha for checking the original physical PDF page.')
+            document.save(synthetic_pdf);document.close()
+            expected_hash=hashlib.sha256(synthetic_pdf.read_bytes()).hexdigest()
+            registered=reference_call('POST','/api/reference/local',{'path':str(synthetic_pdf),
+                'edition':'Synthetic package smoke V1','local_use_confirmed':True})
+            assert registered['pdf_sha256']==expected_hash and registered['page_count']==2
+            assert 'path' not in registered, 'Reference status unnecessarily exposes filesystem path'
+            assert reference_call('GET','/api/reference/local')['edition']=='Synthetic package smoke V1'
+            found=reference_call('GET','/api/reference/search?q=synthetic-marker-alpha')['results']
+            assert len(found)==1 and found[0]['page']==2 and found[0]['section_page']==1
+            assert found[0]['pdf_sha256']==expected_hash and found[0]['review_status']=='pharmacist_review_required'
+            original=reference_call('POST','/api/reference/open',{'pdf_sha256':expected_hash,'page':2})
+            assert original['page']==2 and Path(original['path'])==synthetic_pdf
+            synthetic_pdf.write_bytes(synthetic_pdf.read_bytes()+b'\nchanged')
+            try:
+                reference_call('POST','/api/reference/open',{'pdf_sha256':expected_hash,'page':2})
+                raise AssertionError('Changed reference opened with a stale hash')
+            except HTTPError as exc: assert exc.code==409
+            print('PASS: frozen private local-reference registration, physical-page search and stale-original refusal (synthetic PDF only)')
             req = Request(f'http://127.0.0.1:{port}/api/engine/stop',
                           headers={'X-HMR-Token': token, 'Content-Type': 'application/json'},
                           data=b'{}', method='POST')
