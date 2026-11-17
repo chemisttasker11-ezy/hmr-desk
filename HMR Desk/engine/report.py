@@ -14,6 +14,7 @@ import interview
 import jobs
 import records
 import manual_defaults
+import medicine_snapshot
 
 WIDTHS = {'meds': 4, 'otc': 3, 'ceased': 3, 'path': 5}
 REVIEW = ['thanks', 'reason', 'intro', 'followup']
@@ -189,7 +190,7 @@ def start(conn, patient):
     import steps
     visit = steps.event_date(conn, patient, 'visited') or p.get('visit_date') or h['visit'].split(' ')[0]
     data.update(out=str(folder / ('HMR ' + re.sub(r'[<>:"/\\|?*]', '', name).rstrip(' .') + '.docx')), name=name, assess_date=visit, report_date=dt.date.today().strftime('%d/%m/%Y'), patient='\n'.join(patient_lines), doctor='\n'.join(filter(None, doctor_lines)), dear='Dear ' + gp + ',', path_date=dates, issues=[], needs_review=REVIEW.copy())
-    data.update(derived, interview_revision=record['revision'], interview_reason=record['details']['reason'], pathology_revision=__import__('pathology_records').revision(conn, patient))
+    data.update(derived, medicine_snapshot=medicine_snapshot.snapshot(record), medicine_snapshot_sha256=medicine_snapshot.digest(medicine_snapshot.snapshot(record)), interview_revision=record['revision'], interview_reason=record['details']['reason'], pathology_revision=__import__('pathology_records').revision(conn, patient))
     intro = intro_text(record, name, visit)
     if intro: data['intro'] = intro
     if record['details']['reason'].strip():
@@ -210,7 +211,7 @@ def _refresh(conn, patient):
     validate(data)
     record, derived, _ = _derived(conn, patient)
     import pathology_records
-    data.update(derived, interview_revision=record['revision'], interview_reason=record['details']['reason'],
+    data.update(derived, medicine_snapshot=medicine_snapshot.snapshot(record), medicine_snapshot_sha256=medicine_snapshot.digest(medicine_snapshot.snapshot(record)), interview_revision=record['revision'], interview_reason=record['details']['reason'],
                 pathology_revision=pathology_records.revision(conn, patient))
     save(conn, patient, data)
     db.log(conn, patient['id'], 'report_refreshed', {}, 'job')
