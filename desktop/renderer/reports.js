@@ -30,9 +30,10 @@ function reportRow(p, detail, agent) {
   const steps = Object.fromEntries((detail.steps || []).map((step) => [step.name, step]));
   const interactions = steps.interactions;
   const visited = ['visited', 'report_drafted', 'signed_off', 'sent', 'claimed'].includes(p.state);
+  const confirmation = steps.confirm_medicines;
   const medicines = {
     ready: visited,
-    done: visited && !!interactions && interactions.reason !== 'confirm the medicine list first',
+    done: visited && confirmation?.done === true,
     reason: visited ? '' : 'Visit not recorded',
   };
   const build = steps.report_build;
@@ -237,4 +238,4 @@ async function pharmacistReportSignoff(patientId) {
     });
     dialog.showModal();
   });
-            }
+      }
