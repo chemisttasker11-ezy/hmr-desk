@@ -17,6 +17,8 @@ from pathlib import Path
 from copy import deepcopy
 
 from docx import Document
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
 from docx.table import Table
 from docx.text.paragraph import Paragraph
 
@@ -230,6 +232,16 @@ def _set_cell_text(cell, text):
     _set_text(paragraphs[0], text)
 
 
+def _paginate_rows(table):
+    """Repeat the header row on each page and keep every row whole (idempotent; adds only what is missing)."""
+    for index, row in enumerate(table.rows):
+        properties = row._tr.get_or_add_trPr()
+        wanted = ['cantSplit'] + (['tblHeader'] if index == 0 else [])
+        for name in wanted:
+            if properties.find(qn('w:' + name)) is None:
+                properties.append(OxmlElement('w:' + name))
+
+
 def _fill_prototype_table(prototype, rows, labels):
     """Clone the template's own header and sample row; keep its shading, borders, fonts."""
     if len(prototype.rows) < 2:
@@ -247,6 +259,7 @@ def _fill_prototype_table(prototype, rows, labels):
             _set_cell_text(cell, str(value))
     for old in list(prototype.rows)[1:len(prototype.rows) - len(rows)]:
         prototype._tbl.remove(old._tr)
+    _paginate_rows(prototype)
 
 
 def _table(doc, rows, labels):
@@ -257,6 +270,7 @@ def _table(doc, rows, labels):
     for values in rows:
         for cell, value in zip(table.add_row().cells, values):
             cell.text = value
+    _paginate_rows(table)
     return table
 
 
