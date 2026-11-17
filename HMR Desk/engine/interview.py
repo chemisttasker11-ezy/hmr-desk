@@ -69,6 +69,21 @@ def reference_text(meta):
     ref = (meta or {}).get('reference')
     return 'Reference: ' + ref['display'] + ' (' + ref['source'].upper() + ' ' + ref['code'] + ', release ' + ref['release'] + ')' if valid_reference(ref) else ''
 
+PROPOSAL_CANDIDATE_KEYS = {'source', 'code', 'display', 'kind', 'generic_name', 'brand_name', 'dose_form', 'release'}
+
+def valid_prefill_proposal(p):
+    # An unconfirmed intake-prepared proposal: identity text plus one catalogue
+    # candidate. It is never a confirmed reference and never attaches by itself.
+    if not isinstance(p, dict) or set(p) != {'input_text', 'candidate'}: return False
+    if not isinstance(p['input_text'], str) or not 0 < len(p['input_text']) <= 400: return False
+    c = p['candidate']
+    if not isinstance(c, dict) or set(c) != PROPOSAL_CANDIDATE_KEYS: return False
+    for k in PROPOSAL_CANDIDATE_KEYS:
+        # Catalogue descriptive fields can be NULL; identity fields cannot.
+        if c[k] is None and k in ('kind', 'generic_name', 'brand_name', 'dose_form'): continue
+        if not isinstance(c[k], str) or len(c[k]) > 400: return False
+    return all(c[k] for k in ('source', 'code', 'display', 'release'))
+
 def valid_use(m, base, optional):
     if 'source_evidence' in m:
         evidence = m['source_evidence']
@@ -84,6 +99,9 @@ def valid_use(m, base, optional):
     if 'reference' in m:
         if not valid_reference(m['reference']): return False
         m = {k: v for k, v in m.items() if k != 'reference'}
+    if 'prefill_proposal' in m:
+        if not valid_prefill_proposal(m['prefill_proposal']): return False
+        m = {k: v for k, v in m.items() if k != 'prefill_proposal'}
     if any(k in m and (not isinstance(m[k], str) or len(m[k]) > 20000 or (k == 'kind' and m[k] not in ('', 'prescribed', 'otc', 'complementary'))) for k in optional): return False
     m = {k: v for k, v in m.items() if k not in optional}
     extra = {'use_status', 'use_reason', 'use_details'}
@@ -213,6 +231,30 @@ def blank(conn, patient):
         elif any(reviewed.get(k) for k in ('conditions','medicines','observations','allergies')):
             record['clarify'].append('Unconfirmed source material was entered during intake; review original PDF')
     return record
+
+
+def prepare_prefill_proposals(record):
+    """Attach unconfirmed exact-unique reference proposals to referral-derived medicines.
+
+    Only the intake materialization path (referral_entry.commit) calls this, so a
+    persisted proposal always means 'prepared at intake'. Records built on first
+    interview open or for pre-existing patients never carry one; the interview
+    then shows the normal live lookup with no intake provenance. This never
+    attaches or confirms a medicine: the pharmacist always picks. Missing
+    reference data or any lookup failure leaves the record untouched.
+    """
+    try:
+        import medicine_reference
+        metas = record.get('details', {}).get('meds', [])
+        derived = [(i, row[0]) for i, (meta, row) in enumerate(zip(metas, record.get('meds', []))) if meta.get('source_evidence')]
+        if derived:
+            proposals = medicine_reference.suggest_many([name for _, name in derived[:80]])
+            if proposals.get('installed'):
+                for (i, _), proposal in zip(derived[:80], proposals['results']):
+                    if proposal['state'] == 'exact_candidate' and proposal['input_text'] == record['meds'][i][0]:
+                        metas[i]['prefill_proposal'] = {'input_text': proposal['input_text'], 'candidate': proposal['candidates'][0]}
+    except Exception:
+        pass
 
 class Conflict(Exception):
     pass
