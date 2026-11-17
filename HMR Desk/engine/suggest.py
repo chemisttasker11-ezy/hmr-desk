@@ -109,6 +109,9 @@ def extractor(mapping, aliases, tuning=2):
 
 def context_rules(context):
  out = {}
+ # New production evidence path has no unsourced numeric or age cutoffs.
+ # Compatibility case-index evaluation below is not approved clinical logic.
+ if context.get('evidence_version') == 1: return out
  try:
   if int(context.get('age') or 0)>=75: out['topic:falls']='age '+str(context['age'])
  except (ValueError, TypeError): pass
@@ -203,9 +206,24 @@ def suggest(context, index=None):
     if match and match not in names: names.append(match)
    if names: reason='Takes '+ ' and '.join(names)+' together.'
   why=[reason, f'Raised in {count} of {exposed} past patients with this key.']
+  supporting=[]
+  if context.get('evidence_version') == 1:
+   for e in context['evidence']:
+    if not e['eligible']: continue
+    ekeys=med_keys([e['text']],mapping,aliases) if e['kind']=='medicine' else extract(e['text'])
+    relevant_keys=({key} | set(f['keys']) | (set('class:'+x for x in key[6:].split(' + ')) if key.startswith('combo:') else set()))
+    if relevant_keys & ekeys: supporting.append(e)
+   reason=('Medicine/class text match: ' if not key.startswith('topic:') else 'Topic text match, not an asserted finding: ')+label
+   why=[reason, f'Template appeared in {count} of {exposed} indexed past cases with this key; not a probability or guideline.', 'Check original evidence, negation, history and current relevance. Past-case wording may not apply.']
   missing=[]
   if (key.startswith('med:') or key.startswith('class:') or key=='topic:renal') and not re.search(r'\begfr\b',notes,re.I): missing.append('no eGFR on file')
   if key in ('topic:hypotension','topic:blood pressure') and not re.search(r'\b(?:bp|blood pressure)\b',notes,re.I): missing.append('no BP recorded')
+  if context.get('evidence_version') == 1:
+   missing=['Clinical relevance and original context require pharmacist review']
+   for e in supporting:
+    missing.extend(e['id']+': '+flag for flag in e.get('flags',[]))
+    if e['kind']=='medicine' and e.get('use_status') not in ('taking','prn'):
+     missing.append(e['id']+': actual use is not established')
   lib=next((x['title'] for x in index['library'] if key in x['keys']),'')
   relevant={key} | set(f['keys'])
   matches=[(len(relevant & set(section['keys'])), section) for section in index.get('brainstorm_sections', [])]
@@ -229,26 +247,17 @@ def suggest(context, index=None):
     alternatives.append({k:other[k] for k in ('title','rec','rationale')})
     if len(alternatives)==2: break
   result.append({**{k:f[k] for k in ('title','rec','rationale')},'source':'past cases','why':why,'missing':missing,'alternatives':alternatives,'library':lib,'brainstorm':brain,'key':key})
+  if context.get('evidence_version') == 1:
+   result[-1].update(evidence=supporting, context_snapshot_sha256=context['context_snapshot_sha256'], review_status='pharmacist_review_required')
   if len(result)==15: break
  return result
 
 def context_for(conn, patient):
- p=dict(patient)
- if records.exists(conn,patient['id'],'interview.json'): record=interview.load(conn,patient)
- else: record={'header':{},'meds':[],'other_meds':[],'conditions':'','obs':[],'pathology':[],'notes':'','mobility':''}
- confirmed=records.get_json(conn,patient['id'],'confirmed_meds.json')
- meds=[r[0] for r in confirmed.get('meds',[]) if r] if confirmed is not None else [r[0] for r in record['meds']+record['other_meds'] if r and r[0] and not re.search(r'\b(?:ceased|stopped)\b',' '.join(r),re.I)]
- interactions='\n'.join(records.get(conn,patient['id'],n).decode('utf-8',errors='replace') for n in sorted(records.names_like(conn,patient['id'],'MIMS interactions')) if n.lower().endswith('.txt'))
- age=record['header'].get('age','')
- if not age and p.get('dob'):
-  for fmt in ('%Y-%m-%d','%d/%m/%Y'):
-   try:
-    born=dt.datetime.strptime(p['dob'][:10],fmt).date(); today=dt.date.today(); age=today.year-born.year-((today.month,today.day)<(born.month,born.day)); break
-   except ValueError: pass
- import report
- return {'age':age,'sex':p.get('sex',''),'meds':meds,'conditions':record['conditions'],'obs':report.observations(record)+' '+' '.join(' '.join(x) for x in record['obs'])+' '+record.get('notes','')+' '+record.get('mobility',''),'labs':[' '.join(x) for x in record['pathology']],'interactions':interactions}
+ import suggestion_context
+ return suggestion_context.build(conn,patient)
 
 def context_gaps(context):
+ if context.get('evidence_version') == 1: return context['context_gaps']
  gaps=[]; text=context.get('obs','')+' '+' '.join(context.get('labs',[]))
  if not context.get('meds'): gaps.append('no medicines on file')
  if not context.get('age'): gaps.append('no age on file')
