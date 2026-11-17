@@ -326,6 +326,40 @@ def test_real_pdf_converter_when_available(tmp_path):
     with fitz.open(target) as rendered: assert rendered.page_count >= 1 and 'Synthetic converter check' in rendered[0].get_text()
 
 
+def test_pdf_cleanup_retries_then_reports_without_hiding(tmp_path, monkeypatch):
+    import pdf_export, shutil
+    d = tmp_path / 'scratch'; (d / 'x').mkdir(parents=True)
+    calls = []
+    real = shutil.rmtree
+    def flaky(path, *a, **k):
+        calls.append(path)
+        if len(calls) < 3: raise OSError(145, 'The directory is not empty')
+        return real(path, *a, **k)
+    monkeypatch.setattr(shutil, 'rmtree', flaky)
+    assert pdf_export.remove_tree(d, sleep=lambda s: None) is None and not d.exists() and len(calls) == 3
+    d.mkdir(); t = [0.0]
+    def clock(): t[0] += 3; return t[0]
+    def locked(path, *a, **k): raise OSError(145, 'The directory is not empty')
+    monkeypatch.setattr(shutil, 'rmtree', locked)
+    err = pdf_export.remove_tree(d, wait=10, sleep=lambda s: None, clock=clock)
+    assert 'not empty' in err and d.exists()  # kept, reported, never ignored or force-removed
+
+
+def test_convert_reports_cleanup_pending_after_success(tmp_path, monkeypatch):
+    import pdf_export, docx, subprocess
+    source = tmp_path / 'r.docx'; docx.Document().save(source)
+    fake = tmp_path / 'soffice.exe'; fake.write_bytes(b'x')
+    monkeypatch.setenv('HMR_PDF_CONVERTER', str(fake))
+    def run(cmd, **k):
+        out = Path(cmd[cmd.index('--outdir') + 1]); (out / 'r.pdf').write_bytes(b'%PDF-' + b'0' * 200)
+        return subprocess.CompletedProcess(cmd, 0, b'', b'')
+    monkeypatch.setattr(pdf_export.subprocess, 'run', run)
+    monkeypatch.setattr(pdf_export, 'remove_tree', lambda p, **k: 'OSError: locked')
+    result = pdf_export.convert(source, tmp_path / 'r.pdf')
+    assert result['created'] and (tmp_path / 'r.pdf').is_file()
+    assert result['cleanup_pending'] and result['cleanup_error'] == 'OSError: locked'
+
+
 def test_followup_review_binding_and_key_validation(tmp_path):
     import manual_defaults
     base = {'followup_decision': 'not_required', 'followup': 'x'}
