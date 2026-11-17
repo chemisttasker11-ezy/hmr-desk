@@ -1,5 +1,6 @@
 """Local, cached sections of the Brainstorm reference."""
 import json
+import hashlib
 from pathlib import Path
 import re
 import fitz
@@ -10,9 +11,13 @@ import jobs
 def sections(path):
     path = Path(path)
     if not path.is_file(): return []
-    target = Path(db.DATA_DIR) / 'brainstorm-sections.json'
-    if target.is_file() and target.stat().st_mtime_ns >= max(path.stat().st_mtime_ns, Path(__file__).stat().st_mtime_ns):
-        return json.loads(target.read_text(encoding='utf-8'))
+    target = Path(db.DATA_DIR) / 'brainstorm-sections-v2.json'
+    source_key = hashlib.sha256(b'brainstorm-sections-v2' + path.read_bytes()).hexdigest()
+    if target.is_file():
+        try:
+            cached = json.loads(target.read_text(encoding='utf-8'))
+            if cached.get('source_sha256') == source_key: return cached['sections']
+        except (ValueError, OSError, AttributeError, KeyError): pass
     result = []
     current = None
     with fitz.open(path) as doc:
@@ -41,7 +46,7 @@ def sections(path):
     result = [s for s in result if len(s['text'].strip()) >= 30 and (pages < 20 or s['page'] > 4) and s['title'] not in ('Title', 'Refer To')]
     for s in result: s['text'] = s['text'].strip()
     target.parent.mkdir(parents=True, exist_ok=True)
-    jobs.atomic_json(target, result)
+    jobs.atomic_json(target, {'source_sha256': source_key, 'sections': result})
     return result
 
 
