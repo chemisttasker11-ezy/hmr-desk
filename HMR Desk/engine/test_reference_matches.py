@@ -146,3 +146,64 @@ def test_registration_change_during_lookup_fails_closed(tmp_path,monkeypatch):
     states=iter((old,new));monkeypatch.setattr(library,'current',lambda:next(states))
     with pytest.raises(library.ReferenceUnavailable,match='Registered reference changed'):
         matches.retrieve(context([evidence('notes','interview notes','Synthetic hydration')]))
+
+
+def test_heading_only_match_retrieves_opening_passage_without_false_body_match(tmp_path,monkeypatch):
+    monkeypatch.setattr(db,'DATA_DIR',str(tmp_path/'data'));p=tmp_path/'heading.pdf'
+    doc=fitz.open();page=doc.new_page();page.insert_text((40,40),'Brainstorm fixture',fontname='hebo',fontsize=16)
+    page.insert_text((40,70),'A synthetic test-only catalogue with sufficient readable body text for registration.')
+    page.insert_text((40,100),'Synthetic heading',fontname='hebo',fontsize=16)
+    page.insert_text((40,130),'Opening section prose deliberately does not repeat any words from the title.')
+    doc.save(p);doc.close();library.register({'path':str(p),'edition':'synthetic','local_use_confirmed':True})
+    result=matches.retrieve(context([evidence('notes','interview notes','Denies synthetic heading; historic wording.')]))
+    assert len(result['matches'])==1 and result['matches'][0]['quote_basis']=='heading_match_opening_passage'
+    assert result['matches'][0]['reference']['snippet'].startswith('Opening section prose')
+    assert result['storage']=='private_indexed_sqlite_tables'
+
+
+def test_private_reference_index_tables_reuse_and_corrupt_rebuild(tmp_path,monkeypatch):
+    import reference_tables,sqlite3
+    monkeypatch.setattr(db,'DATA_DIR',str(tmp_path/'data'));reference(tmp_path,monkeypatch);source=library.current()
+    conn=reference_tables.open_index(source,matches.anchors)
+    assert conn.execute('SELECT edition FROM source').fetchone()[0]=='Synthetic edition V1'
+    assert conn.execute('SELECT count(*) FROM sections').fetchone()[0]>=2
+    assert conn.execute('SELECT count(*) FROM fragments').fetchone()[0]>=3
+    assert any('anchors_first_word' in row[3] for row in conn.execute("EXPLAIN QUERY PLAN SELECT * FROM anchors WHERE first_word='synthetic'"))
+    conn.close();original=__import__('brainstorm').sections
+    monkeypatch.setattr(__import__('brainstorm'),'sections',lambda *args:(_ for _ in ()).throw(AssertionError('index should be reused')))
+    conn=reference_tables.open_index(source,matches.anchors);conn.close()
+    target=next((tmp_path/'data').glob('reference-index-v1-*.sqlite3'));target.write_bytes(b'corrupt')
+    monkeypatch.setattr(__import__('brainstorm'),'sections',original)
+    conn=reference_tables.open_index(source,matches.anchors);assert conn.execute('SELECT count(*) FROM anchors').fetchone()[0];conn.close()
+
+
+def test_index_modified_anchor_cannot_fake_evidence_match(tmp_path,monkeypatch):
+    import reference_tables
+    monkeypatch.setattr(db,'DATA_DIR',str(tmp_path/'data'));reference(tmp_path,monkeypatch)
+    conn=reference_tables.open_index(library.current(),matches.anchors)
+    conn.execute('UPDATE anchors SET phrase=?,first_word=?,token_count=? WHERE rowid=(SELECT min(rowid) FROM anchors)',(json.dumps(['unrelated','words']),'unrelated',2));conn.commit();conn.close()
+    with pytest.raises(library.ReferenceUnavailable,match='index does not match'):
+        matches.retrieve(context([evidence('notes','interview notes','unrelated words')]))
+
+
+def test_incomplete_anchor_table_rebuilds_instead_of_silent_no_matches(tmp_path,monkeypatch):
+    import reference_tables
+    monkeypatch.setattr(db,'DATA_DIR',str(tmp_path/'data'));reference(tmp_path,monkeypatch)
+    conn=reference_tables.open_index(library.current(),matches.anchors);conn.execute('DELETE FROM anchors');conn.commit();conn.close()
+    assert matches.retrieve(context([evidence('notes','interview notes','Synthetic hydration')]))['matches']
+
+
+def test_unavailable_reference_tables_production_error_is_explicit(setup,tmp_path,monkeypatch):
+    import reference_tables,sqlite3
+    conn,p,data=setup;reference(tmp_path,monkeypatch)
+    monkeypatch.setattr(reference_tables,'open_index',lambda *a:(_ for _ in ()).throw(sqlite3.OperationalError('synthetic permission failure')))
+    status,result=api.handle(conn,'GET',f"/api/patients/{p['id']}/reference-matches",{},None)
+    assert status==409 and result['review_status']=='reference_unavailable' and result['matches']==[]
+
+
+def test_invalid_cached_page_is_not_a_crash_or_false_citation(tmp_path,monkeypatch):
+    import reference_tables
+    monkeypatch.setattr(db,'DATA_DIR',str(tmp_path/'data'));reference(tmp_path,monkeypatch)
+    conn=reference_tables.open_index(library.current(),matches.anchors);conn.execute('UPDATE sections SET page_end=99999');conn.commit();conn.close()
+    with pytest.raises(library.ReferenceUnavailable,match='pages are invalid'):
+        matches.retrieve(context([evidence('notes','interview notes','Synthetic hydration')]))
