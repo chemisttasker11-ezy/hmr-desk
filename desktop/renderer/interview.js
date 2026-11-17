@@ -42,7 +42,8 @@ let interviewRequest = 0;
 const interviewExpanded = new WeakSet();
 function interviewEquivalent(a, b) {
   const stable = value => Array.isArray(value) ? value.map(stable) : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(key => [key, stable(value[key])])) : value;
-  try { return JSON.stringify(stable(normalizeInterviewDetails(JSON.parse(a)))) === JSON.stringify(stable(normalizeInterviewDetails(JSON.parse(b)))); } catch { return false; }
+  const withoutTechnicalIds = text => { const record = normalizeInterviewDetails(JSON.parse(text), true, false); for (const key of ['meds', 'other_meds']) for (const meta of record.details[key]) delete meta.item_id; return record; };
+  try { return JSON.stringify(stable(withoutTechnicalIds(a))) === JSON.stringify(stable(withoutTechnicalIds(b))); } catch { return false; }
 }
 let interviewEdited = new Set(),
   interviewAgent = 'No agent selected', interviewAi = false,
@@ -174,12 +175,13 @@ async function interviewScreen() {
   renderInterview();
   $('interview-notes')?.focus();
 }
-function normalizeInterviewDetails(record, newEntries = true) {
+function normalizeInterviewDetails(record, newEntries = true, assignIds = true) {
   if (!record.details) record.details = { version: 1, manager: '', manager_details: '', daa: '', daa_type: '', daa_pharmacy: '', smoking: '', alcohol: '', alcohol_details: '', height_referral: '', height_actual: '', weight_referral: '', weight_actual: '', bmi_referral: '', bmi_actual: '', height_as_listed: false, weight_as_listed: false, bmi_as_listed: false, meds: (record.meds || []).map(() => ({ packed: '', as_instructed: false })) };
   if (!record.details.meds) record.details.meds = (record.meds || []).map(() => ({ packed: '', as_instructed: false }));
   if (!record.details.other_meds) record.details.other_meds = (record.other_meds || []).map(() => ({ checked: false, priority: 0 }));
   for (const meta of record.details.meds) { if (meta.checked === undefined) meta.checked = false; if (meta.priority === undefined) meta.priority = 0; }
   for (const meta of [...record.details.meds, ...record.details.other_meds]) { meta.use_status ??= ''; meta.use_reason ??= ''; meta.use_details ??= ''; }
+  if (assignIds) for (const meta of [...record.details.meds, ...record.details.other_meds]) meta.item_id ??= H.medicineItemId();
   if (!newEntries) return record;
   for (const entry of interviewEntryChoices) { record.details[entry.key] ??= ''; if (entry.detailWhen) record.details[entry.key + '_details'] ??= ''; }
   for (const key of ['smoking_details', 'home_bp', 'home_bgl']) record.details[key] ??= '';
@@ -751,11 +753,11 @@ async function interviewClick(b) {
       ? H.addRow(interviewRecord[key] || [], interviewTables[key].length)
       : H.removeRow(interviewRecord[key], Number(b.dataset.row));
     if (key === 'meds') {
-      if (b.dataset.interviewAdd) interviewRecord.details.meds.push({ packed: '', as_instructed: false, checked: false, priority: 0, use_status: '', use_reason: '', use_details: '' });
+      if (b.dataset.interviewAdd) interviewRecord.details.meds.push({ item_id: H.medicineItemId(), packed: '', as_instructed: false, checked: false, priority: 0, use_status: '', use_reason: '', use_details: '' });
       else interviewRecord.details.meds.splice(Number(b.dataset.row), 1);
     }
     if (key === 'other_meds') {
-      if (b.dataset.interviewAdd) interviewRecord.details.other_meds.push({ checked: false, priority: 0, use_status: '', use_reason: '', use_details: '' });
+      if (b.dataset.interviewAdd) interviewRecord.details.other_meds.push({ item_id: H.medicineItemId(), checked: false, priority: 0, use_status: '', use_reason: '', use_details: '' });
       else interviewRecord.details.other_meds.splice(Number(b.dataset.row), 1);
     }
     if (b.dataset.interviewAdd && (key === 'meds' || key === 'other_meds')) interviewExpanded.add(interviewRecord.details[key].at(-1));
@@ -872,4 +874,4 @@ async function followupClick(b) {
     return true;
   }
   return false;
-}
+    }
