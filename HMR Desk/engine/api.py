@@ -825,6 +825,16 @@ def handle(conn, method, path, query, body):
                 life = lifecycle.stage(conn, p)
                 patients.append({**{k: p[k] for k in ('id','key','name','suburb','gp','phone','state','status_text','visit_date','visit_time','folder','has_pathology','has_sheet','referral_date')}, 'archived': bool(p['archived_at']), 'stage': life['stage'], 'stage_step': life['step'], 'flags': lifecycle.flags(conn, p), 'referral_expiry': expiry.isoformat() if expiry else None, 'next_step': 'follow-up due' if follow and follow['due'] else next_step(p, conn)})
             return 200, {'patients': patients}
+        if path in ('/api/reference/local', '/api/reference/search', '/api/reference/open'):
+            import reference_library
+            try:
+                if path == '/api/reference/local' and method == 'POST': return 200, reference_library.register(body)
+                if path == '/api/reference/local' and method == 'GET': return 200, reference_library.public(reference_library.current())
+                if path == '/api/reference/search' and method == 'GET': return 200, reference_library.search((query.get('q') or [''])[0])
+                if path == '/api/reference/open' and method == 'POST' and isinstance(body,dict) and set(body)=={'pdf_sha256','page'}:
+                    return 200, reference_library.open_source(body['pdf_sha256'],body['page'])
+            except reference_library.ReferenceUnavailable as exc: return 409, {'error':str(exc)}
+            return 400, {'error':'Invalid local reference request'}
         if method == 'GET' and path == '/api/library':
             import report
             q = query.get('q', '')
