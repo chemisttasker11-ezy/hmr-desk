@@ -24,12 +24,13 @@ def valid_cached_sections(items,pdf_hash):
     return True
 
 
-def sections(path):
+def sections(path, marker_headings=False):
     path = Path(path)
     if not path.is_file(): return []
-    target = Path(db.DATA_DIR) / 'brainstorm-sections-v3.json'
+    cache_version='brainstorm-sections-v4-marker' if marker_headings else 'brainstorm-sections-v3'
+    target = Path(db.DATA_DIR) / (cache_version+'.json')
     pdf_hash = hashlib.sha256(path.read_bytes()).hexdigest()
-    source_key = hashlib.sha256(('brainstorm-sections-v3:' + pdf_hash).encode()).hexdigest()
+    source_key = hashlib.sha256((cache_version+':' + pdf_hash).encode()).hexdigest()
     if target.is_file():
         try:
             cached = json.loads(target.read_text(encoding='utf-8'))
@@ -39,6 +40,10 @@ def sections(path):
     current = None
     with fitz.open(path) as doc:
         pages = len(doc)
+        # The supplied Brainstorm guide uses coloured heading markers. Inline
+        # bold words are body emphasis, not new sections. Keep legacy/manual
+        # parsing unchanged unless the structured importer selects this mode.
+        use_markers=marker_headings and any(span['color']==42733 for page in doc for block in page.get_text('dict')['blocks'] for line in block.get('lines',[]) for span in line['spans'])
         for page in doc:
             lines = [line for block in page.get_text('dict')['blocks'] for line in block.get('lines', [])]
             continuation = False
@@ -47,7 +52,7 @@ def sections(path):
                 text = re.sub(r'\s+', ' ', ''.join(s['text'] for s in spans)).strip()
                 if not text or re.match(r'^Brainstorming \| Medication Management Report V2\.0 \|', text): continue
                 # The original PDF uses a coloured marker rather than bold or larger type for headings.
-                heading = any(s['color'] == 42733 for s in spans) or any('bold' in s['font'].lower() or s['size'] > 13 for s in spans if s['text'].strip())
+                heading = any(s['color'] == 42733 for s in spans) or (not use_markers and any('bold' in s['font'].lower() or s['size'] > 13 for s in spans if s['text'].strip()))
                 if continuation and current and not heading:
                     current['title'] += ' ' + text
                     continuation = current['title'].count('(') > current['title'].count(')')
