@@ -161,3 +161,48 @@ def test_stored_record_and_snapshot_roundtrip_through_labelled_record_export(set
     interview.validate(decoded)
     assert ms.snapshot(decoded)==ms.snapshot(saved)
     assert interview.medicine_rows(decoded)[0][0]==data['meds'][0][0]
+
+
+def test_real_backup_restore_preserves_ids_reference_and_exact_record_bytes(setup,tmp_path):
+    import backup_bundle
+    import sqlite3
+    conn,p,data=setup
+    data['revision']='missing';saved=interview.save(conn,p,data)
+    raw=records.get(conn,p['id'],'interview.json')
+    bundle=tmp_path/'synthetic.hmrbak';restore=tmp_path/'isolated-recovery'
+    phrase='synthetic-test-backup-passphrase-only'
+    backup_bundle.create(conn,Path(db.BASE),bundle,phrase)
+    backup_bundle.restore(bundle,restore,phrase)
+    assert backup_bundle.verify_isolated(restore)['verified']
+    with sqlite3.connect(restore/'data'/'hmr.db') as recovered:
+        recovered.row_factory=sqlite3.Row
+        restored=records.get(recovered,p['id'],'interview.json')
+        assert restored==raw
+        assert ms.snapshot(json.loads(restored))==ms.snapshot(saved)
+    exported=tmp_path/'labelled-export'
+    records.export_folder(conn,p['id'],exported)
+    assert (exported/'interview.json').read_bytes()==raw
+    assert 'OUTSIDE the encryption' in (exported/records.EXPORT_NOTE).read_text()
+
+
+def test_report_source_snapshot_survives_native_docx_template_adapter(setup,tmp_path):
+    import report
+    import template_report_builder
+    from test_template_report_builder import make_template
+    from docx import Document
+    conn,p,data=setup
+    data['revision']='missing';saved=interview.save(conn,p,data)
+    path=f"/api/patients/{p['id']}/meds"
+    _,proposal=api.handle(conn,'GET',path,{},None)
+    body={k:proposal[k] for k in ('meds','allergies','interview_usage','medicine_snapshot_sha256')}
+    assert api.handle(conn,'POST',path,{},body)[0]==200
+    spec=report.start(conn,p)
+    assert spec['medicine_snapshot']['items'][0]['item_id']==saved['details']['meds'][0]['item_id']
+    assert spec['medicine_snapshot']['items'][0]['metadata']['reference']['code']=='1001'
+    spec['issues']=[{'title':'Synthetic review','rec':'Synthetic pharmacist recommendation','rationale':'Synthetic rationale'}]
+    template=tmp_path/'synthetic.docx';output=tmp_path/'synthetic-report.docx'
+    make_template(template)
+    template_report_builder.render(spec,output,template)
+    doc=Document(output)
+    assert any('Synthetic 5 mg MR' in cell.text for table in doc.tables for row in table.rows for cell in row.cells)
+    assert report.load(conn,p)['medicine_snapshot']==spec['medicine_snapshot']
