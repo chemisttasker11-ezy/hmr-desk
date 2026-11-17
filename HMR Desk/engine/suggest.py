@@ -1,6 +1,7 @@
 """Offline, frequency-based prompts from the local de-identified case index."""
 import collections
 import datetime as dt
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -152,23 +153,44 @@ def make_index(cases, library_text, brainstorm_text, mapping=None, tuning=1, bra
   findings.extend(case_findings)
  return {'version':2,'mapping':mapping,'aliases':aliases,'counts':dict(counts),'findings':findings,'library':lib,'brainstorm':brainstorm,'brainstorm_sections':[{**section, 'keys':sorted(k for k in extract(section['title']+' '+section['text']) if k.startswith(('med:', 'class:', 'topic:')))} for section in (brainstorm_sections or [])],'tuning':tuning}
 
+class LibraryUnavailable(ValueError):
+ """Required reviewed local reference inputs are unavailable; never invent a corpus."""
+
+INDEX_ALGORITHM_VERSION = 3
+
 def build_index():
- refs=jobs.SKILL/'references'; paths=[refs/'case-index.jsonl',refs/'finding-library.md',refs/'brainstorm-index.md',CLASSES_PATH,Path(__file__)]
+ refs=jobs.SKILL/'references'
+ paths=[refs/'case-index.jsonl',refs/'finding-library.md',refs/'brainstorm-index.md',CLASSES_PATH]
  pdf=refs/'brainstorm-v2.pdf'
- if pdf.is_file(): paths.append(pdf)
- paths.append(Path(brainstorm.__file__))
- target=Path(db.DATA_DIR)/'suggest-index.json'
- if target.is_file() and target.stat().st_mtime_ns >= max(p.stat().st_mtime_ns for p in paths):
-  return json.loads(target.read_text(encoding='utf-8'))
- cases=[json.loads(x) for x in report._read(paths[0]).splitlines() if x.strip()]
- idx=make_index(cases,report._read(paths[1]),report._read(paths[2]),brainstorm_sections=brainstorm.sections(pdf)); target.parent.mkdir(parents=True,exist_ok=True)
- fd,tmp=tempfile.mkstemp(dir=target.parent,prefix='suggest-',suffix='.tmp')
  try:
-  with os.fdopen(fd,'w',encoding='utf-8') as f: json.dump(idx,f,ensure_ascii=False)
-  os.replace(tmp,target)
- finally:
-  if os.path.exists(tmp): os.unlink(tmp)
- return idx
+  if any(not p.is_file() for p in paths): raise LibraryUnavailable()
+  if pdf.is_file(): paths.append(pdf)
+  # Frozen Python modules live in an archive. Never stat __file__ as a cache dependency.
+  source_hash=hashlib.sha256(str(INDEX_ALGORITHM_VERSION).encode())
+  for p in paths:
+   source_hash.update(p.name.encode()); source_hash.update(p.read_bytes())
+  source_key=source_hash.hexdigest()
+  target=Path(db.DATA_DIR)/'suggest-index.json'
+  if target.is_file():
+   try:
+    cached=json.loads(target.read_text(encoding='utf-8'))
+    if cached.get('source_sha256')==source_key: return cached
+   except (ValueError, OSError, AttributeError): pass
+  cases=[json.loads(x) for x in paths[0].read_text(encoding='utf-8').splitlines() if x.strip()]
+  if not cases: raise LibraryUnavailable()
+  idx=make_index(cases,paths[1].read_text(encoding='utf-8'),paths[2].read_text(encoding='utf-8'),brainstorm_sections=brainstorm.sections(pdf))
+  idx['source_sha256']=source_key
+  target.parent.mkdir(parents=True,exist_ok=True)
+  fd,tmp=tempfile.mkstemp(dir=target.parent,prefix='suggest-',suffix='.tmp')
+  try:
+   with os.fdopen(fd,'w',encoding='utf-8') as f: json.dump(idx,f,ensure_ascii=False)
+   os.replace(tmp,target)
+  finally:
+   if os.path.exists(tmp): os.unlink(tmp)
+  return idx
+ except LibraryUnavailable: raise
+ except (OSError, ValueError, TypeError, KeyError, AttributeError):
+  raise LibraryUnavailable() from None
 
 def suggest(context, index=None):
  index=index or build_index(); mapping=index['mapping']; aliases=index['aliases']; extract=extractor(mapping,aliases,index.get('tuning',2))
