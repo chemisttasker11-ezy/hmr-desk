@@ -67,10 +67,13 @@ test('report buttons use engine readiness and keep medicine confirmation editabl
   assert.doesNotMatch(row, /Check medicines for interaction check &#10003; Done/);
   const confirmed = context.reportRow(
     { id: 2, name: 'Test', state: 'visited' },
-    { steps: [{ name: 'interactions', ready: true, done: false, reason: '' }] },
+    { steps: [{ name: 'confirm_medicines', done: true }, { name: 'interactions', ready: true, done: false, reason: '' }] },
     'Agent',
   );
   assert.match(confirmed, /data-medicines="2"[^>]*>Check medicines for interaction check &#10003; Done/);
+  const stale = context.reportRow({ id: 2, name: 'Test', state: 'visited' },
+    { steps: [{ name: 'confirm_medicines', done: false }, { name: 'interactions', ready: true, reason: '' }] }, 'Agent');
+  assert.doesNotMatch(stale, /Check medicines for interaction check &#10003; Done/);
 });
 
 test('interview snapshots and row edits detect unsaved changes without mutating originals', () => {
