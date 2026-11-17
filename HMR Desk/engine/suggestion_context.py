@@ -77,6 +77,8 @@ def build(conn, patient, today=None):
                 source='interview.json/'+section+'/'+str(n))
     if not meds:
         gaps.append('No current interview medicine rows available')
+    details=record.get('details', {})
+    dimensional=any(details.get(k+'_'+v) for k in ('height','weight','bmi') for v in ('referral','actual'))
     for n, row in enumerate(record.get('obs', [])):
         for column, version in ((1, 'referral'), (2, 'interview')):
             if len(row) <= column or not row[column].strip():
@@ -84,16 +86,28 @@ def build(conn, patient, today=None):
             # Original referral value remains visible but is not ranked alongside
             # a newer interview value. Never assert that two values agree.
             add('obs:'+str(n)+':'+version, 'observation', row[0]+': '+row[column],
-                eligible=column == 2 or len(row) < 3 or not row[2].strip(),
+                eligible=(column == 2 or len(row) < 3 or not row[2].strip()) and not (row[0]=='Height / weight / BMI' and dimensional),
                 verification=version+' text, date/units not independently established',
                 source='interview.json/obs/'+str(n)+'/'+str(column))
+    for key in ('height','weight','bmi'):
+        for version in ('referral','actual'):
+            value=details.get(key+'_'+version, '')
+            use_referral=bool(details.get(key+'_as_listed') or not details.get(key+'_actual'))
+            add('details:'+key+':'+version, 'observation', key.title()+': '+value if value else '',
+                eligible=(version=='referral') == use_referral,
+                verification='referral value explicitly used as listed' if version=='referral' and details.get(key+'_as_listed') else version+' text',
+                source='interview.json/details/'+key+'_'+version)
+    for key,label in interview.SYMPTOMS.items():
+        if details.get(key) in ('no','not_asked'):
+            add('details:'+key, 'interview detail', label+': '+details[key]+(' | '+details[key+'_details'] if details.get(key+'_details') else ''),
+                verification='recorded structured answer, not diagnosis inference', source='interview.json/details/'+key)
     # Structured interview detail wording uses the existing report composer.
     # Exclude the observation table so its original versions stay distinct.
     detail_record = dict(record, obs=[], mobility='')
     for n, line in enumerate(report.observations(detail_record).splitlines()):
         add('interview_detail:'+str(n), 'interview detail', line,
             verification='recorded interview detail', source='interview.json/details')
-    for key, kind in (('conditions', 'conditions'), ('notes', 'interview notes'), ('mobility', 'mobility')):
+    for key, kind in (('conditions', 'conditions'), ('notes', 'interview notes'), ('concerns','interview concerns'), ('mobility', 'mobility')):
         add(key, kind, record.get(key, ''), verification='recorded text, not a diagnosis inference', source='interview.json/'+key)
     structured_keys = {(r['test'].strip().casefold(), r['value'].strip().casefold(), _date(r['sample_date']))
                        for r in pathology['records'] if r['sample_date']}
