@@ -386,6 +386,26 @@ def test_convert_failure_keeps_primary_error_and_cleanup_evidence(tmp_path, monk
     monkeypatch.undo()
 
 
+def test_interview_export_shows_cleanup_pending(tmp_path, monkeypatch):
+    import db, interview, pdf_export
+    monkeypatch.setattr(db, 'BASE', str(tmp_path)); monkeypatch.setattr(db, 'DATA_DIR', str(tmp_path)); monkeypatch.setenv('HMR_DB', str(tmp_path / 'i.db'))
+    folder = tmp_path / 'Scheduled' / 'Test Person'; folder.mkdir(parents=True)
+    conn = db.connect(); conn.execute("INSERT INTO patients(key,name,state,folder,dob,medicare) VALUES ('test person','Test Person','confirmed',?,'2000-01-01','123')", (str(folder.relative_to(tmp_path)),)); conn.commit()
+    p = conn.execute('SELECT * FROM patients').fetchone()
+    def pending(docx, pdf, timeout=120):
+        Path(pdf).write_bytes(b'%PDF-synthetic'); return {'created': True, 'bytes': 14, 'cleanup_pending': str(Path(pdf).parent / '.hmr-pdf-aa'), 'cleanup_error': 'OSError: locked'}
+    monkeypatch.setattr(pdf_export, 'convert', pending)
+    out = interview.pack(conn, p, 'pdf')
+    assert 'PDF created' in out and '.hmr-pdf-aa' in out and str(tmp_path) not in out.split('\n', 1)[1]
+    def failing(docx, pdf, timeout=120):
+        e = RuntimeError('Bundled PDF conversion failed'); e.cleanup_pending = '.hmr-pdf-bb'; e.cleanup_error = 'OSError: locked'; raise e
+    monkeypatch.setattr(pdf_export, 'convert', failing)
+    with pytest.raises(RuntimeError, match='conversion failed.*\\.hmr-pdf-bb'): interview.pack(conn, p, 'pdf')
+    rows = [r[0] for r in conn.execute("SELECT detail FROM events WHERE type='pdf_cleanup_pending' ORDER BY id")]
+    assert len(rows) == 2 and '"ok"' in rows[0] and '"failed"' in rows[1]
+    conn.close()
+
+
 def test_followup_review_binding_and_key_validation(tmp_path):
     import manual_defaults
     base = {'followup_decision': 'not_required', 'followup': 'x'}
