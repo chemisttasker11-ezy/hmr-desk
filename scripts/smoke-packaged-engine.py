@@ -16,6 +16,8 @@ def main():
     executable = Path(sys.argv[1]).resolve()
     if not executable.is_file():
         raise RuntimeError('Packaged engine not found')
+    mapping = executable.parent / '_internal' / 'drug_classes.json'
+    assert mapping.is_file() and isinstance(json.loads(mapping.read_text(encoding='utf-8')), dict), 'Application-owned medicine class mapping was not packaged'
     with tempfile.TemporaryDirectory(prefix='hmr-m2-smoke-') as d:
         workspace = Path(d) / 'workspace with spaces'
         data = Path(d) / 'userdata'
