@@ -50,3 +50,64 @@ test('missing catalogue still shows free-text state without mutating record',asy
   await x.c.medicinePrefillSuggestions();assert.match(x.c.interviewLookupControls('meds',x.record.details.meds[0],0),/Free text still works/);
   assert.equal(x.record.details.meds[0].reference,undefined);
 });
+
+const intakeCandidate={source:'amt',code:'1001',display:'Synthetic original 5 mg MR',kind:'MPUU',generic_name:'Synthetic generic 5 mg MR',brand_name:null,dose_form:'tablet',release:'20260101'};
+function setupStored(api){const x=setup(api);x.record.details.meds[0].prefill_proposal={input_text:'Synthetic original 5 mg MR',candidate:intakeCandidate};return x;}
+function exactResponse(){return {installed:true,results:[{input_text:'Synthetic original 5 mg MR',state:'exact_candidate',truncated:false,candidates:[{...intakeCandidate}]}]};}
+test('stored intake proposal gains provenance label only when the batch revalidation matches it exactly',async()=>{
+  const calls=[];const x=setupStored(async(...a)=>{calls.push(a);return exactResponse();});
+  const original=JSON.stringify(x.record);
+  await x.c.medicinePrefillSuggestions();
+  assert.deepEqual(calls.map(a=>[a[0],a[1]]),[['POST','/api/medicines/suggest']]);
+  assert.equal(JSON.stringify(x.record),original);
+  const html=x.c.interviewLookupControls('meds',x.record.details.meds[0],0);
+  assert.match(html,/Exact displayed-text candidate, not confirmed/);assert.match(html,/Prepared at intake from the referral text/);
+  await x.c.medicineLookupClick({dataset:{medSuggestion:'meds',row:'0',candidate:'0'}});
+  assert.equal(x.record.details.meds[0].reference.code,'1001');assert.equal(x.record.details.meds[0].item_id,'a'.repeat(32));
+  assert.equal(x.record.details.meds[0].source_evidence.lines[0],'<Synthetic original> 5 mg MR take one daily');
+});
+for (const mode of ['contents changed','now ambiguous']) test('catalogue '+mode+' drops the intake provenance label, never the review',async()=>{
+  const changed=mode==='contents changed';
+  const x=setupStored(async()=>({installed:true,results:[changed
+    ?{input_text:'Synthetic original 5 mg MR',state:'exact_candidate',truncated:false,candidates:[{...intakeCandidate,display:'Corrected name 5 mg MR'}]}
+    :{input_text:'Synthetic original 5 mg MR',state:'ambiguous',truncated:false,candidates:[{...intakeCandidate},{...intakeCandidate,code:'1002'}]}]}));
+  await x.c.medicinePrefillSuggestions();
+  const html=x.c.interviewLookupControls('meds',x.record.details.meds[0],0);
+  assert.doesNotMatch(html,/Prepared at intake/);
+  assert.match(html,changed?/Exact displayed-text candidate/:/More than one exact text candidate/);
+  assert.equal(x.record.details.meds[0].reference,undefined);
+});
+test('stored proposal inconsistent with the row text never earns the label',async()=>{
+  const x=setupStored(async()=>exactResponse());
+  x.record.details.meds[0].prefill_proposal={input_text:'Some other text',candidate:intakeCandidate};
+  await x.c.medicinePrefillSuggestions();
+  assert.doesNotMatch(x.c.interviewLookupControls('meds',x.record.details.meds[0],0),/Prepared at intake/);
+});
+test('row reorder during the batch wait applies nothing to moved rows',async()=>{
+  let finish;const calls=[];
+  const x=setupStored((...a)=>{calls.push(a);return new Promise(r=>{finish=r;});});
+  x.record.meds.push(['Second med 10 mg','','','','']);x.record.details.meds.push({source_evidence:{kind:'referral_text',lines:['Second med 10 mg'],page_candidates:[[2]],text_sha256:'c'.repeat(64)}});
+  const pending=x.c.medicinePrefillSuggestions();await new Promise(r=>setImmediate(r));
+  x.record.meds.reverse();x.record.details.meds.reverse();
+  finish({installed:true,results:[exactResponse().results[0],{input_text:'Second med 10 mg',state:'unmatched',truncated:false,candidates:[]}]});
+  await pending;
+  assert.equal(vm.runInContext('medicineSuggestions.get(interviewRecord.details.meds[0])',x.c),undefined);
+  assert.equal(vm.runInContext('medicineSuggestions.get(interviewRecord.details.meds[1])',x.c),undefined);
+});
+test('rejected suggest after patient switch applies nothing',async()=>{
+  let fail;const x=setupStored(()=>new Promise((_,rej)=>{fail=rej;}));
+  const pending=x.c.medicinePrefillSuggestions();await new Promise(r=>setImmediate(r));
+  x.c.interviewId='different';fail(Error('offline'));await pending;
+  assert.equal(vm.runInContext('medicineSuggestions.get(interviewRecord.details.meds[0])',x.c),undefined);
+  assert.equal(x.record.details.meds[0].reference,undefined);
+});
+test('fallback record without a stored proposal never earns the intake label',async()=>{
+  // Records built on first interview open (fallback or pre-existing patients)
+  // carry no prefill_proposal; an exact catalogue match renders the normal
+  // live proposal with no intake provenance.
+  const x=setup(async()=>exactResponse());
+  await x.c.medicinePrefillSuggestions();
+  const html=x.c.interviewLookupControls('meds',x.record.details.meds[0],0);
+  assert.match(html,/Exact displayed-text candidate, not confirmed/);
+  assert.doesNotMatch(html,/Prepared at intake/);
+});
