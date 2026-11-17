@@ -65,3 +65,48 @@ def pick(source, code):
     finally:
         conn.close()
     return dict(r) if r else None
+
+
+def suggest_many(queries):
+    """Deterministic local proposals only. Never choose or confirm a medicine.
+
+    Exact displayed text is distinguished from broader search candidates. No
+    OCR character/unit corrections, equivalence rules or doses are inferred.
+    """
+    import re
+    if not isinstance(queries, list) or len(queries) > 80 or any(not isinstance(q, str) or len(q) > 20000 for q in queries):
+        raise ValueError('Invalid medicine suggestion queries')
+    conn = _open()
+    def result(query, state, rows=(), truncated=False):
+        return {'input_text': query, 'state': state, 'truncated': truncated,
+                'candidates': [{key: row[key] for key in ('source','code','display','kind','generic_name','brand_name','dose_form','release')} for row in rows]}
+    if conn is None:
+        return {'installed': False, 'results': [result(q, 'unavailable') for q in queries]}
+    try:
+        results, cache = [], {}
+        for text in queries:
+            if text in cache:
+                results.append(cache[text]); continue
+            query = catalog.normalise(text)
+            if len(query) < 2 or len(query) > 400:
+                entry = result(text, 'unmatched')
+            else:
+                exact = conn.execute('''SELECT m.*, r.release FROM medicine m
+                    JOIN source_release r USING(source) WHERE lower(display)=?
+                    ORDER BY m.source,m.code LIMIT 16''', (query,)).fetchall()
+                if exact:
+                    entry = result(text, 'exact_candidate' if len(exact) == 1 else 'ambiguous', exact[:15], len(exact) > 15)
+                else:
+                    found = catalog.search(conn, text, 16)
+                    if not found:
+                        # Broaden candidate discovery only, never identify from the stripped name.
+                        prefix = re.split(r'\d', text, maxsplit=1)[0].strip()
+                        if 2 <= len(prefix) <= 80 and prefix != text.strip():
+                            found = catalog.search(conn, prefix, 16)
+                    entry = result(text, 'review_candidates' if found else 'unmatched', found[:15], len(found) > 15)
+            cache[text] = entry; results.append(entry)
+        return {'installed': True, 'results': results}
+    except sqlite3.Error:
+        return {'installed': False, 'results': [result(q, 'unavailable') for q in queries]}
+    finally:
+        conn.close()
