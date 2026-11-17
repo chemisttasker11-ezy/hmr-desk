@@ -614,6 +614,14 @@ def handle(conn, method, path, query, body):
                     'approved_by': result['approved_by']}, 'app')
             conn.commit()
             return 200, result
+        if path == '/api/medicine-reference/install' and method == 'POST':
+            if not isinstance(body, dict) or set(body) != {'source'}:
+                raise ValueError('Invalid medicine reference request')
+            result = medicine_reference.install(body['source'])
+            db.log(conn, None, 'medicine_reference_installed',
+                   {'sources': [s['source'] for s in result['sources']]}, 'app')
+            conn.commit()
+            return 200, result
         if path == '/api/medicines/status' and method == 'GET':
             return 200, medicine_reference.status()
         if path == '/api/medicines/suggest' and method == 'POST':

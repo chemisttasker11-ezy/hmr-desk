@@ -65,7 +65,7 @@ async function recordsCardLoad() {
   } catch (error) { output.textContent = errorText(error); }
 }
 async function settings() {
-  const [c, signIns, data, practice, health] = await Promise.all([
+  const [c, signIns, data, practice, health, medRef] = await Promise.all([
     hmr.config(),
     hmr.signIns('list'),
     hmr.api('GET', '/api/agents'),
@@ -74,7 +74,13 @@ async function settings() {
       .then((result) => ({ result }))
       .catch((error) => ({ error })),
     hmr.api('GET', '/api/health').catch(error => ({error:errorText(error)})),
+    hmr.api('GET', '/api/medicines/status').catch(error => ({error:errorText(error)})),
   ]);
+  const medRefStatus = medRef.error
+    ? 'Reference status unavailable: ' + medRef.error
+    : medRef.installed
+      ? 'Installed: ' + medRef.sources.map(s => esc(s.source) + ' ' + esc(s.release) + ' (' + s.row_count + ' records)').join(', ')
+      : 'No medicine reference installed. Type medicine names by hand.';
   practiceError = practice.error ? errorText(practice.error) : '';
   practiceSettings = practice.result?.settings || [];
   agentEntries = data.agents;
@@ -112,6 +118,12 @@ async function settings() {
       <label><input id="hmr-template-authorised" type="checkbox"> I have the owner's permission to use this editable DOCX and its fonts/letterhead for HMR Desk.</label>
       <button type="button" data-template-register>Choose and register approved Word template</button>
       <p id="template-register-status" role="status"></p>
+    </section>
+    <section class="card"><h2>Medicine reference data</h2>
+      <p>Licensed reference data (for example your AMT extract) is never bundled with HMR Desk and is never sent anywhere. Install the SQLite file you hold the licence for. HMR Desk uses it read-only for search and linking and never changes it. A candidate file is checked for structure, integrity and source records before it replaces the current reference; the previous working reference is kept for rollback.</p>
+      <p role="status">${medRefStatus}</p>
+      <button type="button" data-medicine-reference-install>Choose and install medicine reference file</button>
+      <p id="medicine-reference-status" role="status"></p>
     </section>
     <section class="card"><h2>Migrate existing patient workspace</h2><p>Move to a different local drive or folder without losing the originals. The clinical engine is stopped for the verified copy, an encrypted recovery backup is created first, and HMR Desk restarts after updating its workspace.</p><button type="button" data-workspace-migrate>Migrate current workspace safely</button><p role="status" id="migration-result"></p></section>
     <section id="saved-sign-ins"><h2>Saved sign-ins</h2><p>Sign-ins save by themselves.</p>
@@ -228,6 +240,20 @@ async function agentClick(b) {
           response.sha256 + '. Previous registered version retained.';
     } catch(error) {
       if (output) output.textContent = errorText(error);
+    } finally { b.disabled = false; }
+    return true;
+  }
+  if (b.dataset.medicineReferenceInstall !== undefined) {
+    const output = $('medicine-reference-status');
+    b.disabled = true;
+    if (output) output.textContent = 'Checking reference file structure and integrity before any change...';
+    try {
+      const response = await hmr.installMedicineReference();
+      if (output) output.textContent = response.cancelled
+        ? 'Medicine reference installation cancelled; current reference unchanged'
+        : 'Medicine reference installed: ' + response.sources.map(s => s.source + ' ' + s.release + ' (' + s.row_count + ' records)').join(', ') + '. Previous reference retained for rollback.';
+    } catch(error) {
+      if (output) output.textContent = errorText(error) + ' Current reference unchanged.';
     } finally { b.disabled = false; }
     return true;
   }
