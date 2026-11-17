@@ -675,7 +675,9 @@ const H = (() => {
     if (!parts.filter(Boolean).length) parts.push(item.detail);
     return parts.filter(Boolean).map(esc).join(' &middot; ');
   }
+  function medicineItemId() { return globalThis.crypto.randomUUID().replaceAll('-', ''); }
   return {
+    medicineItemId,
     localDate,
     esc,
     date,
