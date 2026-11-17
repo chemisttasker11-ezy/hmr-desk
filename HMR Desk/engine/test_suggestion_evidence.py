@@ -146,3 +146,56 @@ def test_dimensional_observations_and_negative_structured_answers_not_lost(setup
     assert byid['details:height:referral']['text']=='Height: 170 cm' and not byid['details:height:referral']['eligible']
     assert not byid['obs:2:referral']['eligible']
     assert ': no' in byid['details:'+symptom]['text']
+
+def test_unavailable_packaged_library_is_explicit_not_empty_success(setup, monkeypatch, tmp_path):
+    conn,p,_ = save(setup)
+    import jobs
+    monkeypatch.setattr(jobs, 'SKILL', tmp_path/'missing-application-assets')
+    status, context = api.handle(conn, 'GET', f"/api/patients/{p['id']}/suggestions/context", {}, None)
+    assert status == 200 and len(context['context_snapshot_sha256']) == 64
+    status, result = api.handle(conn, 'GET', f"/api/patients/{p['id']}/suggestions", {}, None)
+    assert status == 503 and 'reviewed reference library' in result['error']
+    assert 'suggestions' not in result
+
+
+def test_packaged_index_uses_resource_hash_not_archived_python_paths(monkeypatch, tmp_path):
+    import jobs, brainstorm
+    refs = tmp_path/'assets'/'references'; refs.mkdir(parents=True)
+    cases = [{'meds': [], 'findings': [{'title': 'Synthetic review', 'rec': 'Review original', 'rationale': 'Test only'}]}]
+    (refs/'case-index.jsonl').write_text(json.dumps(cases[0])+'\n')
+    (refs/'finding-library.md').write_text('## Synthetic\nTest only')
+    (refs/'brainstorm-index.md').write_text('Synthetic')
+    mapping = tmp_path/'drug_classes.json'; mapping.write_text('{}')
+    monkeypatch.setattr(jobs, 'SKILL', refs.parent)
+    monkeypatch.setattr(db, 'DATA_DIR', str(tmp_path/'data'))
+    monkeypatch.setattr(suggest, 'CLASSES_PATH', mapping)
+    monkeypatch.setattr(suggest, '__file__', str(tmp_path/'archived-suggest.py'))
+    monkeypatch.setattr(brainstorm, '__file__', str(tmp_path/'archived-brainstorm.py'))
+    first = suggest.build_index()
+    assert len(first['source_sha256']) == 64
+    assert suggest.build_index() == first
+    (refs/'finding-library.md').write_text('## Changed\nSynthetic changed source')
+    assert suggest.build_index()['source_sha256'] != first['source_sha256']
+    (refs/'case-index.jsonl').unlink()
+    with pytest.raises(suggest.LibraryUnavailable): suggest.build_index()
+
+
+def test_brainstorm_cache_tracks_content_even_with_unchanged_timestamps(monkeypatch, tmp_path):
+    import brainstorm, fitz, os
+    monkeypatch.setattr(db, 'DATA_DIR', str(tmp_path/'cache'))
+    monkeypatch.setattr(brainstorm, '__file__', str(tmp_path/'archived-module.py'))
+    pdf = tmp_path/'synthetic.pdf'
+    def write(body):
+        doc = fitz.open(); page = doc.new_page()
+        page.insert_text((72,72), 'Synthetic title', fontname='hebo', fontsize=16)
+        page.insert_text((72,100), body)
+        doc.save(pdf); doc.close()
+    write('Synthetic first reference text long enough for a section.')
+    stamp = pdf.stat().st_mtime_ns
+    first = brainstorm.sections(pdf)
+    assert first and 'first reference' in first[0]['text']
+    pdf.unlink(); write('Synthetic other reference text long enough for a section.')
+    os.utime(pdf, ns=(stamp, stamp))
+    second = brainstorm.sections(pdf)
+    assert 'other reference' in second[0]['text']
+    assert second != first
