@@ -13,7 +13,7 @@ import reference_library as library
 import suggestion_context
 import reference_tables
 
-VERSION=2
+VERSION=3
 # Grammatical search words only, not a clinical ontology.
 STOP=frozenset('a an and are as at be been by for from in into is it of on or that the their this to was were with without'.split())
 KINDS=frozenset(('interview notes','interview concerns','observation','pathology','conditions','mobility','interview detail'))
@@ -58,7 +58,7 @@ def retrieve(context):
         raise library.ReferenceUnavailable('Reference changed during retrieval; register it again')
     evidence=context['evidence'];eligible=[e for e in evidence if supported(e)]
     # Bound work explicitly, do not imply a complete review on a truncated pass.
-    processed=eligible[:200];results=[];total=0
+    processed=eligible[:200];results=[];total=0;matched_positions=set()
     norm=lambda t:re.sub(r'\s+',' ',t).strip()
     # SQL's indexed anchor lookup avoids scanning every section for every row.
     pairs=[]
@@ -85,7 +85,7 @@ def retrieve(context):
                 if not hit:continue
                 if norm(hit['snippet']) not in norm(original[hit['page']-1].get_text()) or norm(hit['title']) not in norm(original[hit['section_page']-1].get_text()):
                     raise library.ReferenceUnavailable('Reference passage cannot be verified against original page')
-                total+=1
+                total+=1;matched_positions.add(position)
                 if len(results)<20:
                     results.append({'evidence':copy.deepcopy(e),'reference':{**hit,'edition':data['edition'],'source':'Brainstorm local reference'},
                         'matched_heading_words':[' '.join(t) for t in terms], 'quote_basis':quote_basis,
@@ -109,6 +109,7 @@ def retrieve(context):
         'context_gaps':context['context_gaps'],'source_revisions':context['source_revisions'],
         'evidence_rows':len(evidence),'eligible_evidence_rows':len(eligible),'processed_evidence_rows':len(processed),
         'excluded_evidence_ids':[e['id'] for e in evidence if not supported(e)],
+        'unmatched_evidence':[copy.deepcopy(e) for position,e in enumerate(processed) if position not in matched_positions],
         'total_matches':total,'truncated':len(eligible)>len(processed) or total>len(results),
         'method':'Literal heading text overlap only; no synonym, clinical-rule, threshold or past-case scoring.'}
 
