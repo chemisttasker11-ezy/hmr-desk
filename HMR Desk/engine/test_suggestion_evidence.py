@@ -132,3 +132,17 @@ def test_legacy_verified_flag_without_named_audit_is_not_promoted(setup):
     c=sc.build(conn,p,TODAY)
     e=next(e for e in c['evidence'] if e['kind']=='pathology')
     assert e['verification'].startswith('UNVERIFIED') and not e['verified_by']
+
+
+def test_dimensional_observations_and_negative_structured_answers_not_lost(setup):
+    conn,p,saved=save(setup)
+    saved['obs'].append(['Height / weight / BMI','Old combined entry',''])
+    saved['details'].update(height_referral='170 cm',height_actual='169 cm',height_as_listed=False,
+                            sx_falls='no',sx_falls_details='Explicit structured answer')
+    symptom='sx_falls'
+    interview.save(conn,p,saved)
+    c=sc.build(conn,p,TODAY);byid={e['id']:e for e in c['evidence']}
+    assert byid['details:height:actual']['text']=='Height: 169 cm' and byid['details:height:actual']['eligible']
+    assert byid['details:height:referral']['text']=='Height: 170 cm' and not byid['details:height:referral']['eligible']
+    assert not byid['obs:2:referral']['eligible']
+    assert ': no' in byid['details:'+symptom]['text']
