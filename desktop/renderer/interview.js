@@ -173,6 +173,7 @@ async function interviewScreen() {
   }
   if (!offline && !recovery.recovered && !recovery.conflict && !recovery.storageError) interviewSaveStatus = interviewRecord.saved ? 'Saved' : 'Ready';
   renderInterview();
+  if (!offline && typeof medicinePrefillSuggestions === 'function') void medicinePrefillSuggestions();
   $('interview-notes')?.focus();
 }
 function normalizeInterviewDetails(record, newEntries = true, assignIds = true) {
@@ -874,4 +875,4 @@ async function followupClick(b) {
     return true;
   }
   return false;
-    }
+      }
