@@ -49,3 +49,5 @@ Updated 2026-11-17 (Australia/Brisbane). Release platform: **Windows 11 x64, sta
 6. A synthetic test manifest signed by “Synthetic QA” demonstrates the renderer only; it is **not owner approval**.
 
 See `docs/m2/issues.md`, `docs/m2/evidence/index.md`, `docs/m2-operations.md` and `docs/m2-release-decision.md` for the closure log.
+
+Consent template snapshot note (2026-11-17): an unsigned patient-specific consent copy is stamped on first open and reused; replacing the workspace TEMPLATES/PPA Consent.pdf does NOT refresh existing unsigned copies (signed forms are never overwritten by design, engine/interview.py fill_consent guard). A safe explicit refresh for unsigned copies is a deferred enhancement; do not claim the template is globally fresh per open.
