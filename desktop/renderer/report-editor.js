@@ -193,8 +193,9 @@ function renderReport() {
     .split(/[\\/]/)
     .pop();
   $('screen').innerHTML =
-    `<div class="report-top"><button data-page="reports">Back to reports</button><div><strong>${esc(reportDetail.name || reportRecord.name)}</strong><span class="muted"> &middot; ${esc(reportDetail.gp || String(reportRecord.doctor || '').split('\n')[0] || 'GP not set')}</span><br><small class="muted">${esc(outputName)}</small></div><div class="report-dates">${reportField('assess_date', 'Assessment date (DD/MM/YYYY)', false)}${reportField('report_date', 'Report date (DD/MM/YYYY)', false)}</div><span id="report-status" role="status">${esc(reportSaveStatus)}</span><div class="actions"><button data-report-save>Save</button><button data-report-build="word" ${!reportRecord.issues.length ? 'disabled' : ''}>Build Word</button><button class="primary" data-report-build="pdf" ${!reportRecord.issues.length ? 'disabled' : ''}>Build Word + PDF</button></div></div>${H.showInterviewRefresh(reportRecord, reportDetail) || reportRecord.pathology_newer ? `<div class="report-refresh" role="status"><span>${esc(reportRecord.pathology_newer ? 'Verified pathology has changed since this report was prepared. Refresh and re-review the report before building.' : 'The interview was changed after this report was started.')}</span><button data-report-refresh>Refresh report from current interview and pathology</button></div>` : ''}<div class="report-layout"><div class="report-main"><section class="report-findings"><h2>Findings</h2><p class="muted">${reportRecord.issues.length} findings &middot; about 4-8</p>${findings}<div class="actions"><button data-finding-add>Add finding</button>${reportUndo ? '<button data-finding-undo>Undo deletion</button>' : ''}</div></section><details class="interview-section report-disclosure" id="report-letter" ${reportLetterOpen ? 'open' : ''}><summary>Letter wording</summary><div class="report-fields">${letter}</div></details><details class="interview-section report-disclosure" id="report-details" ${reportDetailsOpen ? 'open' : ''}><summary>Patient details in the report</summary><div class="report-fields">${details}</div></details></div><aside class="report-sidebar"><section><div class="helper-heading"><h2>Suggestions for this patient</h2><button data-suggestions-reload>Reload</button></div><div id="suggestions" role="status">${suggestionsHtml()}</div></section><section><h2>Find in library</h2><label>Search<input id="library-search" type="search" value="${esc(reportQuery)}"></label><div id="library-results" role="status">${libraryResultsHtml()}</div></section>${reportAi ? `<section><h2>AI assist (optional)</h2><p>${esc(reportAgent)}</p><button data-report-assist>Draft with AI</button>${reportDraft ? '<div class="actions"><button data-report-load="all">Load AI draft</button><button data-report-load="findings">Take findings only</button></div>' : ''}${file ? `<p>${esc(file)} <button data-open-interactions="${esc(file)}">Open</button></p>` : ''}<pre id="report-output" role="status">${esc(reportOutput)}</pre></section>` : ''}</aside></div>`;
+    `<div class="report-top"><button data-page="reports">Back to reports</button><div><strong>${esc(reportDetail.name || reportRecord.name)}</strong><span class="muted"> &middot; ${esc(reportDetail.gp || String(reportRecord.doctor || '').split('\n')[0] || 'GP not set')}</span><br><small class="muted">${esc(outputName)}</small></div><div class="report-dates">${reportField('assess_date', 'Assessment date (DD/MM/YYYY)', false)}${reportField('report_date', 'Report date (DD/MM/YYYY)', false)}</div><span id="report-status" role="status">${esc(reportSaveStatus)}</span><div class="actions"><button data-report-save>Save</button><button data-report-build="word" ${!reportRecord.issues.length ? 'disabled' : ''}>Build Word</button><button class="primary" data-report-build="pdf" ${!reportRecord.issues.length ? 'disabled' : ''}>Build Word + PDF</button></div></div>${H.showInterviewRefresh(reportRecord, reportDetail) || reportRecord.pathology_newer ? `<div class="report-refresh" role="status"><span>${esc(reportRecord.pathology_newer ? 'Verified pathology has changed since this report was prepared. Refresh and re-review the report before building.' : 'The interview was changed after this report was started.')}</span><button data-report-refresh>Refresh report from current interview and pathology</button></div>` : ''}<div class="report-layout"><div class="report-main"><section class="report-findings"><h2>Findings</h2><p class="muted">${reportRecord.issues.length} findings &middot; about 4-8</p>${findings}<div class="actions"><button data-finding-add>Add finding</button>${reportUndo ? '<button data-finding-undo>Undo deletion</button>' : ''}</div></section><details class="interview-section report-disclosure" id="report-letter" ${reportLetterOpen ? 'open' : ''}><summary>Letter wording</summary><div class="report-fields">${letter}</div></details><details class="interview-section report-disclosure" id="report-details" ${reportDetailsOpen ? 'open' : ''}><summary>Patient details in the report</summary><div class="report-fields">${details}</div></details></div><aside class="report-sidebar">${localReferencePanel()}<section><div class="helper-heading"><h2>Suggestions for this patient</h2><button data-suggestions-reload>Reload</button></div><div id="suggestions" role="status">${suggestionsHtml()}</div></section><section><h2>Find in library</h2><label>Search<input id="library-search" type="search" value="${esc(reportQuery)}"></label><div id="library-results" role="status">${libraryResultsHtml()}</div></section>${reportAi ? `<section><h2>AI assist (optional)</h2><p>${esc(reportAgent)}</p><button data-report-assist>Draft with AI</button>${reportDraft ? '<div class="actions"><button data-report-load="all">Load AI draft</button><button data-report-load="findings">Take findings only</button></div>' : ''}${file ? `<p>${esc(file)} <button data-open-interactions="${esc(file)}">Open</button></p>` : ''}<pre id="report-output" role="status">${esc(reportOutput)}</pre></section>` : ''}</aside></div>`;
   document.querySelectorAll('.report-layout textarea').forEach(H.growTextarea);
+  refreshLocalReferenceStatus();
   $('report-letter').addEventListener('toggle', (event) => {
     reportLetterOpen = event.target.open;
   });
@@ -425,3 +426,43 @@ async function reportEditorClick(b) {
   renderReport();
   return true;
 }
+
+function localReferencePanel() {
+  return `<section><h2>Private local reference</h2><p class="muted">Separate text matches from your own PDF, not patient-specific advice.</p><label>Edition shown on original<input id="local-ref-edition" maxlength="100" placeholder="e.g. V2.0 NOV2025"></label><button data-local-ref-pick>Choose local PDF</button><label>Search reference<input id="local-ref-query" type="search" maxlength="200"></label><button data-local-ref-search>Search</button><div id="local-ref-results" aria-live="polite"></div></section>`;
+}
+async function refreshLocalReferenceStatus() {
+  const target=$('local-ref-results'),edition=$('local-ref-edition');
+  if (!target) return;
+  localReferenceHits=[];
+  try {
+    const ref=await hmr.api('GET','/api/reference/local');
+    if (!target.isConnected) return;
+    edition.value=ref.edition;
+    target.textContent='Registered local edition: '+ref.edition+'. Search to review source passages.';
+  } catch (error) {if(target.isConnected) target.textContent=error.message;}
+}
+let localReferenceHits = [];
+function localReferenceHtml(response) {
+  const ref=response.reference;
+  return `<p>Brainstorm | ${esc(ref.edition)} | ${esc(ref.page_count)} physical PDF pages</p><p class="muted" style="overflow-wrap:anywhere">SHA-256: ${esc(ref.pdf_sha256)}</p><p>All search words must occur in the heading plus one physical page. Text matches only. Writing guide, not clinical advice. Cross-check current sources. Pharmacist review required.</p>` + (response.results.length ? response.results.map((hit,i)=>`<article class="card helper-card"><h3>${esc(hit.title)}</h3><p>${esc(hit.edition)} | Physical PDF page ${esc(hit.page)} | Section pages ${esc(hit.section_page)}-${esc(hit.section_page_end)}</p><blockquote style="white-space:pre-wrap;overflow-wrap:anywhere">${hit.omitted_before ? '[...] ' : ''}${esc(hit.snippet)}${hit.omitted_after ? ' [...]' : ''}</blockquote><p class="muted">Extracted text excerpt, spacing normalized. Not a clinical recommendation.</p><button data-local-ref-open="${i}">Open original physical page ${esc(hit.page)}</button></article>`).join('') : '<p>No matching passages. No clinical conclusion can be drawn from this.</p>');
+}
+document.addEventListener('click', async event => {
+  const el=event.target.closest('[data-local-ref-pick],[data-local-ref-search],[data-local-ref-open]');
+  if (!el || !['report_editor','settings'].includes(page)) return;
+  const status=$('local-ref-results');
+  try {
+    if (el.hasAttribute('data-local-ref-pick')) {
+      const result=await window.hmr.pickLocalReference($('local-ref-edition').value);
+      if (!result.cancelled) {localReferenceHits=[];status.textContent='Registered private local PDF: '+result.edition+'. Search to find source passages.';}
+    } else if (el.hasAttribute('data-local-ref-search')) {
+      const query=$('local-ref-query').value.trim();
+      if (!query) {status.textContent='Enter reference search words.';return;}
+      const result=await window.hmr.api('GET','/api/reference/search?q='+encodeURIComponent(query));
+      localReferenceHits=result.results;status.innerHTML=localReferenceHtml(result);
+    } else {
+      const hit=localReferenceHits[Number(el.dataset.localRefOpen)];
+      if (!hit) throw Error('Search again to recover the citation');
+      await window.hmr.openLocalReference(hit.pdf_sha256,hit.page);
+    }
+  } catch(error) {status.textContent=error.message;}
+});
