@@ -319,3 +319,17 @@ def test_real_pdf_converter_when_available(tmp_path):
     result = pdf_export.convert(source, target)
     assert result['created'] and target.read_bytes()[:5] == b'%PDF-'
     with fitz.open(target) as rendered: assert rendered.page_count >= 1 and 'Synthetic converter check' in rendered[0].get_text()
+
+
+def test_followup_review_binding_and_key_validation(tmp_path):
+    import manual_defaults
+    base = {'followup_decision': 'not_required', 'followup': 'x'}
+    old = {**base, 'followup': manual_defaults.not_required_followup('A B'), 'followup_reviewed_sha256': manual_defaults.text_sha(manual_defaults.not_required_followup('A B'))}
+    same = report._bind_followup_review({**old, 'followup_text_reviewed': True}, old)
+    assert same['followup_reviewed_sha256'] == old['followup_reviewed_sha256'] and 'followup_text_reviewed' not in same
+    edited = report._bind_followup_review({**old, 'followup': old['followup'] + ' more', 'followup_text_reviewed': True}, old)
+    assert edited['followup_reviewed_sha256'] == ''
+    switched = report._bind_followup_review({**old, 'followup_decision': 'required', 'followup_text_reviewed': True}, old)
+    assert switched['followup_reviewed_sha256'] == ''
+    fresh = report._bind_followup_review({**old, 'followup_reviewed_sha256': '', 'followup_text_reviewed': True}, {})
+    assert fresh['followup_reviewed_sha256'] == ''  # a first save cannot claim a prior review

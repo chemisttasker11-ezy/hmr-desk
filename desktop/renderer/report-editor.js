@@ -147,14 +147,13 @@ function reportField(key, label, multiline = true) {
 }
 function followupDecisionHtml() {
   if (reportRecord.followup_decision === undefined) {
-    return reportRecord.needs_review?.includes('followup')
-      ? '<label><input type="checkbox" data-followup-legacy-reviewed> I have reviewed this follow-up wording (kept from an earlier draft)</label>' : '';
+    return reportRecord.followup
+      ? `<label><input type="checkbox" data-followup-reviewed ${reportRecord.followup_text_reviewed ? 'checked' : ''}> I have reviewed this follow-up wording (kept from an earlier draft)</label>` : '';
   }
   const d = reportRecord.followup_decision;
   const opts = [['', 'Choose...'], ['required', 'Follow-up required (enter the plan and timing above)'], ['not_required', 'No follow-up planned (proposed wording above)']]
     .map(([v, t]) => `<option value="${v}" ${d === v ? 'selected' : ''}>${t}</option>`).join('');
-  const confirm = d === 'not_required'
-    ? `<label><input type="checkbox" data-followup-reviewed ${reportRecord.followup_text_reviewed ? 'checked' : ''}> I have reviewed this follow-up wording</label>` : '';
+  const confirm = `<label><input type="checkbox" data-followup-reviewed ${reportRecord.followup_text_reviewed ? 'checked' : ''}> I have reviewed this follow-up wording</label>`;
   return `<label>Follow-up decision<select data-followup-decision>${opts}</select></label>${confirm}`;
 }
 function renderReport() {
@@ -250,10 +249,6 @@ document.addEventListener('input', (event) => {
     }, 300);
     return;
   }
-  if (el.dataset.followupLegacyReviewed !== undefined) {
-    reportRecord.needs_review = H.reviewed(reportRecord.needs_review, 'followup');
-    document.querySelector('[data-report-review="followup"]')?.remove(); el.closest('label')?.remove(); reportSaver.changed(); return;
-  }
   if (el.dataset.followupReviewed !== undefined) { reportRecord.followup_text_reviewed = !!el.checked; reportSaver.changed(); return; }
   if (el.dataset.followupDecision !== undefined) {
     reportRecord.followup_decision = el.value;
@@ -274,6 +269,7 @@ document.addEventListener('input', (event) => {
     const key = el.dataset.field;
     if (el.dataset.row !== undefined) reportRecord[key][Number(el.dataset.row)][Number(el.dataset.col)] = el.value;
     else reportRecord[key] = el.value;
+    if (key === 'followup') { reportRecord.followup_text_reviewed = false; document.querySelector('[data-followup-reviewed]') && (document.querySelector('[data-followup-reviewed]').checked = false); }
     if (reportRecord.needs_review) reportRecord.needs_review = H.reviewed(reportRecord.needs_review, key);
     document.querySelector(`[data-report-review="${key}"]`)?.remove();
   } else return;

@@ -35,19 +35,26 @@ def readiness(conn, patient, number, visit_date):
     if not day or day.isoformat() < TELEHEALTH_FROM: return []
     saved = records.get_json(conn, patient['id'], f'followup{number}.json')
     if saved is None: return ['No follow-up record with delivery method and choice documentation is saved']
-    return review_issues({**normalize(saved), 'date': visit_date})
+    saved = normalize(saved)
+    gaps = review_issues({**saved, 'date': visit_date})
+    if saved.get('date') != visit_date: gaps.append('Saved follow-up record date differs from the recorded follow-up visit date')
+    return gaps
 
 
 def review_issues(data):
     """Documentation gaps against the delivery rules, for a follow-up dated on or after 1 Nov 2026.
     A review aid only: it never blocks saving, and it does not certify eligibility or claim acceptance."""
     day = _day(data.get('date'))
-    if not day: return []
+    method = data.get('method', '')
+    base = []
+    if not data.get('date'): base.append('Follow-up date not recorded')
+    elif day is None: base.append('Follow-up date is not a valid date')
+    if not method: base.append('Delivery method not recorded')
+    if day is None: return base
     method, preferred, offered = data.get('method', ''), data.get('preferred_method', ''), data.get('choice_offered_on', '')
     if day.isoformat() < TELEHEALTH_FROM:
-        return ['Video follow-ups before 1 Nov 2026 are not covered by the October 2026 rules checked here'] if method == 'video' else []
-    issues = []
-    if not method: issues.append('Delivery method not recorded (the Portal claim requires it)')
+        return base + (['Video follow-ups before 1 Nov 2026 are not covered by the October 2026 rules checked here'] if method == 'video' else [])
+    issues = list(base)
     if not preferred: issues.append("Patient's preferred delivery option not documented")
     if not offered: issues.append('Date the delivery choice was offered not recorded (this app asks for it as a conservative record of the offer; the PDF does not require a date)')
     elif _day(offered) is None: issues.append('Choice-offered date is not a valid date')
@@ -82,6 +89,8 @@ def export(conn, patient, number):
     from docx import Document
     data = load(conn, patient, number); validate(data)
     gaps = review_issues(data)
+    visit = conn.execute("SELECT visit_date FROM visits WHERE patient_id=? AND kind=? AND visit_date IS NOT NULL ORDER BY visit_date DESC,id DESC LIMIT 1", (patient['id'], f'followup{number}')).fetchone()
+    if visit and visit['visit_date'] != data.get('date'): gaps.append('Saved follow-up record date differs from the recorded follow-up visit date')
     if gaps: raise ValueError('Follow-up documentation incomplete: ' + '; '.join(gaps))
     folder = jobs.patient_folder(patient)
     name = re.sub(r'[<>:"/\\|?*]', '', patient['name']).rstrip(' .')

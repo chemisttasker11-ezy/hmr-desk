@@ -131,29 +131,32 @@ def test_local_docx_readable_pathology_notes_and_consistent_dates(tmp_path):
 
 
 def test_required_decision_never_generates_timing():
-    base = {**manual_defaults.initial_text("Synthetic Patient", "GP"), "name": "Synthetic Patient", "needs_review": ["followup"]}
+    base = {**manual_defaults.initial_text("Synthetic Patient", "GP"), "name": "Synthetic Patient"}
     req = manual_defaults.apply_followup_decision({**base, "followup_decision": "required"})
     assert "12 months" not in req["followup"] and "few months" not in req["followup"]
     assert manual_defaults.unresolved(req) == ["followup_plan"]
     entered = {**req, "followup": "Review again after the dose change, timing as entered by the pharmacist."}
     assert manual_defaults.unresolved(entered) == [] and manual_defaults.apply_followup_decision(entered)["followup"] == entered["followup"]
-    # the old stock sentence is dropped from a generated default and not accepted as an entered plan
     stock = {**req, "followup": manual_defaults.required_followup("Synthetic Patient")}
     assert manual_defaults.unresolved(stock) == ["followup_plan"]
     assert manual_defaults.apply_followup_decision(stock)["followup"] == manual_defaults.NEUTRAL_FOLLOWUP
 
 
-def test_not_required_wording_is_proposed_until_reviewed():
-    base = {**manual_defaults.initial_text("Synthetic Patient", "GP"), "name": "Synthetic Patient", "needs_review": ["followup"], "followup_decision": "not_required"}
+def test_not_required_wording_is_proposed_until_reviewed_for_that_exact_text():
+    base = {**manual_defaults.initial_text("Synthetic Patient", "GP"), "name": "Synthetic Patient", "followup_decision": "not_required"}
     d = manual_defaults.apply_followup_decision(base)
     assert "No follow-up interview is planned" in d["followup"] and manual_defaults.unresolved(d) == ["followup_review"]
-    assert manual_defaults.unresolved({**d, "followup_text_reviewed": True}) == []
+    ok = {**d, "followup_reviewed_sha256": manual_defaults.text_sha(d["followup"])}
+    assert manual_defaults.unresolved(ok) == []
+    assert manual_defaults.unresolved({**ok, "followup": d["followup"] + " Edited."}) == []  # authored edit is no longer generated wording
 
 
-def test_legacy_stock_sentence_is_kept_but_flagged_until_reviewed():
-    name = "Synthetic Patient"
-    legacy = {"name": name, "followup": manual_defaults.required_followup(name), "needs_review": ["followup"]}
+def test_legacy_stock_flagged_for_any_name_until_reviewed_and_new_specs_cannot_drop_the_key():
+    stock = manual_defaults.required_followup("Someone Else")  # name need not match the spec name
+    legacy = {"name": "Synthetic Patient", "followup": stock, "needs_review": []}
     assert manual_defaults.unresolved(legacy) == ["followup_review"]
-    assert manual_defaults.apply_followup_decision(legacy)["followup"] == legacy["followup"]  # words preserved
-    assert manual_defaults.unresolved({**legacy, "needs_review": []}) == []  # reviewed or edited
+    assert manual_defaults.apply_followup_decision(legacy)["followup"] == stock  # words preserved
+    assert manual_defaults.unresolved({**legacy, "followup_reviewed_sha256": manual_defaults.text_sha(stock)}) == []
     assert manual_defaults.unresolved({**legacy, "followup": "My own plan."}) == []
+    new = manual_defaults.initial_text("Synthetic Patient", "GP"); del new["followup_decision"]
+    assert manual_defaults.unresolved(new) == ["followup_decision"]

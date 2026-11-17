@@ -25,7 +25,7 @@ with tempfile.TemporaryDirectory() as tmp:
     assert status == 200 and draft['body'] == 'My text' and draft['state'] == 'draft'
     records.put(conn, 1, 'report_spec.json', (json.dumps({'issues':[{'rec':'Review medicine'}]})).encode('utf-8')); conn.commit()
     status, data = call('GET','followup/1'); assert status == 200 and data['recommendations'] == [['Review medicine','','']]
-    data['date'] = '2026-02-10'; data['recommendations'][0][1] = 'partly'
+    data['date'] = '2026-02-10'; data['method'] = 'phone'; data['recommendations'][0][1] = 'partly'
     assert call('POST','followup/1', data)[0] == 200
     assert call('POST','followup/1', data)[0] == 200
     assert conn.execute("SELECT count(*) FROM visits WHERE kind='followup1'").fetchone()[0] == 1

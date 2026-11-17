@@ -22,8 +22,9 @@ def test_review_issues_only_from_1_nov_2026():
     assert followup.review_issues(BASE) == []
     blank = {**BASE, 'method': '', 'preferred_method': '', 'choice_offered_on': ''}
     assert len(followup.review_issues(blank)) == 3
-    assert followup.review_issues({**blank, 'date': '2026-10-31'}) == []
+    assert followup.review_issues({**blank, 'date': '2026-10-31'}) == ['Delivery method not recorded']  # method always needed; preference and offer only from 1 Nov
     assert followup.review_issues({**BASE, 'date': '2026-10-31'})  # video before 1 Nov is not covered
     assert any('prefers face-to-face' in i for i in followup.review_issues({**BASE, 'preferred_method': 'in person'}))
     assert any('after the follow-up date' in i for i in followup.review_issues({**BASE, 'choice_offered_on': '2026-11-11'}))
-    assert followup.review_issues({**BASE, 'date': ''}) == []
+    assert followup.review_issues({**BASE, 'date': ''}) == ['Follow-up date not recorded']
+    assert followup.review_issues({**BASE, 'date': '2026-13-45'}) == ['Follow-up date is not a valid date']

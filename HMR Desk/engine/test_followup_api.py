@@ -79,3 +79,14 @@ def test_edit_after_claim_is_logged_and_readiness_reevaluated(env):
     r = api.patient_followups(env, 1, dt.date(2026, 11, 12))
     assert r['next_action'] == 'followup1_document' and r['followup1_documentation_gaps'] and 'not modelled' in r['readiness_scope']
     assert call(env, 'POST', 'followup/1/export')[0] == 400
+
+
+def test_export_refuses_undated_blank_or_mismatched_records(env):
+    call(env, 'POST', 'action', {'action': 'followup_done', 'kind': 'followup1', 'date': '2026-11-10'})
+    full = record(date='2026-11-10', method='phone', preferred_method='phone', choice_offered_on='2026-11-03')
+    for bad in (record(), {**full, 'date': ''}, {**full, 'method': ''}, {**full, 'date': '2026-11-09'}):
+        call(env, 'POST', 'followup/1', bad)
+        status, body = call(env, 'POST', 'followup/1/export')
+        assert status == 400 and 'incomplete' in body['error']
+    call(env, 'POST', 'followup/1', full)
+    assert call(env, 'POST', 'followup/1/export')[0] == 200

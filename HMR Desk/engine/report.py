@@ -40,12 +40,16 @@ def validate(data):
             raise ValueError('invalid suggestion source evidence')
     if 'followup_decision' in data and data['followup_decision'] not in manual_defaults.DECISIONS: raise ValueError('invalid followup_decision')
     if 'followup_text_reviewed' in data and not isinstance(data['followup_text_reviewed'], bool): raise ValueError('invalid followup_text_reviewed')
+    if 'followup_reviewed_sha256' in data and (not isinstance(data['followup_reviewed_sha256'], str) or (data['followup_reviewed_sha256'] and not re.fullmatch('[a-f0-9]{64}', data['followup_reviewed_sha256']))): raise ValueError('invalid followup_reviewed_sha256')
+    if data.get('followup_policy') not in (None, manual_defaults.POLICY_VERSION): raise ValueError('invalid followup_policy')
+    if data.get('followup_policy') == manual_defaults.POLICY_VERSION and 'followup_decision' not in data: raise ValueError('followup_decision is required')
     if 'needs_review' in data and (not isinstance(data['needs_review'], list) or any(x not in REVIEW for x in data['needs_review'])): raise ValueError('invalid needs_review')
 
 def load(conn, patient, ai=False):
     data = records.get_json(conn, patient['id'], 'report_spec.ai.json' if ai else 'report_spec.json')
     if data is None: return {'saved': False}
     validate(data)
+    if not ai: data['followup_text_reviewed'] = manual_defaults.review_valid(data)
     if not ai: data['interview_newer'] = 'interview_revision' in data and interview.revision(conn, patient) != data['interview_revision']
     if not ai:
         import pathology_records
@@ -55,10 +59,23 @@ def load(conn, patient, ai=False):
 def save(conn, patient, data):
     with _lock: return _save(conn, patient, data)
 
+def _bind_followup_review(data, old):
+    """followup_text_reviewed=True from the client means 'I reviewed the follow-up text now saved'. It is stored as a hash
+    of that exact text, and only when the text and the decision are unchanged from the previous save; otherwise it is dropped."""
+    asked = data.pop('followup_text_reviewed', False)
+    text = data.get('followup', '').strip()
+    unchanged = bool(old) and old.get('followup', '').strip() == text and old.get('followup_decision') == data.get('followup_decision')
+    keep = old.get('followup_reviewed_sha256', '') if unchanged else ''
+    if asked and unchanged: keep = manual_defaults.text_sha(text)
+    if keep != manual_defaults.text_sha(text): keep = ''
+    return {**data, 'followup_reviewed_sha256': keep} if (keep or old.get('followup_reviewed_sha256') or 'followup_decision' in data) else data
+
+
 def _save(conn, patient, data):
     validate(data)
     data = manual_defaults.apply_followup_decision({k: v for k, v in data.items() if k not in ('interview_newer', 'pathology_newer')})
     previous = records.get(conn, patient['id'], 'report_spec.json')
+    data = _bind_followup_review(data, json.loads(previous) if previous else {})
     if previous is not None: records.put(conn, patient['id'], 'report_spec.json.bak', previous)
     records.put_json(conn, patient['id'], 'report_spec.json', data)
     db.log(conn, patient['id'], 'report_saved', {}, 'api')
