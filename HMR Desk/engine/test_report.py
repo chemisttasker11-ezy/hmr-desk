@@ -160,13 +160,14 @@ def test_report_workflow(monkeypatch):
             spec['issues'] = [{'title':'Finding','rec':'Review','rationale':'Reason'}]
             assert api.handle(conn,'POST','/api/patients/1/report',{},spec)[0] == 200
             assert records.exists(conn, p['id'], 'report_spec.json.bak') and api.next_step(p, conn) == 'build report'
-            assert report.placeholders(spec) == ['intro']
+            assert report.placeholders(spec) == ['intro', 'followup_decision']
             try: jobs.report_build(p['id']); assert False
-            except ValueError as exc: assert 'intro' in str(exc) and 'thanks' not in str(exc) and 'followup' not in str(exc)
+            except ValueError as exc: assert 'intro' in str(exc) and 'followup_decision' in str(exc) and 'thanks' not in str(exc)
             # Placeholder semantics (a4c195f): a needs_review field is unresolved while its text is empty.
             spec['reason'] = ''; spec['needs_review'].append('reason')
             assert 'reason' in report.placeholders(spec)
             for k in spec['needs_review']: spec[k] = 'Edited ' + k
+            spec['followup_decision'] = 'required'
             assert report.placeholders(spec) == []
             report.save(conn, p, spec); conn.commit()
             hits = report.library('aspirin diabetes'); assert [x['source'] for x in hits] == ['library','past case'] and not report.library('aspirin nonexistent')

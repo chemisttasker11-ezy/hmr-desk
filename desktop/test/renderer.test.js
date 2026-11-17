@@ -294,7 +294,7 @@ test('call action posts the selected outcome and note', async () => {
 test('follow-up form saves the edited record and recommendation shape', async () => {
   const vm = require('node:vm'), fs = require('node:fs'), H = require('../renderer/helpers');
   const handlers = {}, calls = [], nodes = {screen: {}, 'followup-status': {}};
-  const record = {date: '', method: 'phone', spoke_with: '', med_changes: '', recommendations: [['Take medicine', '', '']], issues: '', outcome: '', notes: ''};
+  const record = {date: '', method: '', preferred_method: '', choice_offered_on: '', spoke_with: '', med_changes: '', recommendations: [['Take medicine', '', '']], issues: '', outcome: '', notes: ''};
   const context = vm.createContext({ H, esc: H.esc, $: id => nodes[id], document: {addEventListener: (name, fn) => { handlers[name] = fn; }}, page: 'followup_editor', hmr: {api: async (...args) => { calls.push(args); if (args[0] === 'GET') return record; }}, errorText: String, setTimeout, clearTimeout, confirm: () => false });
   vm.runInContext(fs.readFileSync(require.resolve('../renderer/followup-context.js'), 'utf8'), context);
   vm.runInContext(fs.readFileSync(require.resolve('../renderer/interview.js'), 'utf8'), context);

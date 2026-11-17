@@ -39,8 +39,25 @@ def test_manual_defaults_do_not_fabricate_clinical_text():
     defaults = manual_defaults.initial_text("Synthetic Patient", "Synthetic GP")
     assert defaults["reason"] == defaults["intro"] == ""
     assert set(manual_defaults.unresolved({**defaults, "needs_review": ["reason", "intro"]})) == {"reason", "intro"}
-    assert "Synthetic Patient" in defaults["followup"] and "Synthetic Patient" in defaults["thanks"]
-    assert "Synthetic Patient" not in manual_defaults.initial_text("", "Synthetic GP")["followup"]
+    assert "Synthetic Patient" in defaults["thanks"]
+    # No follow-up or 12-month assertion is generated before the pharmacist decides.
+    assert defaults["followup_decision"] == "" and "12 months" not in defaults["followup"] and "again" not in defaults["followup"]
+    assert "followup_decision" in manual_defaults.unresolved({**defaults, "needs_review": ["followup"]})
+    assert manual_defaults.unresolved({"needs_review": ["followup"], "followup": "x"}) == []  # legacy spec without the key
+
+
+def test_followup_decision_fills_only_unedited_text():
+    base = {**manual_defaults.initial_text("Synthetic Patient", "GP"), "name": "Synthetic Patient"}
+    req = manual_defaults.apply_followup_decision({**base, "followup_decision": "required"})
+    assert req["followup"] == manual_defaults.required_followup("Synthetic Patient") and "12 months" in req["followup"]
+    none = manual_defaults.apply_followup_decision({**base, "followup_decision": "not_required"})
+    assert "No follow-up interview is planned" in none["followup"] and "12 months" not in none["followup"]
+    # switching the decision replaces an unedited generated sentence
+    assert manual_defaults.apply_followup_decision({**req, "followup_decision": "not_required"})["followup"] == none["followup"]
+    # authored text is preserved
+    authored = {**base, "followup": "My own words.", "followup_decision": "required"}
+    assert manual_defaults.apply_followup_decision(authored)["followup"] == "My own words."
+    assert manual_defaults.apply_followup_decision(base)["followup"] == base["followup"]
 
 
 def test_local_docx_build(tmp_path):

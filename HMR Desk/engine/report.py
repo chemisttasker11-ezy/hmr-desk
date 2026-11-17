@@ -38,6 +38,7 @@ def validate(data):
             any(not isinstance(e,dict) or not isinstance(e.get('id'),str) or not isinstance(e.get('text'),str) for e in origin['evidence']) or
             len(json.dumps(origin,ensure_ascii=False)) > 2000000):
             raise ValueError('invalid suggestion source evidence')
+    if 'followup_decision' in data and data['followup_decision'] not in manual_defaults.DECISIONS: raise ValueError('invalid followup_decision')
     if 'needs_review' in data and (not isinstance(data['needs_review'], list) or any(x not in REVIEW for x in data['needs_review'])): raise ValueError('invalid needs_review')
 
 def load(conn, patient, ai=False):
@@ -55,7 +56,7 @@ def save(conn, patient, data):
 
 def _save(conn, patient, data):
     validate(data)
-    data = {k: v for k, v in data.items() if k not in ('interview_newer', 'pathology_newer')}
+    data = manual_defaults.apply_followup_decision({k: v for k, v in data.items() if k not in ('interview_newer', 'pathology_newer')})
     previous = records.get(conn, patient['id'], 'report_spec.json')
     if previous is not None: records.put(conn, patient['id'], 'report_spec.json.bak', previous)
     records.put_json(conn, patient['id'], 'report_spec.json', data)

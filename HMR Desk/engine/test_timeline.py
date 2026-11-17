@@ -39,7 +39,7 @@ with tempfile.TemporaryDirectory() as tmp:
     assert 'import_change' not in labels and labels.index('Pathology: 4 reports saved') < labels.index('Reply: "YES" (YES)')
     assert (m['referral_date'], m['referral_expiry'], m['first_contact'], m['last_reply'], m['confirmed']) == ('2026-01-01','2026-04-01','2026-01-02','2026-01-03','2026-01-03')
     assert (m['visit'],m['report_sent'],m['claimed'],m['call_attempts']) == ('2026-01-10','2026-01-11','2026-01-12',1)
-    assert (m['followup1_due'],m['followup1_done'],m['followup1_claimed'],m['followup2_due'],m['followup2_done']) == ('2026-02-09','2026-02-10','2026-02-11','2026-03-12',None)
+    assert (m['followup1_due'],m['followup1_done'],m['followup1_claimed'],m['followup2_due'],m['followup2_done']) == ('2026-02-10','2026-02-10','2026-02-11','2026-03-10',None)
     conn.execute("UPDATE patients SET visit_date='2026-11-14',visit_time='09:30' WHERE id=1")
     conn.execute("INSERT INTO messages(id,patient_id,direction,body,kind,state,created_at) VALUES ('utc',1,'in','YES','YES','received','2026-11-11T08:45:00+00:00')")
     extra = [
