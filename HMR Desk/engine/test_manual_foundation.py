@@ -67,3 +67,61 @@ def test_local_docx_build(tmp_path):
         assert False, "must not overwrite report"
     except FileExistsError:
         pass
+
+
+def test_local_docx_visibly_marks_provisional_layout(tmp_path):
+    from docx import Document
+    data = dict(name="Synthetic Patient", assess_date="01/11/2026", report_date="02/11/2026",
+                patient="Synthetic Patient", doctor="Synthetic GP", dear="Dear Synthetic GP,",
+                thanks="", reason="", intro="",
+                conditions="", allergies="",
+                obs="", meds=[], otc=[], ceased=[], path=[], issues=[{
+                    "title": "Verify anticoagulant dose",
+                    "rec": "Confirm indication and renal function",
+                    "rationale": "Dose requires individual assessment"}],
+                followup="")
+    target = tmp_path / "report.docx"
+    local_report_builder.render(data, target)
+    doc = Document(target)
+    body = "\n".join(p.text for p in doc.paragraphs)
+    header = "\n".join(p.text for p in doc.sections[0].header.paragraphs)
+    # Body and repeating page header both carry the marker so no page reads as the approved layout.
+    assert local_report_builder.PROVISIONAL_LABEL in body
+    assert local_report_builder.PROVISIONAL_LABEL in header
+    # The marker states layout provenance only; it must not comment on clinical content approval.
+    label = local_report_builder.PROVISIONAL_LABEL.lower()
+    assert "layout" in label and "template" in label
+    assert "clinic" not in label and "content" not in label
+    assert any(run.bold for p in doc.paragraphs if p.text == local_report_builder.PROVISIONAL_LABEL for run in p.runs)
+
+
+def test_local_docx_readable_pathology_notes_and_consistent_dates(tmp_path):
+    from docx import Document
+    from docx.shared import Cm
+    data = dict(name="Synthetic Patient", assess_date="2026-11-17", report_date="17/11/2026",
+                patient="Synthetic Patient", doctor="Synthetic GP", dear="Dear Synthetic GP,",
+                thanks="", reason="", intro="",
+                conditions="", allergies="",
+                obs="", meds=[], otc=[], ceased=[],
+                path=[["Synthetic eGFR", "78", "mL/min/1.73m2", ">=60",
+                       "Verified by Test Pharmacist at 2026-11-17T12:33:43+00:00 | Sample: 2026-11-10 | Source: 1-SYNTHETIC referral p.1 | synthetic acceptance entry"]],
+                issues=[{
+                    "title": "Verify anticoagulant dose",
+                    "rec": "Confirm indication and renal function",
+                    "rationale": "Dose requires individual assessment"}],
+                followup="")
+    target = tmp_path / "report.docx"
+    local_report_builder.render(data, target)
+    doc = Document(target)
+    text = "\n".join(p.text for p in doc.paragraphs)
+    # Both dates display in the same DD/MM/YYYY format; the stored values are not rewritten.
+    assert "Assessment: 17/11/2026    Report: 17/11/2026" in text
+    assert "2026-11-17    Report" not in text
+    assert local_report_builder._display_date("not a date") == "not a date"
+    # Provenance and value columns are wide enough to wrap readably without splitting
+    # unit strings like "mL/min/1.73m2" mid-token.
+    table = doc.tables[0]
+    widths = [cell.width for cell in table.rows[0].cells]
+    assert widths[-1] >= Cm(5)
+    assert widths[1] >= Cm(3) and widths[2] >= Cm(3)
+    assert all(w is not None for w in widths)
