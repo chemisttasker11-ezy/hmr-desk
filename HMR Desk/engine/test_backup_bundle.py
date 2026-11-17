@@ -180,3 +180,38 @@ def test_empty_workspace_backup_restores_a_workspace_folder(tmp_path, monkeypatc
     backup_bundle.restore(output, location, 'a-long-local-passphrase-for-backup')
     assert (location / 'workspace').is_dir()
     assert backup_bundle.verify_isolated(location)['verified'] is True
+
+
+def test_backup_round_trip_preserves_structured_patient_records(tmp_path, monkeypatch):
+    import pathology_records, records
+    workspace = tmp_path / 'active workspace'
+    folder = workspace / 'TO SORT' / 'Referral-synthetic'
+    folder.mkdir(parents=True)
+    (folder / 'referral.pdf').write_bytes(b'%PDF- synthetic no patient identifiers')
+    monkeypatch.setattr(db, 'BASE', str(workspace))
+    monkeypatch.setattr(db, 'DATA_DIR', str(tmp_path / 'active data'))
+    conn = db.connect(str(tmp_path / 'active data' / 'hmr.db'))
+    with conn:
+        cursor = conn.execute("INSERT INTO patients(key,name,folder) VALUES (?,?,?)",
+                              ('synthetic test', 'Synthetic Test', 'TO SORT/Referral-synthetic'))
+    patient = {'id': cursor.lastrowid, 'key': 'synthetic test', 'name': 'Synthetic Test',
+               'folder': 'TO SORT/Referral-synthetic'}
+    row = dict(id='c' * 32, test='eGFR', value='41', unit='mL/min/1.73m2',
+               reference_interval='60-120', sample_date='2026-11-01',
+               source='synthetic-lab.pdf page 2', verified=True, comment='Synthetic comment')
+    pathology_records.save(conn, patient, {'revision': pathology_records.revision(conn, patient),
+                                           'records': [row]}, reviewer='Synthetic Reviewer')
+    records.put_json(conn, patient['id'], 'confirmed_meds.json',
+                     {'medicine_snapshot_sha256': 'a' * 64, 'confirmed': ['Synthetic 5mg']})
+    secret = 'a-long-local-passphrase-for-backup'
+    output = tmp_path / 'encrypted.hmrbak'
+    backup_bundle.create(conn, workspace, output, secret)
+    location = tmp_path / 'recovered'
+    backup_bundle.restore(output, location, secret)
+    restored = db.connect(str(location / 'data' / 'hmr.db'))
+    loaded = pathology_records.load(restored, patient)
+    assert loaded['records'] == [row]
+    assert loaded['verification']['c' * 32]['verified_by'] == 'Synthetic Reviewer'
+    assert records.get_json(restored, patient['id'], 'confirmed_meds.json')['confirmed'] == ['Synthetic 5mg']
+    restored.close()
+    conn.close()
