@@ -39,6 +39,7 @@ def validate(data):
             len(json.dumps(origin,ensure_ascii=False)) > 2000000):
             raise ValueError('invalid suggestion source evidence')
     if 'followup_decision' in data and data['followup_decision'] not in manual_defaults.DECISIONS: raise ValueError('invalid followup_decision')
+    if 'followup_text_reviewed' in data and not isinstance(data['followup_text_reviewed'], bool): raise ValueError('invalid followup_text_reviewed')
     if 'needs_review' in data and (not isinstance(data['needs_review'], list) or any(x not in REVIEW for x in data['needs_review'])): raise ValueError('invalid needs_review')
 
 def load(conn, patient, ai=False):

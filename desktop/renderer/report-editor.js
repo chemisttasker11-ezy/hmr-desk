@@ -145,6 +145,15 @@ function reportField(key, label, multiline = true) {
     : `<input data-field="${esc(key)}" value="${esc(H.date(reportRecord[key] || ''))}">`;
   return `<label>${esc(label)} ${review}${input}</label>`;
 }
+function followupDecisionHtml() {
+  if (reportRecord.followup_decision === undefined) return '';
+  const d = reportRecord.followup_decision;
+  const opts = [['', 'Choose...'], ['required', 'Follow-up required (enter the plan and timing above)'], ['not_required', 'No follow-up planned (proposed wording above)']]
+    .map(([v, t]) => `<option value="${v}" ${d === v ? 'selected' : ''}>${t}</option>`).join('');
+  const confirm = d === 'not_required'
+    ? `<label><input type="checkbox" data-followup-reviewed ${reportRecord.followup_text_reviewed ? 'checked' : ''}> I have reviewed this follow-up wording</label>` : '';
+  return `<label>Follow-up decision<select data-followup-decision>${opts}</select></label>${confirm}`;
+}
 function renderReport() {
   if ($('report-letter')) reportLetterOpen = $('report-letter').open;
   if ($('report-details')) reportDetailsOpen = $('report-details').open;
@@ -156,7 +165,7 @@ function renderReport() {
     ['followup', 'Follow-up'],
   ]
     .map(([key, label]) => reportField(key, label, key !== 'dear'))
-    .join('');
+    .join('') + followupDecisionHtml();
   const details =
     [
       ['patient', 'Patient'],
@@ -238,6 +247,20 @@ document.addEventListener('input', (event) => {
     }, 300);
     return;
   }
+  if (el.dataset.followupReviewed !== undefined) { reportRecord.followup_text_reviewed = !!el.checked; reportSaver.changed(); return; }
+  if (el.dataset.followupDecision !== undefined) {
+    reportRecord.followup_decision = el.value;
+    reportRecord.followup_text_reviewed = false;
+    reportSaver.changed();
+    (async () => {  // the engine fills only blank or unedited generated wording, so re-read it
+      if (!(await reportSaver.save(true))) return;
+      const fresh = await hmr.api('GET', `/api/patients/${encodeURIComponent(reportId)}/report`);
+      reportRecord.followup = fresh.followup;
+      reportSaver.reset(reportRecord);
+      renderReport();
+    })().catch((e) => alert(errorText(e)));
+    return;
+  }
   if (el.tagName === 'TEXTAREA') H.growTextarea(el);
   if (el.dataset.issue !== undefined) reportRecord.issues[Number(el.dataset.issue)][el.dataset.prop] = el.value;
   else if (el.dataset.field) {
@@ -274,7 +297,7 @@ async function reportJob(job, extra = {}) {
 function showBuildError(message) {
   const match = String(message).match(/Review placeholder fields:\s*([^\r\n]+)/i);
   if (!match) { alert(message); return; }
-  const labels = { reason: 'Reason for referral', intro: 'Introduction', thanks: 'Thanks', followup: 'Follow-up' };
+  const labels = { reason: 'Reason for referral', intro: 'Introduction', thanks: 'Thanks', followup: 'Follow-up', followup_decision: 'Follow-up decision', followup_plan: 'Follow-up plan and timing', followup_review: 'Follow-up wording review' };
   const fields = match[1].split(',').map(field => field.trim()).filter(field => labels[field]);
   alert(`Review placeholder fields: ${fields.map(field => labels[field]).join(', ') || match[1]}`);
   if (fields.length) {

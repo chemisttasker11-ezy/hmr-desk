@@ -274,10 +274,15 @@ def patient_followups(conn, pid, today=None):
     first_date = first['visit_date'] if first else None
     due2 = second_followup_due(conn, first_date)
     alerts = []
+    import followup
+    gaps = {n: followup.readiness(conn, {'id': pid}, n, v['visit_date']) if v else [] for n, v in ((1, first), (2, second))}
     for number, visit in ((1, first), (2, second)):
-        if visit and not visit['claimed']: alerts.append(f'follow-up {number} to claim')
+        if visit and gaps[number]: alerts.append(f'follow-up {number} documentation incomplete')
+        elif visit and not visit['claimed']: alerts.append(f'follow-up {number} to claim')
     next_action = next_due = None
-    if first and not first['claimed']: next_action = 'followup1_claimed'
+    if first and gaps[1]: next_action = 'followup1_document'
+    elif second and gaps[2]: next_action = 'followup2_document'
+    elif first and not first['claimed']: next_action = 'followup1_claimed'
     elif second and not second['claimed']: next_action = 'followup2_claimed'
     elif str(today) <= result['window_end']:
         if not first: next_action, next_due = 'followup1', result['first_due']
@@ -291,7 +296,7 @@ def patient_followups(conn, pid, today=None):
                   followup2_claimed=second['claimed'] if second else None,
                   followup1_claim_by=str(claim_deadline(dt.date.fromisoformat(first_date))) if first_date else None,
                   followup2_claim_by=str(claim_deadline(dt.date.fromisoformat(second['visit_date']))) if second else None,
-                  followup2_due=due2,
+                  followup2_due=due2, followup1_documentation_gaps=gaps[1], followup2_documentation_gaps=gaps[2],
                   next_action=next_action, next_due=next_due)
     return result
 
@@ -546,6 +551,9 @@ def _action(conn, p, body, moved_items):
     elif name == 'followup_claimed':
         row = conn.execute("SELECT id FROM visits WHERE patient_id=? AND kind=? AND visit_date IS NOT NULL ORDER BY visit_date DESC,id DESC LIMIT 1", (pid, body['kind'])).fetchone()
         if not row: raise ValueError('follow-up is not done')
+        import followup
+        gaps = followup.readiness(conn, p, int(body['kind'][-1]), conn.execute('SELECT visit_date FROM visits WHERE id=?', (row['id'],)).fetchone()[0])
+        if gaps: raise ValueError('Follow-up cannot be marked claimed until documented: ' + '; '.join(gaps))
         conn.execute('UPDATE visits SET claimed=? WHERE id=?', (body['date'], row['id']))
         db.log(conn, pid, name, {'kind': body['kind'], 'date': body['date']}, 'app')
     elif name == 'call':

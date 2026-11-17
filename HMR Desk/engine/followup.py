@@ -28,6 +28,16 @@ def _day(value):
     except (TypeError, ValueError): return None
 
 
+def readiness(conn, patient, number, visit_date):
+    """Documentation gaps that keep a follow-up from counting as ready to claim. Draft saving and historical
+    (pre-1 Nov 2026) records are never blocked. A follow-up with no saved record counts as undocumented."""
+    day = _day(visit_date)
+    if not day or day.isoformat() < TELEHEALTH_FROM: return []
+    saved = records.get_json(conn, patient['id'], f'followup{number}.json')
+    if saved is None: return ['No follow-up record with delivery method and choice documentation is saved']
+    return review_issues({**normalize(saved), 'date': visit_date})
+
+
 def review_issues(data):
     """Documentation gaps against the delivery rules, for a follow-up dated on or after 1 Nov 2026.
     A review aid only: it never blocks saving, and it does not certify eligibility or claim acceptance."""
@@ -72,6 +82,7 @@ def export(conn, patient, number):
     from docx import Document
     data = load(conn, patient, number); validate(data)
     gaps = review_issues(data)
+    if gaps: raise ValueError('Follow-up documentation incomplete: ' + '; '.join(gaps))
     folder = jobs.patient_folder(patient)
     name = re.sub(r'[<>:"/\\|?*]', '', patient['name']).rstrip(' .')
     stem = f'HMR Follow-up {number} - {name}'
@@ -80,8 +91,6 @@ def export(conn, patient, number):
     doc.add_paragraph('Delivery method used: ' + LABELS[data['method']])
     doc.add_paragraph("Patient's preferred delivery option: " + LABELS[data['preferred_method']])
     doc.add_paragraph('Delivery choice offered on: ' + (data['choice_offered_on'] or 'Not recorded'))
-    if gaps:
-        doc.add_paragraph('Review before relying on this record: ' + '; '.join(gaps))
     for key, label in [('spoke_with','Spoke with'), ('med_changes','Medicine changes')]:
         doc.add_paragraph(label + ': ' + data[key])
     doc.add_heading('Recommendations', 2)

@@ -51,7 +51,8 @@ def stage(conn, p, today=None):
         follow = api.patient_followups(conn, p['id'], today)
         if follow and follow['next_action']:
             action = follow['next_action']
-            if action.endswith('_claimed'): step = action.replace('_', ' ').replace('followup', 'follow-up ').replace('claimed', 'to claim')
+            if action.endswith('_document'): step = action.replace('_document', '').replace('followup', 'follow-up ') + ' documentation incomplete'
+            elif action.endswith('_claimed'): step = action.replace('_', ' ').replace('followup', 'follow-up ').replace('claimed', 'to claim')
             elif follow['next_due'] and follow['next_due'] > str(today or dt.date.today()): step = action.replace('followup', 'follow-up ') + ' waiting until ' + follow['next_due']
             else: step = action.replace('followup', 'follow-up ') + ' due'
             value = ('followup', step)

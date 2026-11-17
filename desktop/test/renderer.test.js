@@ -421,3 +421,16 @@ test('report medicine notes use textareas and suggestions show specific gaps', (
   vm.runInContext("reportGaps = ['Interview notes missing', 'Medicines not confirmed']", context);
   assert.match(context.suggestionsHtml(), /<li>Interview notes missing<\/li><li>Medicines not confirmed<\/li>/);
 });
+
+test('report editor shows the follow-up decision only for specs that carry it, and no timing text', () => {
+  const vm = require('node:vm'), fs = require('node:fs'), H = require('../renderer/helpers');
+  const context = vm.createContext({ H, esc: H.esc, document: { addEventListener() {} }, page: 'report_editor', errorText: String });
+  vm.runInContext(fs.readFileSync(require.resolve('../renderer/report-editor.js'), 'utf8'), context);
+  vm.runInContext("reportRecord = { followup: 'x' }", context);
+  assert.equal(vm.runInContext('followupDecisionHtml()', context), '');
+  vm.runInContext("reportRecord = { followup_decision: 'not_required', followup_text_reviewed: false }", context);
+  const html = vm.runInContext('followupDecisionHtml()', context);
+  assert.match(html, /data-followup-decision/); assert.match(html, /data-followup-reviewed/); assert.doesNotMatch(html, /12 months|few months/);
+  vm.runInContext("reportRecord = { followup_decision: '' }", context);
+  assert.doesNotMatch(vm.runInContext('followupDecisionHtml()', context), /data-followup-reviewed/);
+});
