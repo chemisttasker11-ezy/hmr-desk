@@ -37,6 +37,12 @@ let interviewId = '',
 let interviewSaveStatus = 'Ready', interviewConflict = false, interviewProgressFilter = 'all';
 let interviewReconciliation = null;
 let interviewPathology = null, interviewPathologyDirty = false, interviewPathologyError = '';
+let interviewCandidateChecks = null, interviewCandidateChecksError = '', interviewCandidateChecksStale = false;
+// Monotonic epoch for the observation layer. Every load start, relevant edit
+// and relevant save bumps it; a load can only accept its result while the
+// epoch it captured is still current, so out-of-order reloads and
+// fetch-before-save completions can never install old evidence as current.
+let interviewObservationEpoch = 0;
 let pathologySourceIndex = {sources: []};
 let interviewRequest = 0;
 const interviewExpanded = new WeakSet();
@@ -60,7 +66,13 @@ const interviewSaver = H.autosaver({
   equivalent: interviewEquivalent,
   loadCurrent: async (id) => { const current = normalizeInterviewDetails(await hmr.api('GET', `/api/patients/${encodeURIComponent(id)}/interview`)); current.consent = { signed: false, date: '', by: 'patient', relationship: 0, authorised_name: '', ...current.consent }; return current; },
   onReconcile: () => { interviewConflict = interviewSaver.hasConflict(); renderInterview(); },
-  endpoint: (id, record) => hmr.api('POST', `/api/patients/${encodeURIComponent(id)}/interview`, record),
+  endpoint: async (id, record) => {
+    const result = await hmr.api('POST', `/api/patients/${encodeURIComponent(id)}/interview`, record);
+    // A successful save (manual or autosave) for the patient on screen changed
+    // the saved evidence the observations were computed from.
+    if (String(id) === interviewId) interviewInvalidateObservations();
+    return result;
+  },
   status: interviewStatus,
   errorText: (...args) => errorText(...args), // defined in renderer.js, which loads after this file
 });
@@ -69,6 +81,7 @@ const saveInterview = (force = false) => interviewSaver.save(force);
 const growInterview = H.growTextarea;
 function interviewChanged(field) {
   if(typeof invalidateEvidenceReferences==='function')invalidateEvidenceReferences();
+  interviewInvalidateObservations();
   interviewEdited.add(field);
   document.querySelector(`[data-source="${field}"]`)?.remove();
   interviewSaver.changed();
@@ -108,6 +121,40 @@ async function switchInterview(id) {
 }
 function interviewPicker() {
   return `<div class="interview-picker"><label>Search patients<input id="interview-search" type="search"></label><label>Patient<select id="interview-patient"><option value="" ${interviewId ? '' : 'selected'} disabled>Choose a patient</option>${patients.map((p) => `<option value="${esc(p.id)}" ${String(p.id) === interviewId ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></label>${interviewRecord ? '' : `<button type="button" data-interview-save>Save</button><span id="interview-status" role="status">${esc(interviewSaveStatus)}</span>`}${interviewConflict ? '<span role="alert">A local draft differs from the saved form. <button type="button" data-interview-resolve="restore">Restore draft</button><button type="button" data-interview-resolve="discard">Keep saved form</button></span>' : ''}</div>`;
+}
+
+// Read-only observation layer: a failed or stale load must never leave a
+// previous result on screen as if current. The patient id and request
+// generation are captured so a late completion (including errors) from an
+// earlier patient or an earlier load is rejected.
+async function interviewLoadCandidateChecks(request) {
+  const patientId = interviewId, epoch = ++interviewObservationEpoch;
+  const current = () => page === 'interview' && request === interviewRequest &&
+    patientId === interviewId && epoch === interviewObservationEpoch;
+  try {
+    const result = await hmr.api('GET', `/api/patients/${encodeURIComponent(patientId)}/candidate-checks`);
+    if (!current()) return;
+    interviewCandidateChecks = result;
+    interviewCandidateChecksError = '';
+    interviewCandidateChecksStale = false;
+  } catch (e) {
+    if (!current()) return;
+    interviewCandidateChecks = null;
+    interviewCandidateChecksError = errorText(e);
+  }
+}
+
+// Immediate in-place invalidation: hide the mounted observation content as
+// soon as relevant evidence changes, without a full-form rerender that would
+// steal focus/cursor from the field being edited.
+function interviewInvalidateObservations() {
+  interviewObservationEpoch++;
+  interviewCandidateChecksStale = true;
+  const content = document.getElementById?.('observations-content');
+  if (content) content.innerHTML = observationsHiddenNotice();
+}
+function observationsHiddenNotice() {
+  return '<p role="alert">Observations hidden: the interview or pathology records have unsaved or newly saved changes. Reload observations against the current saved records before relying on them.</p>';
 }
 async function interviewScreen() {
   if (interviewRecord) return;
@@ -164,6 +211,7 @@ async function interviewScreen() {
   interviewOutput = '';
   interviewReconciliation = null;
   interviewPathology = null; interviewPathologyDirty = false; interviewPathologyError = '';
+  interviewCandidateChecks = null; interviewCandidateChecksError = ''; interviewCandidateChecksStale = false;
   if (!offline) {
     try {
       [interviewPathology, pathologySourceIndex] = await Promise.all([
@@ -172,6 +220,7 @@ async function interviewScreen() {
       ]);
     } catch(e) { interviewPathologyError = errorText(e); }
     if (page !== 'interview' || request !== interviewRequest) return;
+    await interviewLoadCandidateChecks(request);
   }
   if (!offline && !recovery.recovered && !recovery.conflict && !recovery.storageError) interviewSaveStatus = interviewRecord.saved ? 'Saved' : 'Ready';
   renderInterview();
@@ -403,7 +452,40 @@ function renderInterview() {
     ${interviewPathology ? `<div class="table-scroll"><table><thead><tr>${pathologyCols.map(([,label])=>`<th>${esc(label)}</th>`).join('')}<th>Verified</th><th>Remove</th></tr></thead><tbody>${interviewPathology.records.map((r,i)=>`<tr>${pathologyCols.map(([key,label])=>`<td><input aria-label="${esc(label)} row ${i+1}" type="${key==='sample_date'?'date':'text'}" data-pathology-entry="${i}" data-pathology-field="${key}" value="${esc(r[key])}"></td>`).join('')}<td><input aria-label="Verify row ${i+1}" type="checkbox" data-pathology-entry="${i}" data-pathology-field="verified" ${r.verified?'checked':''}></td><td><button type="button" data-pathology-remove="${i}">Remove</button></td></tr>`).join('')}</tbody></table></div>
     <div class="actions"><button type="button" data-pathology-add>Add pathology result</button><button type="button" data-pathology-save>Save pathology</button><span>${interviewPathologyDirty?'Unsaved changes':'Saved'}</span></div>` : '<p>Pathology records unavailable until engine reconnects.</p>'}
     </section>`;
-  const formSections = sections.join('') + pathologyView + reconciliationView + (typeof evidenceReferencePanel==='function' ? evidenceReferencePanel() : '');
+  const observationPositionLabels = {
+    below_stated_interval: 'Below laboratory-stated interval',
+    within_stated_interval: 'Within laboratory-stated interval',
+    above_stated_interval: 'Above laboratory-stated interval',
+    cannot_assess: 'Cannot assess from recorded details',
+  };
+  const observationRows = (interviewCandidateChecks?.observations || []).map(o => `<tr>
+    <td>${esc([o.test, o.date, o.source].filter(Boolean).join(' · ') || o.evidence_id)}${(o.flags || []).length ? `<br><span role="alert">${esc('Flags: ' + o.flags.join(', '))}</span>` : ''}</td>
+    <td style="white-space:nowrap">${esc(o.raw_value || '')}${o.unit ? ' ' + esc(o.unit) : ''}</td>
+    <td class="obs-interval">${esc(o.raw_interval || 'None recorded')}</td>
+    <td>${esc(observationPositionLabels[o.status] || o.status)}</td>
+    <td>${esc(o.detail || (o.reasons || []).join('; '))}</td>
+    <td>${esc((o.cautions || []).join('; '))}</td>
+  </tr>`).join('');
+  const observationsStale = !!(interviewCandidateChecks && (interviewPathologyDirty || interviewDirty() || interviewCandidateChecksStale));
+  const limitations = interviewCandidateChecks?.limitations;
+  const limitationsList = (Array.isArray(limitations) ? limitations : limitations ? [String(limitations)] : [])
+    .map(item => `<li>${esc(item)}</li>`).join('');
+  const observationsContent = !interviewCandidateChecks
+    ? (interviewCandidateChecksError ? '' : '<p>Observations unavailable until engine reconnects.</p>')
+    : observationsStale ? observationsHiddenNotice()
+    : (interviewCandidateChecks.review_status ? `<p role="status">${esc({pharmacist_review_required: 'Pharmacist review required before relying on these observations.', up_to_date: 'Observations reflect the current saved records.'}[interviewCandidateChecks.review_status] || interviewCandidateChecks.review_status)}</p>` : '')
+      + (observationRows ? `<div class="table-scroll observations-scroll"><table><thead><tr><th scope="col">Evidence</th><th scope="col">Result</th><th scope="col" class="obs-interval">Stated interval</th><th scope="col">Position</th><th scope="col">Note</th><th scope="col">Cautions</th></tr></thead><tbody>${observationRows}</tbody></table></div>`
+        : '<p>No verified pathology results are available to this check, so it reports no observations. This is not reassurance: unverified results are never assessed.</p>')
+      + ((interviewCandidateChecks.unassessed_pathology_ids || []).length ? `<p role="alert">${interviewCandidateChecks.unassessed_pathology_ids.length} recorded pathology result(s) are not covered by any observation, including unverified rows. Coverage is incomplete.</p>` : '')
+      + (limitationsList ? `<ul class="muted">${limitationsList}</ul>` : '');
+  const observationsView = `<section class="interview-section" id="section-recorded-lab-observations">
+    <h2>Recorded observations</h2>
+    <p>Internal record-keeping view: how verified results sit against their own laboratory-stated intervals. Applicability of any interval to this patient is unestablished; pharmacist review is required. This is not a clinical finding and drives no action.</p>
+    ${interviewCandidateChecksError ? `<p class="error" role="alert">${esc(interviewCandidateChecksError)}</p>` : ''}
+    <div id="observations-content">${observationsContent}</div>
+    <div class="actions"><button type="button" data-observations-reload>Reload observations</button></div>
+    </section>`;
+  const formSections = sections.join('') + pathologyView + observationsView + reconciliationView + (typeof evidenceReferencePanel==='function' ? evidenceReferencePanel() : '');
   $('screen').innerHTML =
     interviewPicker() + `<div class="interview-context"><span class="interview-context-patient" title="${esc(header[0])}">${esc(header[0])}</span><span id="interview-status" role="status">${esc(interviewSaveStatus)}</span><button type="button" data-interview-save>Save</button><div id="interview-outstanding">${interviewOutstanding()}</div></div>${record.details.reason?.trim() ? `<p>Reason for referral: ${esc(record.details.reason)}</p>` : ''}${header[1] ? `<p class="interview-header">${esc(header[1])}</p>` : ''}<div class="interview-layout"><div>${formSections}<div class="actions interview-actions"><button type="button" class="primary" data-interview-record-visit>Record visit</button><button type="button" data-interview-save>Save</button><details class="more-actions"><summary>More actions</summary><div class="actions"><button data-interview-export="docx">Export Word</button><button data-interview-export="pdf">Export PDF</button><button data-interview-export="both">Interview pack</button>${interviewAi ? `<button data-interview-assist title="${esc(interviewAgent)}">Suggest points (AI)</button>` : ''}<button data-interview-folder>Open folder</button></div></details></div><pre id="interview-output" role="status">${esc(interviewOutput)}</pre></div><nav class="interview-index" aria-label="Interview sections"><a href="#section-notes">Back to notes</a>${interviewSections
       .slice(1)
@@ -639,12 +721,22 @@ document.addEventListener('focusout', (event) => {
 
 async function savePathologyRecords() {
   if (!interviewPathology || !interviewPathologyDirty) return true;
+  // Guard patient + screen generation: a late save response after switching
+  // patient must not install the old patient's records or clear its errors.
+  const savePatient = interviewId, saveRequest = interviewRequest;
+  const current = () => page === 'interview' && saveRequest === interviewRequest && savePatient === interviewId;
   try {
-    interviewPathology = await hmr.api('POST', `/api/patients/${encodeURIComponent(interviewId)}/pathology-records`,
+    const saved = await hmr.api('POST', `/api/patients/${encodeURIComponent(savePatient)}/pathology-records`,
       {revision: interviewPathology.revision, records: interviewPathology.records});
+    if (!current()) return false;
+    interviewPathology = saved;
     interviewPathologyDirty = false; interviewPathologyError = '';
+    interviewInvalidateObservations();
     return true;
-  } catch (e) { interviewPathologyError = errorText(e); return false; }
+  } catch (e) {
+    if (!current()) return false;
+    interviewPathologyError = errorText(e); return false;
+  }
 }
 
 document.addEventListener('input', event => {
@@ -653,23 +745,37 @@ document.addEventListener('input', event => {
   const row = interviewPathology.records[Number(input.dataset.pathologyEntry)];
   if (!row || !Object.hasOwn(row, input.dataset.pathologyField)) return;
   row[input.dataset.pathologyField] = input.dataset.pathologyField === 'verified' ? input.checked : input.value;
-  interviewPathologyDirty = true; if(typeof invalidateEvidenceReferences==='function')invalidateEvidenceReferences();
+  interviewPathologyDirty = true; interviewInvalidateObservations();
+  if(typeof invalidateEvidenceReferences==='function')invalidateEvidenceReferences();
 });
 
 async function interviewClick(b) {
   if (b.dataset.pathologyImport !== undefined) {
+    const importPatient = interviewId, importRequest = interviewRequest;
     try {
-      const result = await hmr.pickPathologySource(Number(interviewId));
+      const result = await hmr.pickPathologySource(Number(importPatient));
+      if (page !== 'interview' || importRequest !== interviewRequest || importPatient !== interviewId) return true;
       if (!result.cancelled) {
-        pathologySourceIndex = await hmr.api('GET', `/api/patients/${encodeURIComponent(interviewId)}/pathology/sources`);
+        const sources = await hmr.api('GET', `/api/patients/${encodeURIComponent(importPatient)}/pathology/sources`);
+        // Install only if still current; the await itself must not install.
+        if (page !== 'interview' || importRequest !== interviewRequest || importPatient !== interviewId) return true;
+        pathologySourceIndex = sources;
         interviewPathologyError = '';
+        interviewInvalidateObservations();
       }
-    } catch (error) { interviewPathologyError = errorText(error); }
+    } catch (error) {
+      if (page !== 'interview' || importRequest !== interviewRequest || importPatient !== interviewId) return true;
+      interviewPathologyError = errorText(error);
+    }
     renderInterview(); return true;
   }
   if (b.dataset.pathologyReloadSources !== undefined) {
     try { pathologySourceIndex = await hmr.api('GET', `/api/patients/${encodeURIComponent(interviewId)}/pathology/sources`); }
     catch (error) { interviewPathologyError = errorText(error); }
+    renderInterview(); return true;
+  }
+  if (b.dataset.observationsReload !== undefined) {
+    await interviewLoadCandidateChecks(interviewRequest);
     renderInterview(); return true;
   }
   if (b.dataset.pathologyOpenSource !== undefined) {
@@ -684,17 +790,17 @@ async function interviewClick(b) {
     interviewPathology.records.push({id:crypto.randomUUID().replace(/-/g,''),test:'',value:'',
       unit:'',reference_interval:'',sample_date:'',source:source.name + ' page ' + page +
       ' sha256:' + source.sha256,verified:false,comment:'UNVERIFIED — compare source PDF before confirming'});
-    interviewPathologyDirty = true; if(typeof invalidateEvidenceReferences==='function')invalidateEvidenceReferences();
+    interviewPathologyDirty = true; interviewInvalidateObservations(); if(typeof invalidateEvidenceReferences==='function')invalidateEvidenceReferences();
     renderInterview(); return true;
   }
   if (b.dataset.pathologyAdd !== undefined && interviewPathology) {
     interviewPathology.records.push({id: crypto.randomUUID().replace(/-/g,''),test:'',value:'',unit:'',
       reference_interval:'',sample_date:'',source:'',verified:false,comment:''});
-    interviewPathologyDirty = true; if(typeof invalidateEvidenceReferences==='function')invalidateEvidenceReferences(); renderInterview(); return true;
+    interviewPathologyDirty = true; interviewInvalidateObservations(); if(typeof invalidateEvidenceReferences==='function')invalidateEvidenceReferences(); renderInterview(); return true;
   }
   if (b.dataset.pathologyRemove !== undefined && interviewPathology) {
     interviewPathology.records.splice(Number(b.dataset.pathologyRemove),1);
-    interviewPathologyDirty = true; if(typeof invalidateEvidenceReferences==='function')invalidateEvidenceReferences(); renderInterview(); return true;
+    interviewPathologyDirty = true; interviewInvalidateObservations(); if(typeof invalidateEvidenceReferences==='function')invalidateEvidenceReferences(); renderInterview(); return true;
   }
   if (b.dataset.pathologySave !== undefined) {
     await savePathologyRecords(); renderInterview(); return true;
