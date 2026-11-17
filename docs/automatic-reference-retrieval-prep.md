@@ -1,6 +1,6 @@
 # Automatic saved-evidence reference retrieval
 
-Structured-table revision based on source `39100097bcc62ab4b6cf0fcb1462b4bb6395f457`.
+Structured-table revision following source `95e1213743ec30b48d35ab11c8dc216802e777b0`.
 Frozen `5cee22c` packaged Windows evidence covers manual search only, not this change.
 No normal-app deployment or clinical acceptance is claimed.
 
@@ -25,7 +25,7 @@ The PDF remains in its selected location and is never replaced or modified. Thes
 
 The index is a separate ordinary SQLite file, not the encrypted clinical record database. It contains private reference text, no patient evidence. This does not add an encryption claim: the existing reference JSON cache/registry and original PDF storage rules are unchanged. The JSON parser cache remains an intermediate for the existing manual search path; automatic retrieval queries indexed tables. No actual PDF, extracted text or derived database is committed, bundled, uploaded to CI or redistributed.
 
-This chooses database tables for scale, not a spreadsheet deliverable. It preserves source structure rather than flattening the guide into unverified clinical rules. Parser heading detection is heuristic, and pharmacist review remains necessary.
+This chooses database tables for scale, not a spreadsheet deliverable. It preserves source structure rather than flattening the guide into unverified clinical rules. The table importer uses the supplied guide's coloured section markers so inline bold body emphasis does not create false sections. References without those markers retain the synthetic/legacy bold-heading fallback. Its marker-mode JSON cache and table parser version are separate from existing manual-search parsing. Heading detection is still heuristic, and pharmacist review remains necessary.
 
 ## Retrieval contract
 
@@ -39,7 +39,7 @@ This chooses database tables for scale, not a spreadsheet deliverable. It preser
 
 ## Actual supplied source validation, private only
 
-The actual 207-page supplied PDF was registered in an isolated local test with synthetic saved evidence, not real patient records. It built 459 sections, 606 page fragments and 1,176 indexed heading phrases. One test returned eight passages across synthetic notes, observation and verified pathology text in about 0.83 seconds. All returned headings/quotes were checked against actual physical pages; saved-note edits invalidated old matches and an unavailable original failed closed. Original page80 and its displayed passage were visually compared privately. This is source/provenance verification, not medical validation or packaged Windows acceptance. No source text or derived database from that check is in this repository.
+The actual 207-page supplied PDF was registered in an isolated local test with synthetic saved evidence, not real patient records. It built 448 sections, 596 page fragments and 1,154 indexed heading phrases after correcting inline-bold false headings. One test returned eight passages across synthetic notes, observation and verified pathology text in about 0.83 seconds. All returned headings/quotes were checked against actual physical pages; saved-note edits invalidated old matches and an unavailable original failed closed. Original page80 and its displayed passage were visually compared privately. The full committed Interview renderer was also exercised with the production backend and actual source: eight matches loaded, typing invalidated them, a normal save refreshed them and removed the old note matches. The native viewer was a checked preload stub in this local test, not a packaged window. This is source/provenance verification, not medical validation or packaged Windows acceptance. No source text or derived database from that check is in this repository.
 
 ## Local tests and remaining acceptance
 
