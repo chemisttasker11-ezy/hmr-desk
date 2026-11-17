@@ -45,6 +45,8 @@ def test_original_versions_dates_units_and_verified_pathology_are_separate(setup
     assert byid['obs:0:interview']['text']=='BP: 120/80' and byid['obs:0:interview']['eligible']
     assert 'Date not established' in byid['obs:0:interview']['flags']
     lab=byid['pathology:'+'c'*32]
+    # The verified comment is part of the pharmacist-saved evidence text used for literal matching.
+    assert lab['text']=='eGFR: 41 | Original comment'
     assert lab['unit']=='mL/min/1.73m2' and lab['date']=='2026-11-01' and lab['age_days']==16
     assert lab['source']=='synthetic-lab.pdf page 2' and lab['reference_interval']=='original range'
     assert lab['verification']=='named pharmacist verified'
@@ -199,3 +201,36 @@ def test_brainstorm_cache_tracks_content_even_with_unchanged_timestamps(monkeypa
     second = brainstorm.sections(pdf)
     assert 'other reference' in second[0]['text']
     assert second != first
+
+def test_production_comment_edit_reverification_and_removal_drive_retrieval(setup,tmp_path,monkeypatch):
+    import fitz, reference_library as library, reference_matches as matches
+    conn,p,_=save(setup)
+    path=tmp_path/'synthetic-brainstorm.pdf';doc=fitz.open();page=doc.new_page()
+    page.insert_text((72,40),'Brainstorm synthetic test catalogue',fontname='hebo',fontsize=16)
+    page.insert_text((72,60),'Synthetic hydration',fontname='hebo',fontsize=16)
+    page.insert_text((72,90),'Synthetic hydration source passage marker-gamma.')
+    doc.save(path);doc.close()
+    library.register({'path':str(path),'edition':'Synthetic edition V1','local_use_confirmed':True})
+    lab=dict(test='Potassium',value='4.1',comment='synthetic hydration noted')
+    pathology(conn,p,**lab)
+    def state():
+        result=matches.for_patient(conn,p)
+        return result,[h for h in result['matches'] if h['evidence']['kind']=='pathology']
+    first,hits=state()
+    assert any('synthetic hydration' in h['matched_heading_words'] for h in hits)
+    assert first['unmatched_evidence']==[] or all(e['id']!='pathology:'+'c'*32 for e in first['unmatched_evidence'])
+    # A verified row cannot be silently edited: production save requires unverified save then re-verification.
+    import pathology_records
+    with pytest.raises(ValueError,match='unverified'):
+        pathology(conn,p,**dict(lab,comment='fluid status reviewed'))
+    pathology(conn,p,**dict(lab,comment='fluid status reviewed',verified=False))
+    second,hits=state()
+    assert hits==[] and 'pathology:'+'c'*32 in second['excluded_evidence_ids']
+    pathology(conn,p,**dict(lab,comment='fluid status reviewed'))
+    third,hits=state()
+    assert hits==[] and any(e['id']=='pathology:'+'c'*32 and e['text']=='Potassium: 4.1 | fluid status reviewed' for e in third['unmatched_evidence'])
+    pathology(conn,p,**dict(lab,comment='',verified=False));pathology(conn,p,**dict(lab,comment=''))
+    fourth,hits=state()
+    assert hits==[] and any(e['id']=='pathology:'+'c'*32 and e['text']=='Potassium: 4.1' for e in fourth['unmatched_evidence'])
+    snaps={r['context_snapshot_sha256'] for r in [first,second,third,fourth]}
+    assert len(snaps)==4
