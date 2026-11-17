@@ -3,9 +3,9 @@
 Scope, stated plainly: this is a saved-record integration test. The confirmed
 referral facts are seeded directly as referral_source.json clinical_review
 (exactly what the pharmacist confirmation step writes); OCR/PDF extraction is
-not exercised here, and report.refresh is asserted at the revision/digest
-level without generating or inspecting an exported file. OCR-to-export proof
-is a separate, larger regression.
+not exercised here. Report refresh is asserted at the revision/digest level
+and a real DOCX export is generated and inspected for the saved synthetic
+content. OCR-to-export proof is a separate, larger regression.
 
 What it does cover, in order, through the real engine/API surface with
 synthetic content only: confirmed referral prefill -> interview save ->
@@ -114,4 +114,36 @@ def test_referral_to_report_flow_stays_consistent(tmp_path, monkeypatch):
     assert not api.confirmed_medicines_current(conn, patient)
     stale = cc.for_patient(conn, patient)
     assert stale['review_status'] == 'pharmacist_review_required'
+
+    # 7. A real export is generated from the refreshed spec and its content
+    # carries the saved evidence, not just structure fingerprints. The stale
+    # confirmation from step 6 does not block rendering the already-refreshed
+    # spec (render takes the validated spec as given; refresh is what guards).
+    import local_report_builder
+    from docx import Document
+    out = tmp_path / 'Synthetic Flow Report.docx'
+    assert local_report_builder.render(refreshed, out) == out
+    assert out.exists() and out.stat().st_size > 0
+    try:
+        local_report_builder.render(refreshed, out)
+        raise AssertionError('render must refuse to overwrite an existing report')
+    except FileExistsError:
+        pass
+    doc = Document(str(out))
+    headings = [p.text for p in doc.paragraphs if p.style.name.startswith('Heading')]
+    paragraphs = [p.text for p in doc.paragraphs]
+    assert 'Home Medicines Review' in paragraphs
+    assert 'Patient details' in headings
+    assert 'Current medicines' in headings, headings
+    assert 'Pathology' in headings, headings
+    assert 'Medication-related findings and recommendations' in headings
+    # Table content matches the saved synthetic evidence exactly.
+    tables = [[cell.text for row in t.rows for cell in row.cells] for t in doc.tables]
+    meds_table = next(t for t in tables if 'Actual use' in t)
+    assert 'Synthetic Jardiance 25 mg tablet' in meds_table
+    assert any('one daily' in cell for cell in meds_table), meds_table
+    path_table = next(t for t in tables if 'Reference range' in t)
+    assert 'eGFR' in path_table and '28' in path_table
+    assert 'mL/min/1.73m2' in path_table and '60-120' in path_table
+    assert any('synthetic-lab.pdf' in cell for cell in path_table), path_table
     conn.close()
