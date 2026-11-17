@@ -206,3 +206,31 @@ def test_report_source_snapshot_survives_native_docx_template_adapter(setup,tmp_
     doc=Document(output)
     assert any('Synthetic 5 mg MR' in cell.text for table in doc.tables for row in table.rows for cell in row.cells)
     assert report.load(conn,p)['medicine_snapshot']==spec['medicine_snapshot']
+
+@pytest.mark.parametrize('change', ['use', 'identity', 'directions', 'allergies'])
+def test_stale_confirmation_blocks_readiness_done_and_next_action(setup, monkeypatch, tmp_path, change):
+    import steps
+    conn, p, data = setup
+    data['revision'] = 'missing'
+    saved = interview.save(conn, p, data)
+    path = f"/api/patients/{p['id']}/meds"
+    _, proposal = api.handle(conn, 'GET', path, {}, None)
+    body = {k: proposal[k] for k in ('meds', 'allergies', 'interview_usage', 'medicine_snapshot_sha256')}
+    assert api.handle(conn, 'POST', path, {}, body)[0] == 200
+    assert steps.done('confirm_medicines', conn, p)
+    assert steps.ready('interactions', conn, p)[0]
+    if change == 'use': saved['details']['meds'][0]['use_status'] = 'not_using'
+    elif change == 'identity': saved['details']['meds'][0]['reference']['code'] = '1002'
+    elif change == 'directions': saved['meds'][0][2] = 'synthetic changed directions'
+    else: saved['allergies'] = 'synthetic changed allergy'
+    interview.save(conn, p, saved)
+    assert not steps.done('confirm_medicines', conn, p)
+    for name in ('interactions', 'report_start'):
+        assert steps.ready(name, conn, p) == (False, 'confirm the medicine list first')
+    assert api._next_step(p, conn) == 'confirm medicines'
+    # Real production path with an application-owned synthetic helper file present.
+    # No script executes: mims_lists only checks availability before validating snapshots.
+    helper = tmp_path/'make-lists.py'; helper.write_text('# synthetic availability only')
+    monkeypatch.setattr(api, 'MIMS_PATH', helper)
+    with pytest.raises(ValueError, match='Medicine use changed or needs reconciliation'):
+        api.mims_lists(conn)
