@@ -241,6 +241,7 @@ test('a late pathology save response after switching patient is dropped', async 
     interviewPathology = { revision: 1, records: [] };
     interviewPathologyDirty = true;`, context);
   const saving = vm.runInContext('savePathologyRecords()', context);
+  await new Promise(r => setImmediate(r)); // let the serialized save chain issue its POST
   // Patient switch while the save is in flight.
   vm.runInContext(`interviewRequest = 8; interviewId = '2'; interviewPathology = null; interviewPathologyError = '';`, context);
   deferred[0]({ revision: 2, records: [] });
@@ -267,4 +268,97 @@ test('pathology import response after switching patient is dropped', async () =>
   await importing;
   assert.equal(JSON.stringify(vm.runInContext('pathologySourceIndex', context)), '{"sources":[]}',
     'late import sources must not install after switching');
+});
+
+test('same-patient edits during a pathology save are never overwritten by the response', async () => {
+  const deferred = [];
+  const { context } = setup((method, path) => {
+    if (path.endsWith('/pathology-records') && method === 'POST')
+      return new Promise(resolve => deferred.push(resolve));
+    return Promise.resolve({});
+  });
+  vm.runInContext(`interviewId = '1'; interviewRequest = 7;
+    interviewPathology = { revision: 1, records: [{ id: 'x', test: 'eGFR', value: '28', unit: '', reference_interval: '', sample_date: '', source: '', verified: false, comment: '' }] };
+    interviewPathologyDirty = true;`, context);
+  const saving = vm.runInContext('savePathologyRecords()', context);
+  await new Promise(r => setImmediate(r)); // let the serialized save chain issue its POST
+  // Pharmacist edits the same patient while the save is in flight.
+  vm.runInContext(`interviewPathology.records[0].value = '31';`, context);
+  deferred[0]({ revision: 2, records: [{ id: 'x', test: 'eGFR', value: '28', unit: '', reference_interval: '', sample_date: '', source: '', verified: false, comment: '' }] });
+  const result = await saving;
+  assert.equal(result, false,
+    'retained unsaved edits are NOT a successful save: callers must not navigate/proceed');
+  assert.equal(vm.runInContext('interviewPathology.records[0].value', context), '31',
+    'in-flight edit must be preserved');
+  assert.equal(vm.runInContext('interviewPathology.revision', context), 2,
+    'newer server revision is adopted');
+  assert.equal(vm.runInContext('interviewPathologyDirty', context), true,
+    'unsaved edits stay dirty');
+  assert.match(vm.runInContext('interviewPathologyError', context), /kept; save again/,
+    'explicit UI state explains the unsaved remainder');
+});
+
+test('leaveInterview refuses to navigate while an in-flight save retains edits', async () => {
+  const deferred = [];
+  const { context } = setup((method, path) => {
+    if (path.endsWith('/pathology-records') && method === 'POST')
+      return new Promise(resolve => deferred.push(resolve));
+    return Promise.resolve({});
+  });
+  vm.runInContext(`page = 'interview'; interviewId = '1'; interviewRequest = 7;
+    interviewPathology = { revision: 1, records: [{ id: 'x', test: 'eGFR', value: '28', unit: '', reference_interval: '', sample_date: '', source: '', verified: false, comment: '' }] };
+    interviewPathologyDirty = true;`, context);
+  const leaving = vm.runInContext('leaveInterview()', context);
+  await new Promise(r => setImmediate(r)); // let the serialized save chain issue its POST
+  vm.runInContext(`interviewPathology.records[0].value = '31';`, context);
+  deferred[0]({ revision: 2, records: [{ id: 'x', test: 'eGFR', value: '28', unit: '', reference_interval: '', sample_date: '', source: '', verified: false, comment: '' }] });
+  assert.equal(await leaving, false,
+    'navigation is blocked while edits made during the save are still unsaved');
+  assert.equal(vm.runInContext('interviewPathology.records[0].value', context), '31');
+});
+
+test('overlapping pathology saves are serialized so an older response never lowers the adopted revision', async () => {
+  const deferred = [];
+  const posts = [];
+  const { context } = setup((method, path) => {
+    if (path.endsWith('/pathology-records') && method === 'POST')
+      return new Promise(resolve => deferred.push(resolve));
+    return Promise.resolve({});
+  });
+  vm.runInContext(`interviewId = '1'; interviewRequest = 7;
+    interviewPathology = { revision: 1, records: [{ id: 'x', test: 'eGFR', value: '28', unit: '', reference_interval: '', sample_date: '', source: '', verified: false, comment: '' }] };
+    interviewPathologyDirty = true;`, context);
+  const first = vm.runInContext('savePathologyRecords()', context);
+  await new Promise(r => setImmediate(r)); // let the serialized save chain issue its POST
+  // Edit while first save is in flight, then request a second save immediately.
+  vm.runInContext(`interviewPathology.records[0].value = '31';`, context);
+  const second = vm.runInContext('savePathologyRecords()', context);
+  assert.equal(deferred.length, 1, 'second save must wait for the first to settle');
+  deferred[0]({ revision: 2, records: [{ id: 'x', test: 'eGFR', value: '28', unit: '', reference_interval: '', sample_date: '', source: '', verified: false, comment: '' }] });
+  assert.equal(await first, false);
+  await new Promise(r => setImmediate(r));
+  assert.equal(deferred.length, 2, 'second save starts only after the first settled');
+  deferred[1]({ revision: 3, records: [{ id: 'x', test: 'eGFR', value: '31', unit: '', reference_interval: '', sample_date: '', source: '', verified: false, comment: '' }] });
+  assert.equal(await second, true);
+  assert.equal(vm.runInContext('interviewPathology.revision', context), 3);
+  assert.equal(vm.runInContext('interviewPathology.records[0].value', context), '31');
+  assert.equal(vm.runInContext('interviewPathologyDirty', context), false);
+});
+
+test('unchanged records during a pathology save install the response and clear dirty', async () => {
+  const deferred = [];
+  const { context } = setup((method, path) => {
+    if (path.endsWith('/pathology-records') && method === 'POST')
+      return new Promise(resolve => deferred.push(resolve));
+    return Promise.resolve({});
+  });
+  vm.runInContext(`interviewId = '1'; interviewRequest = 7;
+    interviewPathology = { revision: 1, records: [] };
+    interviewPathologyDirty = true;`, context);
+  const saving = vm.runInContext('savePathologyRecords()', context);
+  await new Promise(r => setImmediate(r)); // let the serialized save chain issue its POST
+  deferred[0]({ revision: 2, records: [] });
+  assert.equal(await saving, true);
+  assert.equal(vm.runInContext('interviewPathology.revision', context), 2);
+  assert.equal(vm.runInContext('interviewPathologyDirty', context), false);
 });
