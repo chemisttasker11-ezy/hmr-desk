@@ -34,7 +34,15 @@ def test_no_permission_no_registry_and_symlink_refused(tmp_path,monkeypatch):
     p=setup(tmp_path,monkeypatch)
     with pytest.raises(r.ReferenceUnavailable):r.register({'path':str(p),'edition':'test','local_use_confirmed':False})
     assert not r.registry_path().exists()
-    link=tmp_path/'link.pdf';link.symlink_to(p)
+    with pytest.raises(r.ReferenceUnavailable):r.current()
+
+
+def test_symlink_reference_refused(tmp_path,monkeypatch):
+    p=setup(tmp_path,monkeypatch)
+    link=tmp_path/'link.pdf'
+    try:link.symlink_to(p)
+    except (OSError,NotImplementedError) as exc:
+        pytest.skip('Cannot create a symlink here ('+type(exc).__name__+'; Windows needs admin or Developer Mode): symlink refusal NOT tested on this machine')
     with pytest.raises(r.ReferenceUnavailable):r.inspect(link)
     with pytest.raises(r.ReferenceUnavailable):r.current()
 

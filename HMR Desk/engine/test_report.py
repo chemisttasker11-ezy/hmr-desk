@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import pytest
 import subprocess
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -34,6 +35,7 @@ def test_report_workflow(monkeypatch):
         (skill / 'references' / 'case-index.jsonl').write_text('\n'.join(map(json.dumps, cases)), encoding='utf-8')
         old_skill, old_builder = jobs.SKILL, jobs.BUILD_SCRIPT
         jobs.SKILL = skill
+        conn = None; first = second = None; release = None
         try:
             conn = db.connect(); conn.execute("INSERT INTO patients(key,name,state,folder,gp,visit_date) VALUES ('test person','Test Person','visited','patient','Dr Example','2026-01-02')"); conn.commit()
             p = conn.execute('SELECT * FROM patients').fetchone()
@@ -195,13 +197,13 @@ def test_report_workflow(monkeypatch):
             records.delete(conn, p['id'], 'report_spec.ai.json')
             records.delete(conn, p['id'], 'report_spec.json'); records.put(conn, p['id'], 'report_spec.json', before); conn.commit()  # jobs use their own connection
             builder = root / 'builder.py'; builder.write_text('import json,pathlib,sys\ns=json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))\npathlib.Path(s["out"]).write_text("built",encoding="utf-8")\n',encoding='utf-8'); jobs.BUILD_SCRIPT = builder
-            real_run = subprocess.run
-            def run_stub(args, **kwargs):
-                if args[0] == 'powershell':
-                    Path(args[-1]).write_text('synthetic PDF', encoding='utf-8')
-                    return SimpleNamespace(returncode=0)
-                return real_run(args, **kwargs)
-            with patch('jobs.subprocess.run', side_effect=run_stub): jobs.report_build(p['id'], pdf=True)
+            # MOCKED converter: this test covers the workflow around PDF creation only. Real conversion is
+            # exercised separately by test_real_pdf_converter_when_available (skipped, not passed, without a converter).
+            MOCK_PDF = b'MOCKED CONVERTER OUTPUT - NOT A REAL PDF'
+            def fake_convert(docx, pdf, timeout=120):
+                Path(pdf).write_bytes(MOCK_PDF); return {'created': True, 'bytes': len(MOCK_PDF)}
+            with patch('pdf_export.convert', side_effect=fake_convert) as converter: jobs.report_build(p['id'], pdf=True)
+            assert converter.call_count == 1 and Path(spec['out']).with_suffix('.pdf').read_bytes() == MOCK_PDF
             assert Path(spec['out']).is_file() and Path(spec['out']).with_suffix('.pdf').is_file()
             assert [s.name for s in steps.FLOW][-6:] == ['confirm_medicines','interactions','report_assist','report_start','report_build','claim']
             spec = report.load(conn, p); spec['issues'] = [{'title': 'Hand edited', 'rec': 'Review', 'rationale': 'Reason'}]; spec['intro'] = 'Intro ?'; spec['thanks'] = 'Thanks ?'; spec['reason'] = 'Edited reason'; spec['needs_review'] = [x for x in spec['needs_review'] if x != 'reason']
@@ -271,9 +273,13 @@ def test_report_workflow(monkeypatch):
             with patch.object(api, 'confirmed_medicines_current', return_value=True): derived = report._derived(conn, p)
             conn.commit()  # release the main connection's write transaction so the thread connections can write (WAL: one writer)
             with patch.object(report, '_derived', side_effect=paused_derived), patch.object(db, 'log'):
-                first = Thread(target=run_refresh); first.start(); assert entered.wait(5)
-                second = Thread(target=run_save); second.start(); assert not saved.wait(0.1)
-                release.set(); first.join(5); second.join(5)
+                try:
+                    first = Thread(target=run_refresh); first.start(); assert entered.wait(5)
+                    second = Thread(target=run_save); second.start(); assert not saved.wait(0.1)
+                finally:
+                    release.set()  # never leave a worker blocked holding a database connection
+                    for worker in (first, second):
+                        if worker is not None and worker.is_alive(): worker.join(5)
             assert not first.is_alive() and not second.is_alive() and not errors and saved.is_set()
             assert report.load(conn, p)['reason'] == 'Concurrent edit'
             record = interview.load(conn, p); record['details']['meds'][1].update(use_status='taking', use_reason='', use_details=''); interview.save(conn, p, record)
@@ -296,6 +302,19 @@ def test_report_workflow(monkeypatch):
                 record = interview.load(conn, p); record['details'] = interview.empty_details(); record['details']['meds'] = [{'packed': '', 'as_instructed': False} for _ in record['meds']]; record['details']['other_meds'] = [{'checked': False, 'priority': 0} for _ in record['other_meds']]; record['obs'] = [['Height / weight / BMI', 'height', ''], ['BP', '', '']]; record['mobility'] = ''; interview.save(conn, p, record)
                 records.delete(conn, p['id'], 'report_spec.json'); empty = report.start(conn, p)
                 assert empty['obs'] == 'Height / weight / BMI: height (referral)' and 'intro' in report.placeholders(empty)
-            conn.close()
-        finally: jobs.SKILL, jobs.BUILD_SCRIPT = old_skill, old_builder
+        finally:
+            jobs.SKILL, jobs.BUILD_SCRIPT = old_skill, old_builder
+            if conn is not None: conn.close()  # always release test.db so Windows can delete the temp folder
     print('report self-check ok')
+
+
+def test_real_pdf_converter_when_available(tmp_path):
+    import pdf_export
+    if not pdf_export.available():
+        pytest.skip('No PDF converter (HMR_PDF_CONVERTER or soffice on PATH): REAL DOCX->PDF conversion NOT tested here')
+    import docx, fitz
+    source = tmp_path / 'report.docx'; document = docx.Document(); document.add_paragraph('Synthetic converter check'); document.save(source)
+    target = tmp_path / 'report.pdf'
+    result = pdf_export.convert(source, target)
+    assert result['created'] and target.read_bytes()[:5] == b'%PDF-'
+    with fitz.open(target) as rendered: assert rendered.page_count >= 1 and 'Synthetic converter check' in rendered[0].get_text()
