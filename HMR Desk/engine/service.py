@@ -146,6 +146,53 @@ class QuietStatic(http.server.BaseHTTPRequestHandler):
             self.send_error(404)
 
 
+def maintenance_import(conn):
+    """Re-import the plan file when it changed on disk."""
+    plan = get_meta(conn, 'plan_file')
+    stamp = str(os.stat(plan).st_mtime_ns) if plan and os.path.isfile(plan) else None
+    previous = get_meta(conn, 'plan_mtime_ns')
+    if stamp and previous and stamp != previous:
+        import importer
+        importer.run(conn)
+        set_meta(conn, 'plan_mtime_ns', stamp)
+    elif stamp and not previous:
+        set_meta(conn, 'plan_mtime_ns', stamp)
+
+
+def maintenance_export(conn):
+    """Export the plan when patient events advanced; skips cleanly with no plan registered."""
+    highest = conn.execute("SELECT COALESCE(MAX(id),0) FROM events WHERE patient_id IS NOT NULL").fetchone()[0]
+    if highest <= int(get_meta(conn, 'exported_event_id', '0')):
+        return
+    if not get_meta(conn, 'plan_meta'):
+        logging.debug('Plan export skipped: no plan registered')
+        return
+    import export_plan
+    export_plan.export(conn)
+    plan = get_meta(conn, 'plan_file')
+    if plan and os.path.isfile(plan):
+        set_meta(conn, 'plan_mtime_ns', os.stat(plan).st_mtime_ns)
+    set_meta(conn, 'exported_event_id', highest)
+
+
+def maintenance_backup(conn):
+    """Rolling daily backup, independent of plan import/export health."""
+    today = datetime.datetime.now()
+    if today.hour >= 2 and get_meta(conn, 'backup_date') != str(today.date()):
+        db.backup(conn)
+        set_meta(conn, 'backup_date', today.date())
+
+
+def maintenance(conn):
+    """Periodic steps, fault-isolated: one failing step never starves the others."""
+    for name, step in (('Plan re-import', maintenance_import), ('Plan export', maintenance_export), ('Daily backup', maintenance_backup)):
+        try:
+            step(conn)
+        except Exception:
+            conn.rollback()
+            logging.exception('%s failed', name)
+
+
 def main():
     STOP_EVENT.clear()
     if os.name == 'nt':  # child tools (tailscale, the renderers) must not flash a console window every minute
@@ -227,30 +274,7 @@ def main():
             except Exception as exc:
                 conn.rollback()
                 logging.error('Automatic visit recording failed (%s)', type(exc).__name__)
-            try:
-                plan = get_meta(conn, 'plan_file')
-                stamp = str(os.stat(plan).st_mtime_ns) if plan and os.path.isfile(plan) else None
-                previous = get_meta(conn, 'plan_mtime_ns')
-                if stamp and previous and stamp != previous:
-                    import importer
-                    importer.run(conn)
-                    set_meta(conn, 'plan_mtime_ns', stamp)
-                elif stamp and not previous:
-                    set_meta(conn, 'plan_mtime_ns', stamp)
-                highest = conn.execute("SELECT COALESCE(MAX(id),0) FROM events WHERE patient_id IS NOT NULL").fetchone()[0]
-                if highest > int(get_meta(conn, 'exported_event_id', '0')):
-                    import export_plan
-                    export_plan.export(conn)
-                    plan = get_meta(conn, 'plan_file')
-                    if plan and os.path.isfile(plan):
-                        set_meta(conn, 'plan_mtime_ns', os.stat(plan).st_mtime_ns)
-                    set_meta(conn, 'exported_event_id', highest)
-                today = datetime.datetime.now()
-                if today.hour >= 2 and get_meta(conn, 'backup_date') != str(today.date()):
-                    db.backup(conn)
-                    set_meta(conn, 'backup_date', today.date())
-            except Exception as exc:
-                logging.error('Engine maintenance failed (%s)', type(exc).__name__)
+            maintenance(conn)
             STOP_EVENT.wait(60)
     except KeyboardInterrupt:
         pass
