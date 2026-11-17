@@ -245,6 +245,30 @@ def commit(conn, token, fields, distinct_person=False, manual_referral=False, cl
         db.log(conn, pid, 'referral_received', {'file': Path(item['source']).name, 'source': item['source'], 'sha256': item['sha256'], 'folder': os.path.relpath(folder, db.BASE)}, 'intake')
         conn.execute('DELETE FROM meta WHERE key=?', ('referral_review_' + token,))
         conn.commit()
+        # Materialize the interview record at intake so referral-derived medicines and
+        # their unconfirmed exact-unique proposals are ready before the interview.
+        # A quiet record write inside one transaction: no workflow events, sheet
+        # flags, consent files or medicine-ID assignment - those belong to the
+        # pharmacist's own first save. Never confirms a medicine and never
+        # overwrites an existing record; failure rolls back only this
+        # materialization, and the record is built on first interview open instead.
+        try:
+            import interview
+            import records
+            patient = conn.execute('SELECT * FROM patients WHERE id=?', (pid,)).fetchone()
+            if records.get(conn, pid, 'interview.json') is None:
+                data = interview.load(conn, patient)
+                # Attached only here: a persisted proposal always means prepared
+                # at intake. Records built later on first interview open never
+                # carry one, so the interview cannot show false intake provenance.
+                interview.prepare_prefill_proposals(data)
+                interview.validate(data)
+                stored = {k: v for k, v in data.items() if k not in ('saved', 'consent_file', 'revision')}
+                records.put(conn, pid, 'interview.json', json.dumps(stored, ensure_ascii=False, indent=2).encode('utf-8'))
+                db.log(conn, pid, 'interview_prepared_at_intake', {}, 'intake')
+                conn.commit()
+        except Exception:
+            conn.rollback()
         return {'patient_id': pid}
     except Exception:
         conn.rollback()
