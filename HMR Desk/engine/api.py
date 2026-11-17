@@ -259,8 +259,8 @@ def _next_step(p, conn=None):
         name = 'pathology' if not steps.done('pathology', conn, p) else 'interview_sheet' if not steps.done('interview_sheet', None, p) else None
         return steps.BY_NAME[name].label if name else 'visit'
     if state == 'visited':
+        if not confirmed_medicines_current(conn, p): return 'confirm medicines'
         if report_data(conn, p) is not None: return 'build report' if report_data(conn, p).get('issues') else 'add findings'
-        if not steps.exists(conn, p, 'confirmed_meds.json'): return 'confirm medicines'
         if not steps.interactions_done(conn, p): return 'check interactions'
         return 'start report'
     if state == 'sent': return steps.BY_NAME['claim'].label
@@ -837,7 +837,11 @@ def handle(conn, method, path, query, body):
             context = suggest.context_for(conn, p)
             if path.endswith('/context'):
                 return 200, {'context_snapshot_sha256': context['context_snapshot_sha256']}
-            return 200, {'suggestions': suggest.suggest(context), 'context_gaps': suggest.context_gaps(context),
+            try:
+                suggestions = suggest.suggest(context)
+            except suggest.LibraryUnavailable:
+                return 503, {'error': 'Offline suggestions unavailable: the reviewed reference library is not installed or cannot be read. Current interview evidence is retained; no suggestions were generated.'}
+            return 200, {'suggestions': suggestions, 'context_gaps': suggest.context_gaps(context),
                          'context_snapshot_sha256': context['context_snapshot_sha256']}
         match = re.fullmatch(r'/api/patients/(\d+)/report/refresh', path)
         if method == 'POST' and match:
