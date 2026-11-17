@@ -1,0 +1,102 @@
+{
+  "name": "hmr-desk",
+  "version": "0.1.0",
+  "private": true,
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test",
+    "smoke": "node dev/smoke.js",
+    "shots": "node dev/shots.js",
+    "dist": "electron-builder --win nsis --x64",
+    "build:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File ../scripts/build-windows.ps1"
+  },
+  "devDependencies": {
+    "electron": "^45.3.0",
+    "electron-builder": "^26.18.0"
+  },
+  "build": {
+    "appId": "au.hmrdesk.app",
+    "productName": "HMR Desk",
+    "asar": true,
+    "files": [
+      "main.js",
+      "preload.js",
+      "view-preload.js",
+      "index.html",
+      "style.css",
+      "renderer.js",
+      "renderer/**/*",
+      "src/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "HMR Desk"
+    },
+    "extraResources": [
+      {
+        "from": "../HMR Desk/engine/dist/hmr-engine",
+        "to": "engine/hmr-engine",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "../scripts/intake",
+        "to": "scripts/intake",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "../vendor/libreoffice",
+        "to": "converter/libreoffice",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "../Pathology Chrome Helper",
+        "to": "browser-helpers/Pathology Chrome Helper",
+        "filter": [
+          "manifest.json",
+          "content.js"
+        ]
+      },
+      {
+        "from": "../MIMS Interaction Helper",
+        "to": "browser-helpers/MIMS Interaction Helper",
+        "filter": [
+          "manifest.json",
+          "content.js"
+        ]
+      },
+      {
+        "from": "../PPA Claim Helper",
+        "to": "browser-helpers/PPA Claim Helper",
+        "filter": [
+          "manifest.json",
+          "content.js"
+        ]
+      }
+    ]
+  },
+  "dependencies": {
+    "leaflet": "^1.9.4"
+  }
+}
