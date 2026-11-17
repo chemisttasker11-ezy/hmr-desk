@@ -423,7 +423,25 @@ ipcMain.handle('open-pathology-source', async (e, patientId, sourceId) => {
   return {opened:true};
 });
 let pdfViewerWindow = null;
-async function openBundledPdfViewer(file, title) {
+ipcMain.handle('local-reference-pick', async (event, edition) => {
+  if (event.sender !== win.webContents || typeof edition !== 'string' || !edition.trim() || edition.length > 100) throw Error('Enter the edition shown on the original PDF');
+  const picked = await dialog.showOpenDialog(win, { title:'Choose your private local Brainstorm PDF', properties:['openFile'], filters:[{name:'PDF reference',extensions:['pdf']}] });
+  if (picked.canceled || !picked.filePaths[0]) return {cancelled:true};
+  const result = await dialog.showMessageBox(win, {type:'question',message:'Use this reference locally?',detail:'Confirm you may use this local PDF. It stays at its original location and is not bundled or uploaded. This writing guide is not clinical advice. Cross-check current clinical sources and review every match.',buttons:['Use local copy','Cancel'],defaultId:1,cancelId:1,noLink:true});
+  if (result.response !== 0) return {cancelled:true};
+  return api('POST','/api/reference/local',{path:picked.filePaths[0],edition,local_use_confirmed:true});
+});
+ipcMain.handle('local-reference-open', async (event, hash, page) => {
+  if (event.sender !== win.webContents || !/^[a-f0-9]{64}$/.test(hash || '') || !Number.isSafeInteger(page) || page < 1) throw Error('Invalid reference citation');
+  const source = await api('POST','/api/reference/open',{pdf_sha256:hash,page});
+  const stat = await fsp.lstat(source.path);
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 25*1024*1024) throw Error('Reference file unavailable');
+  const bytes = await fsp.readFile(source.path);
+  if (require('node:crypto').createHash('sha256').update(bytes).digest('hex') !== hash || source.page !== page) throw Error('Reference changed; register it again');
+  await openBundledPdfViewer(source.path, 'local reference physical page '+page, page);
+  return {opened:true,page};
+});
+async function openBundledPdfViewer(file, title, physicalPage = null) {
   if (pdfViewerWindow && !pdfViewerWindow.isDestroyed()) pdfViewerWindow.close();
   pdfViewerWindow = new BrowserWindow({
     width: 1100, height: 900, parent: win, title: 'HMR PDF - ' + title,
@@ -436,7 +454,7 @@ async function openBundledPdfViewer(file, title) {
   pdfViewerWindow.webContents.on('will-navigate', (event, url) => {
     if (url !== fileUrl && !url.startsWith(fileUrl + '#')) event.preventDefault();
   });
-  await pdfViewerWindow.loadURL(fileUrl);
+  await pdfViewerWindow.loadURL(fileUrl + (physicalPage ? `#page=${physicalPage}` : ''));
 }
 ipcMain.handle('open-report-version', async (e, patientId, reportFile, format) => {
   if (e.sender !== win.webContents || !Number.isSafeInteger(patientId) || patientId < 1 ||
@@ -1199,4 +1217,4 @@ async function captureShots() {
     if (syntheticSignInListeners) { for (const listener of syntheticSignInListeners) ipcMain.on('sign-in-page', listener); signIns.update = originalSignInUpdate; signIns.reset = originalSignInReset; }
     if (win && !win.isDestroyed()) win.webContents.removeListener('console-message', onConsole);
   }
-        }
+      }
