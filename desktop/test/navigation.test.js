@@ -184,7 +184,7 @@ function refreshSetup({ calendarReady = false, selectedDay = null, disclosure = 
     health: async () => {}, hmr: { api: async () => ({ patients: [] }) },
     loadDay: async day => { calls.push(['day', day]); if (!day) throw Error('invalid date'); },
     loadCalendar: async () => {}, loadSummary: async () => {}, today: async () => { calls.push(['initialize']); },
-    showPatient: async (...args) => { calls.push(['patient', ...args]); }, renderPatients() {},
+    showPatient: async (...args) => { calls.push(['patient', ...args]); }, reselectActivePatient: async (...args) => { calls.push(['patient', ...args]); }, renderPatients() {},
     setTimeout: fn => { timers.push(fn); return timers.length; }, clearTimeout() {}, esc: String, errorText: e => e.message });
   const source = fs.readFileSync(require.resolve('../renderer.js'), 'utf8');
   vm.runInContext(source.slice(source.indexOf('async function refresh()'), source.indexOf('\nasync function runJob(')), c);
@@ -221,5 +221,5 @@ test('patient polling waits while actions are expanded and resumes after they cl
   setDisclosure(false);
   timers.at(-1)();
   await new Promise(resolve => setImmediate(resolve));
-  assert.deepEqual(calls, [['patient', '1', undefined, true]]);
+  assert.deepEqual(calls, [['patient', '1', true]]);
 });
