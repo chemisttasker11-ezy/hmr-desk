@@ -256,8 +256,9 @@ def library(q):
     brain_count = 0
     for section in brainstorm.sections(refs / 'brainstorm-v2.pdf'):
         if all(w in (section['title'] + ' ' + section['text']).casefold() for w in words):
-            snippet = brainstorm.snippet(section['text'], [re.escape(w) for w in words])
-            result.append(dict(source=f"Brainstorm V2 p.{section['page']}", title=section['title'], snippet=snippet, rec=snippet, rationale='', context=''))
+            passage = brainstorm.passage(section, [re.escape(w) for w in words])
+            if passage is None: continue
+            result.append(dict(**passage, source=f"Brainstorm V2 p.{passage['page']}", rec=passage['snippet'], rationale='', context=''))
             brain_count += 1
             if brain_count == 10: break
     return result
