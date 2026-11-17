@@ -66,3 +66,16 @@ def test_telehealth_against_face_to_face_preference_blocks_claim(env):
     call(env, 'POST', 'followup/1', record(date='2026-11-10', method='phone', preferred_method='in person', choice_offered_on='2026-11-03'))
     status, body = call(env, 'POST', 'action', {'action': 'followup_claimed', 'kind': 'followup1', 'date': '2026-11-11'})
     assert status == 400 and 'face-to-face' in body['error']
+
+
+def test_edit_after_claim_is_logged_and_readiness_reevaluated(env):
+    good = record(date='2026-11-10', method='video', preferred_method='video', choice_offered_on='2026-11-03')
+    call(env, 'POST', 'action', {'action': 'followup_done', 'kind': 'followup1', 'date': '2026-11-10'})
+    call(env, 'POST', 'followup/1', good)
+    assert call(env, 'POST', 'action', {'action': 'followup_claimed', 'kind': 'followup1', 'date': '2026-11-11'})[0] == 200
+    status, out = call(env, 'POST', 'followup/1', {**good, 'preferred_method': 'in person'})
+    assert status == 200 and out['changed_after_claim'] and any('face-to-face' in i for i in out['review_issues'])
+    assert env.execute("SELECT count(*) FROM events WHERE type='followup_record_changed_after_claim'").fetchone()[0] == 1
+    r = api.patient_followups(env, 1, dt.date(2026, 11, 12))
+    assert r['next_action'] == 'followup1_document' and r['followup1_documentation_gaps'] and 'not modelled' in r['readiness_scope']
+    assert call(env, 'POST', 'followup/1/export')[0] == 400

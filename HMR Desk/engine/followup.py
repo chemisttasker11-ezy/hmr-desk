@@ -49,7 +49,7 @@ def review_issues(data):
     issues = []
     if not method: issues.append('Delivery method not recorded (the Portal claim requires it)')
     if not preferred: issues.append("Patient's preferred delivery option not documented")
-    if not offered: issues.append('Date the delivery choice was offered not recorded')
+    if not offered: issues.append('Date the delivery choice was offered not recorded (this app asks for it as a conservative record of the offer; the PDF does not require a date)')
     elif _day(offered) is None: issues.append('Choice-offered date is not a valid date')
     elif _day(offered) > day: issues.append('Choice-offered date is after the follow-up date')
     if preferred == 'in person' and method in ('phone', 'video'):

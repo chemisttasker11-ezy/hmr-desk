@@ -148,3 +148,12 @@ def test_not_required_wording_is_proposed_until_reviewed():
     d = manual_defaults.apply_followup_decision(base)
     assert "No follow-up interview is planned" in d["followup"] and manual_defaults.unresolved(d) == ["followup_review"]
     assert manual_defaults.unresolved({**d, "followup_text_reviewed": True}) == []
+
+
+def test_legacy_stock_sentence_is_kept_but_flagged_until_reviewed():
+    name = "Synthetic Patient"
+    legacy = {"name": name, "followup": manual_defaults.required_followup(name), "needs_review": ["followup"]}
+    assert manual_defaults.unresolved(legacy) == ["followup_review"]
+    assert manual_defaults.apply_followup_decision(legacy)["followup"] == legacy["followup"]  # words preserved
+    assert manual_defaults.unresolved({**legacy, "needs_review": []}) == []  # reviewed or edited
+    assert manual_defaults.unresolved({**legacy, "followup": "My own plan."}) == []

@@ -146,7 +146,10 @@ function reportField(key, label, multiline = true) {
   return `<label>${esc(label)} ${review}${input}</label>`;
 }
 function followupDecisionHtml() {
-  if (reportRecord.followup_decision === undefined) return '';
+  if (reportRecord.followup_decision === undefined) {
+    return reportRecord.needs_review?.includes('followup')
+      ? '<label><input type="checkbox" data-followup-legacy-reviewed> I have reviewed this follow-up wording (kept from an earlier draft)</label>' : '';
+  }
   const d = reportRecord.followup_decision;
   const opts = [['', 'Choose...'], ['required', 'Follow-up required (enter the plan and timing above)'], ['not_required', 'No follow-up planned (proposed wording above)']]
     .map(([v, t]) => `<option value="${v}" ${d === v ? 'selected' : ''}>${t}</option>`).join('');
@@ -246,6 +249,10 @@ document.addEventListener('input', (event) => {
       }
     }, 300);
     return;
+  }
+  if (el.dataset.followupLegacyReviewed !== undefined) {
+    reportRecord.needs_review = H.reviewed(reportRecord.needs_review, 'followup');
+    document.querySelector('[data-report-review="followup"]')?.remove(); el.closest('label')?.remove(); reportSaver.changed(); return;
   }
   if (el.dataset.followupReviewed !== undefined) { reportRecord.followup_text_reviewed = !!el.checked; reportSaver.changed(); return; }
   if (el.dataset.followupDecision !== undefined) {

@@ -51,7 +51,12 @@ def apply_followup_decision(data):
 def unresolved(data):
     keys = [key for key in ("reason", "intro")
             if key in data.get("needs_review", []) and not data.get(key, "").strip()]
-    if "followup_decision" not in data: return keys  # legacy spec: authored text stands
+    if "followup_decision" not in data:
+        # Legacy spec: keep its words, but an unreviewed generated stock sentence is flagged until reviewed or edited.
+        name = (data.get("name") or "").strip()
+        if "followup" in data.get("needs_review", []) and name and data.get("followup", "").strip() == required_followup(name):
+            keys.append("followup_review")
+        return keys
     decision, name = data["followup_decision"], (data.get("name") or "").strip()
     text = data.get("followup", "").strip()
     if decision == "": keys.append("followup_decision")

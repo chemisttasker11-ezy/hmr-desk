@@ -296,7 +296,7 @@ def patient_followups(conn, pid, today=None):
                   followup2_claimed=second['claimed'] if second else None,
                   followup1_claim_by=str(claim_deadline(dt.date.fromisoformat(first_date))) if first_date else None,
                   followup2_claim_by=str(claim_deadline(dt.date.fromisoformat(second['visit_date']))) if second else None,
-                  followup2_due=due2, followup1_documentation_gaps=gaps[1], followup2_documentation_gaps=gaps[2],
+                  followup2_due=due2, readiness_scope='documentation only: PPA paid prerequisites are not modelled, so this does not mean payable', followup1_documentation_gaps=gaps[1], followup2_documentation_gaps=gaps[2],
                   next_action=next_action, next_due=next_due)
     return result
 
@@ -1060,7 +1060,12 @@ def handle(conn, method, path, query, body):
                 if method == 'POST':
                     followup.validate(body)
                     if body['date']: date(body['date'])
+                    before = records.get_json(conn, p['id'], f'followup{number}.json')
                     result = followup.save(conn, p, number, body)
+                    claimed = conn.execute("SELECT claimed FROM visits WHERE patient_id=? AND kind=? AND claimed IS NOT NULL LIMIT 1", (p['id'], 'followup' + str(number))).fetchone()
+                    if claimed and before is not None and followup.normalize(before) != followup.normalize(body):
+                        db.log(conn, p['id'], 'followup_record_changed_after_claim', {'kind': 'followup' + str(number)}, 'app')
+                        result = {**result, 'changed_after_claim': True, 'review_issues': followup.review_issues(result)}
                     if body['date'] and not conn.execute("SELECT 1 FROM visits WHERE patient_id=? AND kind=? AND visit_date IS NOT NULL", (p['id'], 'followup' + str(number))).fetchone():
                         action(conn, p, {'action': 'followup_done', 'kind': 'followup' + str(number), 'date': body['date']})
                     return 200, result
