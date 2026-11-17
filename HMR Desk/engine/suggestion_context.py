@@ -127,7 +127,11 @@ def build(conn, patient, today=None):
         if verified:
             try: dt.datetime.fromisoformat(audit['verified_at'])
             except ValueError: verified = False
-        add('pathology:'+row['id'], 'pathology', row['test']+': '+row['value'], date=row['sample_date'],
+        # The verified comment is the pharmacist's own saved wording; include it in the
+        # literal match text. Never interpret the numeric result itself.
+        text = row['test']+': '+row['value']
+        if row['comment'].strip(): text += ' | '+row['comment'].strip()
+        add('pathology:'+row['id'], 'pathology', text, date=row['sample_date'],
             unit=row['unit'], reference_interval=row['reference_interval'], comment=row['comment'],
             verification='named pharmacist verified' if verified else 'UNVERIFIED: check original',
             source=row['source'], test=row['test'], value=row['value'],
