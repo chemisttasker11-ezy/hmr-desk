@@ -12,7 +12,7 @@ import brainstorm
 import db
 
 SCHEMA=1
-PARSER='physical-fragments-v4'
+PARSER='marker-headings-physical-fragments-v5'
 
 
 def open_index(source,anchor_builder):
@@ -29,7 +29,7 @@ def open_index(source,anchor_builder):
     except (sqlite3.DatabaseError,IndexError):
         try:conn.close()
         except UnboundLocalError:pass
-    sections=brainstorm.sections(source['path'])
+    sections=brainstorm.sections(source['path'],True)
     handle,temporary=tempfile.mkstemp(prefix='reference-index-',suffix='.sqlite3',dir=str(directory));os.close(handle)
     try:
         conn=sqlite3.connect(temporary)
