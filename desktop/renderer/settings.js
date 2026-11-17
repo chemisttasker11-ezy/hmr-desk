@@ -88,7 +88,7 @@ async function settings() {
     (item.key === 'ai_interview_assist' || item.key === 'ai_report_assist') &&
     item.value !== 'off' && item.value !== false);
   const ready = health?.ready === true;
-  $('screen').innerHTML = `<h2>Settings</h2>${practiceFields()}
+  $('screen').innerHTML = `<h2>Settings</h2>${localReferencePanel()}${practiceFields()}
     <section class="card" aria-label="Offline and external service capabilities">
       <h2>Standalone capabilities and online services</h2>
       <p role="status">Local engine: ${ready ? 'Ready and authenticated' : 'Unavailable — ' + esc(health?.error || 'check the engine')}.
@@ -169,6 +169,7 @@ async function settings() {
     <label>Environment, NAME=value per line<textarea name="env"></textarea></label></div>
     <label><span>Enabled <input type="checkbox" name="enabled" checked></span></label>
     <p class="error" role="alert"></p><button class="primary">Add agent</button></form><details><summary>Technical details</summary><p>Base folder: ${esc(c.base)}</p><p>Engine API: ${esc(c.api)}</p></details>`;
+  refreshLocalReferenceStatus();
   recordsCardLoad();
 }
 function askEncryptedBackupPassphrase(action) {
@@ -404,4 +405,4 @@ async function agentSubmit(form) {
   } catch (error) {
     (form.querySelector('.error') || $('agent-message')).textContent = errorText(error);
   }
-      }
+}
