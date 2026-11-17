@@ -170,3 +170,38 @@ test('in-flight background patient reads cannot replace newly expanded actions',
   assert.equal(await reading, false);
   assert.equal(detail.innerHTML, 'expanded actions stay here');
 });
+
+test('failed reselection keeps the list usable and intake open still reaches the target patient', async () => {
+  const calls = [];
+  const node = () => ({ hidden: false, textContent: '', innerHTML: '', value: '', dataset: {}, style: { setProperty() {} },
+    classList: { toggle() {}, add() {}, remove() {}, contains: () => false }, setAttribute() {}, addEventListener() {},
+    appendChild() {}, querySelector: () => null, querySelectorAll: () => [], contains: () => false });
+  const nodes = {};
+  const $ = (id) => nodes[id] || (nodes[id] = node());
+  const hmr = { api: async (method, path) => {
+    calls.push(method + ' ' + path);
+    if (path === '/api/patients/stale-id') throw new Error('not found');
+    if (path === '/api/patients/13') return { id: 13, name: 'Target Patient', change_kinds: [], files: {} };
+    if (path === '/api/patients/13/timeline') return { milestones: {} };
+    return {};
+  } };
+  const context = vm.createContext({ H, $, hmr, esc: H.esc, date: H.date, group: H.group, sentence: H.sentence, actionLabels: {}, actionFields: {}, actionButton: () => '', aiInfo: () => '', stageText: () => '', messageComposer: () => '', localDate: () => '2026-11-17', selected: 'stale-id', page: 'patients', formOpen: false, detailTab: 'Overview',
+    patients: [], filter: 'All active', patientSort: 'urgency', appointmentRange: 'all', runMessage: '', patientWidth: 50, patientLayout: 'split', fullPatientView: false, searchTimer: 0, messagesTimer: 0, runTimer: 0,
+    patientRequest: 0, navToken: 0, offerPatient: '', offerDraft: null, offerStatus: '', confirm: () => true, alert() {},
+    document: { querySelector: () => node(), querySelectorAll: () => [], activeElement: null },
+    errorText: (e) => String(e && e.message || e), setTimeout: () => 0, clearTimeout() {} });
+  vm.runInContext(patientSource, context);
+  const before = calls.length;
+  const shown = await context.reselectActivePatient('stale-id', true);
+  assert.equal(shown, false);
+  assert.equal(context.selected, null, 'stale selection is cleared');
+  assert.ok(calls.slice(before).includes('GET /api/patients/stale-id'), 'selection fetch attempted');
+  assert.equal(nodes['patient-selection-error'].hidden, false, 'local recoverable error shown');
+  assert.match(nodes['patient-selection-error'].textContent, /not found/, 'real error text preserved');
+  nodes['detail'] = node();
+  context.page = 'intake';
+  context.navigate = async () => { context.page = 'patients'; };
+  const openCalls = calls.length;
+  await context.openPatientWorkspace(13);
+  assert.ok(calls.slice(openCalls).includes('GET /api/patients/13'), 'intake target open attempted after prior selection failure');
+});

@@ -39,7 +39,7 @@ function patientShell() {
   $('screen').innerHTML =
     `<div class="patient-layout"><div class="patient-list-pane"><label class="search">Search patients<input id="search" placeholder="Name, suburb, GP or phone"></label>
     <div class="actions"><label>Sort by <select id="patient-sort"><option value="urgency">Priority</option><option value="first">First name</option><option value="last">Last name</option><option value="referral">Referral date (newest)</option><option value="appointment">Appointment date</option></select></label><label>Appointments <select id="appointment-range"><option value="all">All appointments</option><option value="today">Today</option><option value="week">This week</option><option value="month">This month</option></select></label></div>
-    <div id="chips" class="chips"></div><div id="bulk"></div><div id="queue-message" role="status" aria-live="polite">${esc(runMessage)}</div><div class="actions patient-layout-actions"><button data-patient-layout="list">Maximise list</button><button data-patient-layout="patient">Maximise patient</button><button data-patient-layout="split">Restore split</button></div><div id="patient-list"></div></div>
+    <div id="chips" class="chips"></div><div id="bulk"></div><div id="queue-message" role="status" aria-live="polite">${esc(runMessage)}</div><p id="patient-selection-error" class="error" role="alert" hidden></p><div class="actions patient-layout-actions"><button data-patient-layout="list">Maximise list</button><button data-patient-layout="patient">Maximise patient</button><button data-patient-layout="split">Restore split</button></div><div id="patient-list"></div></div>
     <div id="patient-divider" role="separator" tabindex="0" aria-label="Resize patient list" aria-orientation="vertical" aria-valuemin="25" aria-valuemax="75"></div><div id="detail" class="detail" hidden></div></div>`;
   const divider = $('patient-divider');
   divider.addEventListener('keydown', e => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); resizePatientPane(patientWidth + (e.key === 'ArrowLeft' ? -5 : 5)); } });
@@ -168,11 +168,28 @@ function selectPatientTab(tab) {
   }
 }
 
+async function reselectActivePatient(id, background = true) {
+  const status = $('patient-selection-error');
+  if (status) { status.hidden = true; status.textContent = ''; }
+  try {
+    return await showPatient(id, undefined, background);
+  } catch (error) {
+    selected = null;
+    renderPatients();
+    if (status) {
+      status.textContent = 'Previously selected patient could not be opened (' + errorText(error) + '). Choose a patient from the list to continue.';
+      status.hidden = false;
+    }
+    return false;
+  }
+}
+
 async function openPatientWorkspace(id, tab = 'Overview', layout = 'patient') {
   if (!['patients', 'to_book'].includes(page)) {
     await navigate('patients');
     if (page !== 'patients') return { cancelled: true };
   }
+  if (['patients', 'to_book'].includes(page) && !$('detail')) { patientShell(); renderPatients(); }
   if (selected === String(id) && $('detail') && !$('detail').hidden) {
     selectPatientTab(tab); setPatientLayout(layout);
     return { ok: true };
