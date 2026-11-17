@@ -538,6 +538,7 @@ document.addEventListener('submit', async (event) => {
         allergies: medicineData.allergies,
         interview_usage: medicineData.interview_usage || [],
         alternatives: medicineData.alternatives,
+        medicine_snapshot_sha256: medicineData.medicine_snapshot_sha256,
       });
       medicinePatient = null;
       medicineData = null;
