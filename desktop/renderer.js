@@ -237,7 +237,7 @@ async function refresh() {
     if (!isCurrent()) return;
     if (page === 'calendar') {
       // drawer open: refresh the day around it instead of rebuilding the screen
-      if ($('detail') && !$('detail').hidden) {
+      if ($('calendar') && $('day-content') && /^\d{4}-\d{2}-\d{2}$/.test(selectedDay || '') && $('detail') && !$('detail').hidden) {
         await Promise.all([loadDay(selectedDay), loadCalendar(), loadSummary()]);
         if (!isCurrent()) return;
         await showPatient(selected);
@@ -252,14 +252,15 @@ async function refresh() {
       const [res, queue] = await Promise.all([hmr.api('GET', filter === 'Archived' ? '/api/patients?archived=1' : '/api/patients'), hmr.api('GET', '/api/run').catch(() => null)]);
       if (queue) { runTasks = queue.tasks || []; runStepsCatalog = queue.steps || []; }
       if (!isCurrent()) return;
+      const interacting = !!$('detail')?.querySelector?.('details[open]');
       patients = res.patients;
       if (!$('search')) patientShell();
       renderPatients();
-      if (selected && !formOpen && !($('detail')?.contains(document.activeElement) && document.activeElement.matches('input, textarea, select'))) {
-        await showPatient(selected);
+      if (selected && !formOpen && !interacting && !($('detail')?.contains(document.activeElement) && document.activeElement.matches('input, textarea, select'))) {
+        await showPatient(selected, undefined, true);
       }
       clearTimeout(runTimer);
-      const pollPatients = () => { if (page !== 'patients') return; if (formOpen) runTimer = setTimeout(pollPatients, 5000); else refresh(); };
+      const pollPatients = () => { if (page !== 'patients') return; if (formOpen || $('detail')?.querySelector?.('details[open]')) runTimer = setTimeout(pollPatients, 5000); else refresh(); };
       runTimer = setTimeout(pollPatients, 5000);
     }
     if (!isCurrent()) return;
