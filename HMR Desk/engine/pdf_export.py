@@ -48,6 +48,19 @@ def remove_tree(path, wait=None, sleep=time.sleep, clock=time.monotonic):
         delay = min(delay * 2, 1.0)
 
 
+def profile_root():
+    """Parent for the per-run converter profile.
+
+    The packaged app always uses the per-user temp folder. The HMR_PDF_PROFILE_ROOT override is a
+    development and test setting, ignored when frozen so a shared folder cannot be set silently.
+    """
+    if not getattr(sys, 'frozen', False):
+        override = os.environ.get('HMR_PDF_PROFILE_ROOT')
+        if override:
+            return override
+    return tempfile.gettempdir()
+
+
 def _remove_all(*folders):
     """Remove each folder; return (name or path of the first one left behind, error text), else None."""
     left = None
@@ -85,7 +98,7 @@ def convert(docx, pdf, timeout=120):
     directory = tempfile.mkdtemp(prefix='.hmr-pdf-', dir=target.parent)
     # LibreOffice's profile nests about 180 characters deep. Keep it under a short root (the system temp
     # folder) so no path passes the Windows 260 character limit, whatever the patient folder depth.
-    profile_dir = tempfile.mkdtemp(prefix='hp-', dir=os.environ.get('HMR_PDF_PROFILE_ROOT') or tempfile.gettempdir())
+    profile_dir = tempfile.mkdtemp(prefix='hp-', dir=profile_root())
     try:
         staging = Path(directory)
         profile = Path(profile_dir) / 'lo-profile'

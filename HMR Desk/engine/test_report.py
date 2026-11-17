@@ -374,6 +374,17 @@ def test_extended_path_and_short_profile_root(tmp_path, monkeypatch):
     assert result['cleanup_pending'] is None and str(short).replace('\\', '/') in seen['profile'].replace('%20', ' ') and not list(short.iterdir()) and not [x for x in source.parent.iterdir() if x.name.startswith('.hmr-pdf-')]
 
 
+def test_packaged_app_ignores_profile_root_override(tmp_path, monkeypatch):
+    import pdf_export, sys, tempfile
+    monkeypatch.setenv('HMR_PDF_PROFILE_ROOT', str(tmp_path))
+    assert pdf_export.profile_root() == str(tmp_path)  # development and tests
+    monkeypatch.setattr(sys, 'frozen', True, raising=False)
+    assert pdf_export.profile_root() == tempfile.gettempdir()  # packaged: override ignored
+    monkeypatch.delenv('HMR_PDF_PROFILE_ROOT')
+    monkeypatch.setattr(sys, 'frozen', False, raising=False)
+    assert pdf_export.profile_root() == tempfile.gettempdir()
+
+
 def test_remove_tree_never_reports_success_while_folder_remains(tmp_path, monkeypatch):
     import pdf_export, shutil
     d = tmp_path / 'scratch'; d.mkdir()
