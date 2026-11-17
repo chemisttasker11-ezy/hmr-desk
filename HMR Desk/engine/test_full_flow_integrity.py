@@ -98,7 +98,8 @@ def test_referral_to_report_flow_stays_consistent(tmp_path, monkeypatch):
     spec = {key: '' for key in ('allergies', 'assess_date', 'conditions', 'dear', 'doctor',
                                 'followup', 'intro', 'name', 'obs', 'out', 'path_date', 'patient',
                                 'reason', 'report_date', 'thanks')}
-    spec.update(meds=[], otc=[], path=[], ceased=[], issues=[])
+    spec.update(meds=[], otc=[], path=[], ceased=[], issues=[],
+                out=str(folder / 'HMR Synthetic Patient.docx'))
     records.put_json(conn, patient['id'], 'report_spec.json', spec)
     refreshed = report.refresh(conn, patient)
     conn.commit()
@@ -146,4 +147,52 @@ def test_referral_to_report_flow_stays_consistent(tmp_path, monkeypatch):
     assert 'eGFR' in path_table and '28' in path_table
     assert 'mL/min/1.73m2' in path_table and '60-120' in path_table
     assert any('synthetic-lab.pdf' in cell for cell in path_table), path_table
+
+    # 8. The REAL export route refuses stale evidence, and only builds after
+    # the evidence is re-confirmed and the report refreshed through the API.
+    import jobs
+    # 8a. Build route refuses: the interview changed after report preparation.
+    try:
+        jobs.report_build(patient['id'])
+        raise AssertionError('build must refuse a stale interview revision')
+    except ValueError as exc:
+        assert 'Interview changed after report preparation' in str(exc), exc
+    assert not (folder / 'HMR Synthetic Patient.docx').exists()
+    # 8b. The API refresh route itself refuses while medicine confirmation is stale.
+    status, result = api.handle(conn, 'POST', '/api/patients/%s/report/refresh' % patient['id'], {}, {})
+    assert status == 400, (status, result)
+    assert 'confirm medicines' in str(result), result
+    # 8c. Re-confirm medicines through the real API contract, then refresh and
+    # build through the real routes.
+    get_status, proposal = api.handle(conn, 'GET', '/api/patients/%s/meds' % patient['id'], {}, None)
+    assert get_status == 200
+    status, confirmed = api.handle(conn, 'POST', '/api/patients/%s/meds' % patient['id'], {},
+                                   {'meds': [['Synthetic Jardiance 25 mg tablet', 'one daily']],
+                                    'allergies': [],
+                                    'medicine_snapshot_sha256': proposal['medicine_snapshot_sha256'],
+                                    'interview_usage': proposal['interview_usage']})
+    assert status == 200, confirmed
+    status, refreshed2 = api.handle(conn, 'POST', '/api/patients/%s/report/refresh' % patient['id'], {}, {})
+    assert status == 200, refreshed2
+    # The refreshed spec needs at least one pharmacist-authored finding to build.
+    refreshed2['issues'] = [{'title': 'Synthetic finding', 'rec': 'Synthetic recommendation',
+                             'rationale': 'Synthetic rationale'}]
+    records.put_json(conn, patient['id'], 'report_spec.json', refreshed2)
+    conn.commit()
+    assert jobs.report_build(patient['id']) == 'Built a provisional local Word report (not owner-approved)'
+    built = folder / 'HMR Synthetic Patient.docx'
+    assert built.exists() and built.stat().st_size > 0
+    doc2 = Document(str(built))
+    headings2 = [p.text for p in doc2.paragraphs if p.style.name.startswith('Heading')]
+    assert 'Current medicines' in headings2 and 'Pathology' in headings2, headings2
+    cells2 = [cell.text for t in doc2.tables for row in t.rows for cell in row.cells]
+    assert 'Synthetic Jardiance 25 mg tablet' in cells2
+    assert 'eGFR' in cells2 and '28' in cells2
+    assert any('Synthetic finding' in p.text for p in doc2.paragraphs)
+    # 8d. A second build never overwrites: it revisions to -v2 (the revision
+    # counter starts at 1 for the original name).
+    first_bytes = built.read_bytes()
+    jobs.report_build(patient['id'])
+    assert built.read_bytes() == first_bytes
+    assert (folder / 'HMR Synthetic Patient-v2.docx').exists()
     conn.close()
