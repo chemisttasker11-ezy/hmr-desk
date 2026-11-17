@@ -358,6 +358,22 @@ def test_pdf_cleanup_retries_then_reports_without_hiding(tmp_path, monkeypatch):
     assert 'not empty' in err and d.exists()  # kept, reported, never ignored or force-removed
 
 
+def test_extended_path_and_short_profile_root(tmp_path, monkeypatch):
+    import pdf_export, docx, subprocess
+    assert pdf_export.extended('/tmp/x', nt=True) == '\\\\?\\' + __import__('os').path.abspath('/tmp/x') and pdf_export.extended('/tmp/x', nt=False) == '/tmp/x'
+    short = tmp_path / 'short'; short.mkdir()
+    monkeypatch.setenv('HMR_PDF_PROFILE_ROOT', str(short))
+    source = tmp_path / 'deep' / 'r.docx'; source.parent.mkdir(); docx.Document().save(source)
+    fake = tmp_path / 'soffice.exe'; fake.write_bytes(b'x'); monkeypatch.setenv('HMR_PDF_CONVERTER', str(fake))
+    seen = {}
+    def run(cmd, **k):
+        seen['profile'] = cmd[1]; out = Path(cmd[cmd.index('--outdir') + 1]); (out / 'r.pdf').write_bytes(b'%PDF-' + b'0' * 200)
+        return subprocess.CompletedProcess(cmd, 0, b'', b'')
+    monkeypatch.setattr(pdf_export.subprocess, 'run', run)
+    result = pdf_export.convert(source, source.with_suffix('.pdf'))
+    assert result['cleanup_pending'] is None and str(short).replace('\\', '/') in seen['profile'].replace('%20', ' ') and not list(short.iterdir()) and not [x for x in source.parent.iterdir() if x.name.startswith('.hmr-pdf-')]
+
+
 def test_remove_tree_never_reports_success_while_folder_remains(tmp_path, monkeypatch):
     import pdf_export, shutil
     d = tmp_path / 'scratch'; d.mkdir()

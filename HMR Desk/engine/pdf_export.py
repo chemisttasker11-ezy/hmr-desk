@@ -14,6 +14,14 @@ import time
 CLEANUP_WAIT_SECONDS = 10.0
 
 
+def extended(path, nt=None):
+    """Windows extended-length form, so removal works past the 260 character limit."""
+    text = os.path.abspath(str(path))
+    if (os.name == 'nt' if nt is None else nt) and not text.startswith('\\\\?\\'):
+        text = '\\\\?\\UNC\\' + text[2:] if text.startswith('\\\\') else '\\\\?\\' + text
+    return text
+
+
 def remove_tree(path, wait=None, sleep=time.sleep, clock=time.monotonic):
     """Remove a directory this module created, retrying while Windows still holds files.
 
@@ -24,7 +32,7 @@ def remove_tree(path, wait=None, sleep=time.sleep, clock=time.monotonic):
     delay = 0.1
     while True:
         try:
-            shutil.rmtree(path)
+            shutil.rmtree(extended(path))
             if not path.exists():
                 return None
             exc = OSError('directory still present after removal reported success')
@@ -38,6 +46,16 @@ def remove_tree(path, wait=None, sleep=time.sleep, clock=time.monotonic):
             return type(exc).__name__ + ': ' + str(exc)
         sleep(delay)
         delay = min(delay * 2, 1.0)
+
+
+def _remove_all(*folders):
+    """Remove each folder; return (name or path of the first one left behind, error text), else None."""
+    left = None
+    for folder in folders:
+        error = remove_tree(folder)
+        if error and left is None:
+            left = (Path(folder).name if Path(folder).name.startswith('.hmr-pdf-') else str(folder), error)
+    return left
 
 
 def available():
@@ -65,9 +83,12 @@ def convert(docx, pdf, timeout=120):
     if not engine or not Path(engine).is_file():
         raise RuntimeError('Bundled PDF converter unavailable')
     directory = tempfile.mkdtemp(prefix='.hmr-pdf-', dir=target.parent)
+    # LibreOffice's profile nests about 180 characters deep. Keep it under a short root (the system temp
+    # folder) so no path passes the Windows 260 character limit, whatever the patient folder depth.
+    profile_dir = tempfile.mkdtemp(prefix='hp-', dir=os.environ.get('HMR_PDF_PROFILE_ROOT') or tempfile.gettempdir())
     try:
         staging = Path(directory)
-        profile = staging / 'lo-profile'
+        profile = Path(profile_dir) / 'lo-profile'
         output_dir = staging / 'rendered'
         output_dir.mkdir()
         cmd = [str(engine), '-env:UserInstallation=' + profile.as_uri(),
@@ -88,21 +109,21 @@ def convert(docx, pdf, timeout=120):
             raise FileExistsError('PDF appeared during conversion; refusing overwrite')
         os.replace(converted, target)
     except BaseException as exc:
-        failure = remove_tree(directory)
+        failure = _remove_all(directory, profile_dir)
         if failure:
             # Keep the primary error; add the cleanup evidence beside it (folder name only, no patient path).
-            exc.cleanup_pending = Path(directory).name
-            exc.cleanup_error = failure
+            exc.cleanup_pending = failure[0]
+            exc.cleanup_error = failure[1]
         raise
-    failure = remove_tree(directory)
+    failure = _remove_all(directory, profile_dir)
     result = {'created': True, 'bytes': target.stat().st_size, 'cleanup_pending': None}
     if failure:
         # Conversion succeeded; the scratch folder is still locked. Report it, do not hide it.
-        result['cleanup_pending'] = str(directory)
-        result['cleanup_error'] = failure
+        result['cleanup_pending'] = failure[0]
+        result['cleanup_error'] = failure[1]
     return result
 
 
 def pending_note(name):
     return ('Temporary PDF working folder ' + name + ' could not be removed yet (Windows still holds files). '
-            'Close other programs using the report folder, then delete that folder.')
+            'It is in the patient report folder or the Windows temp folder. Close other programs using it, then delete that folder.')
