@@ -616,6 +616,9 @@ def handle(conn, method, path, query, body):
             return 200, result
         if path == '/api/medicines/status' and method == 'GET':
             return 200, medicine_reference.status()
+        if path == '/api/medicines/suggest' and method == 'POST':
+            if not isinstance(body, dict) or set(body) != {'queries'}: raise ValueError('Invalid suggestion request')
+            return 200, medicine_reference.suggest_many(body['queries'])
         if path == '/api/medicines/search' and method == 'GET':
             q = query.get('q', ''); q = q[0] if isinstance(q, list) and q else q
             if not isinstance(q, str): raise ValueError('invalid search')
