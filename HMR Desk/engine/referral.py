@@ -55,7 +55,9 @@ def sections(text):
     return result
 
 def clean(line):
-    return re.sub(r'^[\s\u2022\u25cf\u25a0*\-]+', '', line).strip()
+    # Common bullet glyphs from PDF text extraction; keep the class exhaustive
+    # for observed variants rather than interpreting document structure.
+    return re.sub(r'^[\s\u2022\u25cf\u25a0\u00b7\u2219\u2023\u25aa\u2043*\-]+', '', line).strip()
 
 def medicines(lines, source_rows=None):
     rows = []; leftovers = False
