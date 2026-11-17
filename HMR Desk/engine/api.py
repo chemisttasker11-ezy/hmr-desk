@@ -839,6 +839,14 @@ def handle(conn, method, path, query, body):
             import report
             q = query.get('q', '')
             return 200, {'results': report.library(q[0] if isinstance(q, list) and q else q)}
+        match = re.fullmatch(r'/api/patients/(\d+)/reference-matches', path)
+        if method == 'GET' and match:
+            import reference_matches, reference_library
+            patient=conn.execute('SELECT * FROM patients WHERE id=?',(int(match[1]),)).fetchone()
+            if not patient: return 404, {'error':'patient not found'}
+            try: return 200, reference_matches.for_patient(conn,patient)
+            except reference_library.ReferenceUnavailable as exc:
+                return 409, {'error':str(exc),'matches':[], 'review_status':'reference_unavailable'}
         match = re.fullmatch(r'/api/patients/(\d+)/suggestions(?:/context)?', path)
         if method == 'GET' and match:
             import suggest
