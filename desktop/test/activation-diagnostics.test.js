@@ -1,4 +1,4 @@
-const {test} = require('node:test');
+const {test, mock} = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const fsp = require('node:fs/promises');
@@ -28,7 +28,7 @@ function scenario(){
   return {root,data,oldWorkspace,recovered,configPath};
 }
 
-test('recordActivationFailure stores only sanitized stage, code and category', async ()=>{
+test('recordActivationFailure stores only sanitized stage, code and category', async (t)=>{
   const s=scenario();
   try {
     const target=path.join(s.data,FAILURE_RECORD);
@@ -42,7 +42,10 @@ test('recordActivationFailure stores only sanitized stage, code and category', a
     assert.deepEqual(first.activation,{stage:'stage-database',code:'EACCES',reason:'os-error'});
     assert.deepEqual(first.restart,{code:null,reason:'unclassified'});
     assert.ok(first.at);
-    assert.equal((await fsp.stat(target)).mode & 0o777, 0o600);
+    // POSIX permission bits only exist off Windows. On NTFS Node reports 0o666 whatever mode was requested,
+    // so the 0o600 request is NOT evidence of protection there: access follows the folder ACL (the user profile).
+    if (process.platform !== 'win32') assert.equal((await fsp.stat(target)).mode & 0o777, 0o600);
+    else t.diagnostic('Windows: POSIX mode 0o600 not asserted; record privacy rests on sanitized content plus the profile folder ACL, not on file mode');
     // Unknown stage names and hostile codes are not stored; a newer failure replaces the record.
     await recordActivationFailure(s.data,{activation:{stage:'C:\\secret',
       error:Object.assign(Error('Restored dataset manifest is invalid'),{code:'bad code with spaces'})}});
@@ -93,25 +96,51 @@ test('activation failure is tagged with the validate stage', async ()=>{
   } finally { await fsp.rm(s.root,{recursive:true,force:true}); }
 });
 
-test('activation failure is tagged with the stage-database stage', async ()=>{
+test('activation failure is tagged with the stage-database stage (injected copy error, all platforms)', async (t)=>{
   const s=scenario();
   try {
-    // A non-writable data folder fails the staged database copy, after verification passed.
+    // Deterministic injection: the staged database copy fails after verification passed.
+    // This replaces a chmod fixture that only works with POSIX permissions and non-root users.
+    const injected=Object.assign(Error('injected staged copy failure'),{code:'EACCES'});
+    const copy=mock.method(fsp,'copyFile',async()=>{throw injected;});
+    try {
+      await assert.rejects(activateRestored(s.recovered,s.data,s.configPath),
+        error => error.stage==='stage-database' && error.code==='EACCES');
+    } finally { copy.mock.restore(); }
+    assert.equal(copy.mock.callCount(),1);
+    // The staging file is cleaned up and the active database is untouched.
+    assert.deepEqual((await fsp.readdir(s.data)).filter(n=>n.startsWith('.incoming-')),[]);
+    assert.equal(await fsp.readFile(path.join(s.data,'hmr.db'),'utf8'),'old synthetic');
+  } finally { await fsp.rm(s.root,{recursive:true,force:true}); }
+});
+
+test('activation failure is tagged with the stage-database stage (real read-only folder, POSIX non-root)', async (t)=>{
+  if (process.platform==='win32') return t.skip('Windows: folder read-only bit does not block file creation; real permission failure NOT tested here');
+  if (typeof process.getuid==='function' && process.getuid()===0) return t.skip('Running as root: chmod does not block writes');
+  const s=scenario();
+  try {
     await fsp.chmod(s.data,0o555);
     await assert.rejects(activateRestored(s.recovered,s.data,s.configPath),
       error => error.stage==='stage-database');
     await fsp.chmod(s.data,0o755);
-    // The staging file is cleaned up and the active database is untouched.
     assert.deepEqual((await fsp.readdir(s.data)).filter(n=>n.startsWith('.incoming-')),[]);
     assert.equal(await fsp.readFile(path.join(s.data,'hmr.db'),'utf8'),'old synthetic');
   } finally { await fsp.chmod(s.data,0o755).catch(()=>{}); await fsp.rm(s.root,{recursive:true,force:true}); }
 });
 
-test('activation failure is tagged with the migrate-workspace stage', async ()=>{
+test('activation failure is tagged with the migrate-workspace stage', async (t)=>{
   const s=scenario();
   try {
     // A symlink absent from the manifest passes verifyRestored but must fail the workspace inventory.
-    fs.symlinkSync(path.join(s.recovered,'data','hmr.db'),path.join(s.recovered,'workspace','linked.db'));
+    // Windows: file symlinks need a privilege. A directory junction is a reparse point that lstat reports as a
+    // symbolic link and needs no privilege, so it exercises the same refusal. If neither can be created, skip explicitly.
+    const link=path.join(s.recovered,'workspace','linked');
+    try { fs.symlinkSync(path.join(s.recovered,'data','hmr.db'),link); }
+    catch (e) {
+      if (process.platform!=='win32') throw e;
+      try { fs.symlinkSync(path.join(s.recovered,'data'),link,'junction'); }
+      catch (e2) { return t.skip('Cannot create a symlink or junction here ('+e2.code+'): symlink refusal NOT tested on this machine'); }
+    }
     await assert.rejects(activateRestored(s.recovered,s.data,s.configPath),
       error => error.stage==='migrate-workspace' && /symlink/.test(error.message));
   } finally { await fsp.rm(s.root,{recursive:true,force:true}); }
