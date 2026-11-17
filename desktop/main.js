@@ -387,6 +387,22 @@ ipcMain.handle('register-owner-template', async (e, details) => {
   return api('POST','/api/templates/register',{source:chosen.filePaths[0],
     version:details.version,approved_by:details.approved_by,owner_authorised:true});
 });
+ipcMain.handle('install-medicine-reference', async (e) => {
+  if (e.sender !== win.webContents) throw Error('Invalid medicine reference request');
+  const chosen = await dialog.showOpenDialog(win, {
+    title:'Choose your licensed medicine reference database',
+    properties:['openFile'],filters:[{name:'Medicine reference database',extensions:['sqlite']}],
+  });
+  if (chosen.canceled || !chosen.filePaths[0]) return {cancelled:true};
+  const confirmation = await dialog.showMessageBox(win, {
+    type:'warning',title:'Install medicine reference data',
+    message:'Install this file as the read-only medicine reference used for search and linking?',
+    detail:'The file is checked for structure, integrity and source records before it replaces the current reference. The previous working reference is kept for rollback. The file is licensed operator data and is never modified or sent anywhere.',
+    buttons:['Install this reference','Cancel'],defaultId:1,cancelId:1,noLink:true,
+  });
+  if (confirmation.response !== 0) return {cancelled:true};
+  return api('POST','/api/medicine-reference/install',{source:chosen.filePaths[0]});
+});
 ipcMain.handle('pathology-source-pick', async (e, patientId) => {
   if (e.sender !== win.webContents || !Number.isSafeInteger(patientId) || patientId < 1)
     throw Error('Invalid patient');

@@ -121,12 +121,13 @@ test('real navigation refresh targets the interview patient even with a missing 
     vm.runInContext(interview, context);
     vm.runInContext("page = 'interview'; selected = '99'; interviewId = '42'; interviewRecord = {notes:'Synthetic'}; renderPatients = () => {}; setPatientLayout = () => {}", context);
     await vm.runInContext("interviewClick({dataset:{interviewRecordVisit:''}})", context);
-    return { calls, nodes };
+    return { calls, nodes, selected: vm.runInContext('selected', context) };
   }
   const before = await run(true);
   assert(before.calls.some(([, url]) => url === '/api/patients/99'));
-  assert.match(before.nodes.screen.innerHTML, /patient not found/);
-  assert.equal(before.nodes['action-area'].innerHTML, undefined);
+  assert.equal(before.nodes.screen.innerHTML.includes('class="error"'), false, 'stale selection no longer wipes the patients page');
+  assert.equal(before.selected, '42', 'intended patient still opens after the stale selection failure');
+  assert.match(before.nodes['action-area'].innerHTML, /name="date"/, 'old handler path now heals and renders the patient actions');
   const after = await run(false);
   assert(!after.calls.some(([, url]) => url === '/api/patients/99'));
   assert.match(after.nodes['action-area'].innerHTML, /name="date"/);

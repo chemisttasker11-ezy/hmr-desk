@@ -257,7 +257,7 @@ async function refresh() {
       if (!$('search')) patientShell();
       renderPatients();
       if (selected && !formOpen && !interacting && !($('detail')?.contains(document.activeElement) && document.activeElement.matches('input, textarea, select'))) {
-        await showPatient(selected, undefined, true);
+        await reselectActivePatient(selected, true);
       }
       clearTimeout(runTimer);
       const pollPatients = () => { if (page !== 'patients') return; if (formOpen || $('detail')?.querySelector?.('details[open]')) runTimer = setTimeout(pollPatients, 5000); else refresh(); };
@@ -279,7 +279,7 @@ async function refresh() {
       if (!$('search')) patientShell();
       renderPatients();
       if (selected && !formOpen && !($('detail')?.contains(document.activeElement) && document.activeElement.matches('input, textarea, select'))) {
-        await showPatient(selected);
+        await reselectActivePatient(selected, false);
       }
     }
     if (!isCurrent()) return;
