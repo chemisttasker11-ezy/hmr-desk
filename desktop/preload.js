@@ -34,6 +34,8 @@ contextBridge.exposeInMainWorld('hmr', {
   activateRestored: passphrase => ipcRenderer.invoke('activate-restored', passphrase),
   openPatientFolder: (id, file) => ipcRenderer.invoke('open-patient-folder', id, file),
   openReportVersion: (id, file, format) => ipcRenderer.invoke('open-report-version', id, file, format),
+  pickLocalReference: edition => ipcRenderer.invoke('local-reference-pick', edition),
+  openLocalReference: (hash,page) => ipcRenderer.invoke('local-reference-open', hash,page),
   pickPathologySource: id => ipcRenderer.invoke('pathology-source-pick', id),
   registerOwnerTemplate: details => ipcRenderer.invoke('register-owner-template', details),
   openPathologySource: (id, sourceId) => ipcRenderer.invoke('open-pathology-source', id, sourceId),
