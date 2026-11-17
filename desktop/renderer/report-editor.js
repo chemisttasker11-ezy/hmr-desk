@@ -18,6 +18,9 @@ let reportId = '',
   reportSaveStatus = 'All changes saved',
   reportSuggestions = [],
   reportGaps = [],
+  reportSuggestionSnapshot = '',
+  reportSuggestionRun = 0,
+  reportSuggestionAdding = false,
   reportSuggestionMessage = '',
   reportAdded = new Set(),
   reportDismissed = new Set(),
@@ -101,17 +104,22 @@ async function reportScreen() {
   loadSuggestions();
 }
 async function loadSuggestions() {
-  const id = reportId;
+  const id = reportId, run = ++reportSuggestionRun;
+  reportSuggestionSnapshot = '';
+  reportSuggestions = [];
   reportSuggestionMessage = 'Loading suggestions...';
   if ($('suggestions')) $('suggestions').innerHTML = suggestionsHtml();
   try {
     const data = await hmr.api('GET', `/api/patients/${encodeURIComponent(id)}/suggestions`);
-    if (id !== reportId || page !== 'report_editor') return;
+    if (id !== reportId || page !== 'report_editor' || run !== reportSuggestionRun) return;
     reportSuggestions = data.suggestions || [];
+    reportSuggestionSnapshot = data.context_snapshot_sha256 || '';
+    reportAdded = new Set();
+    reportDismissed = new Set();
     reportGaps = data.context_gaps || [];
     reportSuggestionMessage = reportSuggestions.length ? '' : 'No suggestions for this patient yet.';
   } catch (error) {
-    if (id !== reportId || page !== 'report_editor') return;
+    if (id !== reportId || page !== 'report_editor' || run !== reportSuggestionRun) return;
     reportSuggestions = [];
     reportGaps = [];
     reportSuggestionMessage =
@@ -121,8 +129,12 @@ async function loadSuggestions() {
   }
   if ($('suggestions')) $('suggestions').innerHTML = suggestionsHtml();
 }
+function suggestionEvidenceHtml(item) {
+  if (!item.evidence?.length) return '<p>No source-addressed evidence supplied. Reload suggestions.</p>';
+  return `<details open><summary>Matched source evidence (not clinical interpretation)</summary>${item.evidence.map(e => `<section class="suggestion-evidence" style="overflow-wrap:anywhere"><strong>${esc(e.kind)} - ${esc(e.id)}</strong><p style="white-space:pre-wrap">${esc(e.text)}</p><p>${esc(e.verification || '')}${e.verified_by ? ` | ${esc(e.verified_by)} at ${esc(e.verified_at || 'time not recorded')}` : ''}${e.use_status ? ` | Use: ${esc(e.use_status)}` : ''}</p><p>Source: ${esc(e.source || 'not established')} | Date: ${esc(e.date || 'not established')}${e.age_days !== null && e.age_days !== undefined ? ` (${esc(e.age_days)} days before context check)` : ''}</p>${e.unit !== undefined ? `<p>Units: ${esc(e.unit || 'missing')} | Reference interval: ${esc(e.reference_interval || 'not recorded')}</p>` : ''}${e.comment ? `<p>Original comment: ${esc(e.comment)}</p>` : ''}${e.flags?.length ? `<p>Check: ${esc(e.flags.join('; '))}</p>` : ''}</section>`).join('')}</details>`;
+}
 function suggestionsHtml() {
-  return `${reportGaps.length ? (reportGaps.every(gap => typeof gap === 'string' && gap.trim()) ? `<ul class="muted">${reportGaps.map(gap => `<li>${esc(gap.replaceAll('_', ' '))}</li>`).join('')}</ul>` : '<p class="muted">Add interview notes or confirm the medicines to get suggestions.</p>') : ''}${reportSuggestionMessage ? `<p class="muted">${esc(reportSuggestionMessage)}</p>` : ''}${reportSuggestions.map((item, i) => (reportDismissed.has(i) ? '' : `<article class="card helper-card"><span class="source-chip">${esc(H.sourceLabel(item.source))}</span><h3>${esc(item.title)}</h3>${item.why?.length ? `<ul>${item.why.map((why) => `<li>${esc(why)}</li>`).join('')}</ul>` : ''}${item.missing?.length ? `<p>Check first: ${esc(item.missing.join(', '))}</p>` : ''}${item.brainstorm ? `<details><summary>Brainstorm V2 - ${esc(item.brainstorm.title)} (p.${esc(item.brainstorm.page)})</summary><p>${esc(item.brainstorm.snippet)}</p><button data-suggestion-copy="${i}">Copy</button></details>` : ''}<div class="actions"><button data-suggestion-add="${i}" ${reportAdded.has(i) ? 'disabled' : ''}>${reportAdded.has(i) ? 'Added' : 'Add to findings'}</button><button data-suggestion-dismiss="${i}">Dismiss</button></div></article>`)).join('')}`;
+  return `${reportGaps.length ? (reportGaps.every(gap => typeof gap === 'string' && gap.trim()) ? `<ul class="muted">${reportGaps.map(gap => `<li>${esc(gap.replaceAll('_', ' '))}</li>`).join('')}</ul>` : '<p class="muted">Add interview notes or confirm the medicines to get suggestions.</p>') : ''}${reportSuggestionMessage ? `<p class="muted">${esc(reportSuggestionMessage)}</p>` : ''}${reportSuggestions.map((item, i) => (reportDismissed.has(i) ? '' : `<article class="card helper-card"><span class="source-chip">${esc(H.sourceLabel(item.source))}</span><h3>${esc(item.title)}</h3>${item.why?.length ? `<ul>${item.why.map((why) => `<li>${esc(why)}</li>`).join('')}</ul>` : ''}<p class="muted">Past-case template only, not a patient finding. Review and edit before inclusion.</p><h4>Proposed recommendation</h4><p>${esc(item.rec || '')}</p><h4>Template rationale</h4><p>${esc(item.rationale || '')}</p>${suggestionEvidenceHtml(item)}${item.missing?.length ? `<p>Check first: ${esc(item.missing.join(', '))}</p>` : ''}${item.brainstorm ? `<details><summary>Brainstorm V2 - ${esc(item.brainstorm.title)} (p.${esc(item.brainstorm.page)})</summary><p>${esc(item.brainstorm.snippet)}</p><button data-suggestion-copy="${i}">Copy</button></details>` : ''}<div class="actions"><button data-suggestion-add="${i}" ${reportAdded.has(i) || !reportSuggestionSnapshot ? 'disabled' : ''}>${reportAdded.has(i) ? 'Added' : 'Add to findings'}</button><button data-suggestion-dismiss="${i}">Dismiss</button></div></article>`)).join('')}`;
 }
 function reportField(key, label, multiline = true) {
   const review = reportRecord.needs_review?.includes(key)
@@ -173,7 +185,7 @@ function renderReport() {
             ([key, label]) =>
               `<label>${label}${key === 'title' ? `<input data-issue="${i}" data-prop="${key}" value="${esc(issue[key] || '')}">` : `<textarea data-issue="${i}" data-prop="${key}">${esc(issue[key] || '')}</textarea>`}</label>`,
           )
-          .join('')}</article>`,
+          .join('')}${issue.suggestion_source ? `<details><summary>Evidence retained when selected (not automatically refreshed)</summary><p>Re-review if the interview, pathology or medicines change. Editing the finding does not update this retained evidence.</p>${suggestionEvidenceHtml(issue.suggestion_source)}</details>` : ''}</article>`,
     )
     .join('');
   const file = (reportDetail.files?.folder || []).find((f) => /^mims interactions.*\.txt$/i.test(f));
@@ -314,13 +326,31 @@ async function reportEditorClick(b) {
     return true;
   }
   if (d.suggestionAdd !== undefined) {
-    const index = Number(d.suggestionAdd);
-    if (!reportAdded.has(index) && reportSuggestions[index]) {
-      reportRecord.issues.push(H.findingFromResult(reportSuggestions[index]));
+    const index = Number(d.suggestionAdd), item = reportSuggestions[index];
+    if (reportSuggestionAdding || reportAdded.has(index) || !item || !reportSuggestionSnapshot) return true;
+    const id = reportId, record = reportRecord, snapshot = reportSuggestionSnapshot;
+    reportSuggestionAdding = true;
+    try {
+      const current = await hmr.api('GET', `/api/patients/${encodeURIComponent(id)}/suggestions/context`);
+      if (reportId !== id || page !== 'report_editor' || reportRecord !== record || reportSuggestions[index] !== item || reportSuggestionSnapshot !== snapshot) return true;
+      if (current.context_snapshot_sha256 !== snapshot || item.context_snapshot_sha256 !== snapshot) {
+        reportSuggestionSnapshot = '';
+        reportSuggestionMessage = 'Source context changed. Reload suggestions and re-review the evidence before adding.';
+        if ($('suggestions')) $('suggestions').innerHTML = suggestionsHtml();
+        return true;
+      }
+      const finding = H.findingFromResult(item);
+      finding.suggestion_source = {version:1, context_snapshot_sha256:snapshot, evidence:item.evidence || []};
+      reportRecord.issues.push(finding);
       reportAdded.add(index);
       reportSaver.changed();
       renderReport();
-    }
+    } catch (error) {
+      if (reportId === id && page === 'report_editor' && reportRecord === record) {
+        reportSuggestionMessage = 'Could not verify source context: ' + errorText(error) + '. Nothing added.';
+        if ($('suggestions')) $('suggestions').innerHTML = suggestionsHtml();
+      }
+    } finally { reportSuggestionAdding = false; }
     return true;
   }
   if (d.reportSave !== undefined) {
