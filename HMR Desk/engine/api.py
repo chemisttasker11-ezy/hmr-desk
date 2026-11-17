@@ -22,6 +22,7 @@ import jobs
 import agents
 import records
 import medicine_reference
+import medicine_snapshot
 import steps
 import app_paths
 import manual_medicine_names
@@ -60,25 +61,24 @@ def report_data(conn, p):
 
 
 def proposal(conn, p):
+    saved = records.get_json(conn, p['id'], 'interview.json')
+    if saved is not None:
+        import interview
+        data = saved; interview.validate(data)
+        meds = []
+        for key, actual in (('meds', 2), ('other_meds', 1)):
+            rows = data.get(key, []); meta = data.get('details', {}).get(key, [{} for _ in rows])
+            for row, detail in zip(rows, meta):
+                status = detail.get('use_status', '')
+                if row[0].strip() and (status == 'taking' or (not status and row[actual].strip())): meds.append([row[0], ''])
+        usage = interview_usage(conn, p)
+        stopped = {name for item in usage if item['status'] == 'not_using' for name in mims.ingredients(item['name'])}
+        taking = {name for item in usage if item['status'] == 'taking' for name in mims.ingredients(item['name'])}
+        meds = [row for row in meds if not stopped.intersection(mims.ingredients(row[0])) or set(mims.ingredients(row[0])) <= taking]
+        return {'meds': meds, 'allergies': [x.strip() for x in data['allergies'].splitlines() if x.strip()], 'proposed': True}
     path = jobs.interview_spec_path(p)
     stored_spec = records.get_json(conn, p['id'], 'interview_spec.json')
     spec = stored_spec if stored_spec is not None else (json.loads(path.read_text(encoding='utf-8')) if path.is_file() else {})
-    if stored_spec is None and not path.is_file():
-        saved = records.get_json(conn, p['id'], 'interview.json')
-        if saved is not None:
-            import interview
-            data = saved; interview.validate(data)
-            meds = []
-            for key, actual in (('meds', 2), ('other_meds', 1)):
-                rows = data.get(key, []); meta = data.get('details', {}).get(key, [{} for _ in rows])
-                for row, detail in zip(rows, meta):
-                    status = detail.get('use_status', '')
-                    if row[0].strip() and (status == 'taking' or (not status and row[actual].strip())): meds.append([row[0], ''])
-            usage = interview_usage(conn, p)
-            stopped = {name for item in usage if item['status'] == 'not_using' for name in mims.ingredients(item['name'])}
-            taking = {name for item in usage if item['status'] == 'taking' for name in mims.ingredients(item['name'])}
-            meds = [row for row in meds if not stopped.intersection(mims.ingredients(row[0])) or set(mims.ingredients(row[0])) <= taking]
-            return {'meds': meds, 'allergies': [x.strip() for x in data['allergies'].splitlines() if x.strip()], 'proposed': True}
     meds = []
     for row in spec.get('meds', []):
         text = row[0] if isinstance(row, list) and row else row
@@ -128,10 +128,21 @@ def valid_alternatives(meds, usage, alternatives):
         if normal(row[0]) != normal(choice['name']) or any(normal(choice['name']) == normal(item['name']) for item in stopped): return False
     return True
 
+def current_medicine_snapshot(conn, p):
+    data = records.get_json(conn, p['id'], 'interview.json')
+    if data is None: return None
+    import interview
+    interview.validate(data)
+    return medicine_snapshot.snapshot(data)
+
+
 def confirmed_medicines_current(conn, p):
     data = records.get_json(conn, p['id'], 'confirmed_meds.json')
     if data is None: return False
     try:
+        if 'medicine_snapshot_sha256' in data:
+            current_snapshot = current_medicine_snapshot(conn, p)
+            if current_snapshot is None or medicine_snapshot.digest(current_snapshot) != data['medicine_snapshot_sha256']: return False
         meds = data['meds']
         if not isinstance(meds, list) or any(not isinstance(row, list) or len(row) != 2 or any(not isinstance(value, str) for value in row) for row in meds): return False
         current = relevant_usage(interview_usage(conn, p), meds)
@@ -949,11 +960,20 @@ def handle(conn, method, path, query, body):
                 result = records.get_json(conn, p['id'], 'confirmed_meds.json') or proposal(conn, p)
                 usage = interview_usage(conn, p)
                 result['interview_usage'] = usage
+                snapshot = current_medicine_snapshot(conn, p)
+                current_digest = medicine_snapshot.digest(snapshot) if snapshot is not None else 'missing'
+                result['medicine_snapshot_changed'] = 'medicine_snapshot_sha256' in result and result['medicine_snapshot_sha256'] != current_digest
+                result['medicine_snapshot'] = snapshot
+                result['medicine_snapshot_sha256'] = medicine_snapshot.digest(snapshot) if snapshot is not None else 'missing'
                 return 200, result
             if method == 'POST':
                 import interview
                 with interview.record_lock(p):
-                    if not isinstance(body, dict) or set(body) not in ({'meds', 'allergies'}, {'meds', 'allergies', 'interview_usage'}, {'meds', 'allergies', 'interview_usage', 'alternatives'}): raise ValueError('invalid medicine list')
+                    if not isinstance(body, dict) or set(body) - {'medicine_snapshot_sha256'} not in ({'meds', 'allergies'}, {'meds', 'allergies', 'interview_usage'}, {'meds', 'allergies', 'interview_usage', 'alternatives'}): raise ValueError('invalid medicine list')
+                    current_snapshot = current_medicine_snapshot(conn, p)
+                    current_digest = medicine_snapshot.digest(current_snapshot) if current_snapshot is not None else 'missing'
+                    if 'medicine_snapshot_sha256' in body and body['medicine_snapshot_sha256'] != current_digest: raise ValueError('Interview medicines or allergies changed; reload and review before confirming')
+                    if current_snapshot is not None and any(item['item_id'] for item in current_snapshot['items']) and 'medicine_snapshot_sha256' not in body: raise ValueError('Reload and review the current medicine snapshot before confirming')
                     meds, allergies = body['meds'], body['allergies']
                     if not isinstance(meds, list) or len(meds) > 60 or any(not isinstance(row, list) or len(row) != 2 or any(not isinstance(x, str) for x in row) or not row[0].strip() for row in meds): raise ValueError('invalid medicines')
                     usage = interview_usage(conn, p)
@@ -965,6 +985,8 @@ def handle(conn, method, path, query, body):
                     if not valid_alternatives(meds, relevant, alternatives): raise ValueError('Select the medicine actually taking for each stopped overlap')
                     if not isinstance(allergies, list) or len(allergies) > 60 or any(not isinstance(x, str) for x in allergies): raise ValueError('invalid allergies')
                     data = {'meds': meds, 'allergies': allergies, 'confirmed_at': db.now(), 'interview_usage': relevant, 'alternatives': alternatives}
+                    if current_snapshot is not None:
+                        data.update(medicine_snapshot=current_snapshot, medicine_snapshot_sha256=current_digest)
                     records.put_json(conn, p['id'], 'confirmed_meds.json', data)
                     db.log(conn, p['id'], 'meds_confirmed', {}, 'api'); conn.commit()
                     return 200, data
