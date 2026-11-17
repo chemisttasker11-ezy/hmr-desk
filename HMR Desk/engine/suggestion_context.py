@@ -119,6 +119,7 @@ def build(conn, patient, today=None):
             eligible=not duplicate, unit='', reference_interval='',
             verification='UNVERIFIED legacy text; confirm against original',
             source='interview.json/pathology/'+str(n))
+    import pathology_values
     for row in pathology['records']:
         audit = pathology['verification'].get(row['id'], {})
         verified = (row['verified'] and isinstance(audit, dict) and
@@ -135,6 +136,7 @@ def build(conn, patient, today=None):
             unit=row['unit'], reference_interval=row['reference_interval'], comment=row['comment'],
             verification='named pharmacist verified' if verified else 'UNVERIFIED: check original',
             source=row['source'], test=row['test'], value=row['value'],
+            structured=pathology_values.structure(row['value'], row['reference_interval']) or {},
             verified_by=audit['verified_by'] if verified else '',
             verified_at=audit['verified_at'] if verified else '')
         item = evidence[-1] if evidence and evidence[-1]['id']=='pathology:'+row['id'] else None
