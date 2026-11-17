@@ -156,7 +156,7 @@ def make_index(cases, library_text, brainstorm_text, mapping=None, tuning=1, bra
 class LibraryUnavailable(ValueError):
  """Required reviewed local reference inputs are unavailable; never invent a corpus."""
 
-INDEX_ALGORITHM_VERSION = 3
+INDEX_ALGORITHM_VERSION = 4
 
 def build_index():
  refs=jobs.SKILL/'references'
@@ -259,7 +259,7 @@ def suggest(context, index=None):
     if kind=='topic': patterns.append(TOPICS[value])
     elif kind=='class': patterns.append(SYNONYMS.get(value, r'(?<!\w)'+re.escape(value)+r's?(?!\w)'))
     elif kind=='med': patterns.append(r'(?<!\w)'+re.escape(value)+r'(?!\w)')
-   brain={'title':section['title'],'page':section['page'],'snippet':brainstorm.snippet(section['text'],patterns)}
+   brain=brainstorm.passage(section,patterns)
   elif not index.get('brainstorm_sections'):
    line=next((x['line'] for x in index['brainstorm'] if key in x['keys']),None)
    if line: brain={'title':line,'page':None,'snippet':line[:300]}
