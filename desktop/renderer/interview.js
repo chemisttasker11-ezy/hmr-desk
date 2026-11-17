@@ -51,6 +51,7 @@ let interviewEdited = new Set(),
 function interviewStatus(message) {
   interviewSaveStatus = message;
   if ($('interview-status')) $('interview-status').textContent = message;
+  if(/^Saved/.test(message) && typeof refreshEvidenceReferences==='function')setTimeout(refreshEvidenceReferences,0);
 }
 const interviewSaver = H.autosaver({
   getRecord: () => interviewRecord,
@@ -67,6 +68,7 @@ const interviewDirty = () => interviewSaver.dirty();
 const saveInterview = (force = false) => interviewSaver.save(force);
 const growInterview = H.growTextarea;
 function interviewChanged(field) {
+  if(typeof invalidateEvidenceReferences==='function')invalidateEvidenceReferences();
   interviewEdited.add(field);
   document.querySelector(`[data-source="${field}"]`)?.remove();
   interviewSaver.changed();
@@ -401,12 +403,13 @@ function renderInterview() {
     ${interviewPathology ? `<div class="table-scroll"><table><thead><tr>${pathologyCols.map(([,label])=>`<th>${esc(label)}</th>`).join('')}<th>Verified</th><th>Remove</th></tr></thead><tbody>${interviewPathology.records.map((r,i)=>`<tr>${pathologyCols.map(([key,label])=>`<td><input aria-label="${esc(label)} row ${i+1}" type="${key==='sample_date'?'date':'text'}" data-pathology-entry="${i}" data-pathology-field="${key}" value="${esc(r[key])}"></td>`).join('')}<td><input aria-label="Verify row ${i+1}" type="checkbox" data-pathology-entry="${i}" data-pathology-field="verified" ${r.verified?'checked':''}></td><td><button type="button" data-pathology-remove="${i}">Remove</button></td></tr>`).join('')}</tbody></table></div>
     <div class="actions"><button type="button" data-pathology-add>Add pathology result</button><button type="button" data-pathology-save>Save pathology</button><span>${interviewPathologyDirty?'Unsaved changes':'Saved'}</span></div>` : '<p>Pathology records unavailable until engine reconnects.</p>'}
     </section>`;
-  const formSections = sections.join('') + pathologyView + reconciliationView;
+  const formSections = sections.join('') + pathologyView + reconciliationView + (typeof evidenceReferencePanel==='function' ? evidenceReferencePanel() : '');
   $('screen').innerHTML =
     interviewPicker() + `<div class="interview-context"><span class="interview-context-patient" title="${esc(header[0])}">${esc(header[0])}</span><span id="interview-status" role="status">${esc(interviewSaveStatus)}</span><button type="button" data-interview-save>Save</button><div id="interview-outstanding">${interviewOutstanding()}</div></div>${record.details.reason?.trim() ? `<p>Reason for referral: ${esc(record.details.reason)}</p>` : ''}${header[1] ? `<p class="interview-header">${esc(header[1])}</p>` : ''}<div class="interview-layout"><div>${formSections}<div class="actions interview-actions"><button type="button" class="primary" data-interview-record-visit>Record visit</button><button type="button" data-interview-save>Save</button><details class="more-actions"><summary>More actions</summary><div class="actions"><button data-interview-export="docx">Export Word</button><button data-interview-export="pdf">Export PDF</button><button data-interview-export="both">Interview pack</button>${interviewAi ? `<button data-interview-assist title="${esc(interviewAgent)}">Suggest points (AI)</button>` : ''}<button data-interview-folder>Open folder</button></div></details></div><pre id="interview-output" role="status">${esc(interviewOutput)}</pre></div><nav class="interview-index" aria-label="Interview sections"><a href="#section-notes">Back to notes</a>${interviewSections
       .slice(1)
       .map(([key, title]) => `<a href="#section-${key}">${esc(({meds: 'Referral medicines', other_meds: 'Found medicines', not_using_meds: 'Not using', allergies: 'Allergies', manages_meds: 'Managing medicines'})[key] || title)}</a>`)
       .join('')}</nav></div>`;
+  if(typeof refreshEvidenceReferences==='function')refreshEvidenceReferences();
   document.querySelectorAll('.interview-section textarea').forEach(growInterview);
   if (focus) { const el = document.querySelector(`[data-field="${focus.key}"][data-row="${focus.row}"][data-col="${focus.col}"]`); if (el) { el.focus(); el.setSelectionRange(focus.start, focus.end); } }
 }
@@ -650,7 +653,7 @@ document.addEventListener('input', event => {
   const row = interviewPathology.records[Number(input.dataset.pathologyEntry)];
   if (!row || !Object.hasOwn(row, input.dataset.pathologyField)) return;
   row[input.dataset.pathologyField] = input.dataset.pathologyField === 'verified' ? input.checked : input.value;
-  interviewPathologyDirty = true;
+  interviewPathologyDirty = true; if(typeof invalidateEvidenceReferences==='function')invalidateEvidenceReferences();
 });
 
 async function interviewClick(b) {
@@ -681,17 +684,17 @@ async function interviewClick(b) {
     interviewPathology.records.push({id:crypto.randomUUID().replace(/-/g,''),test:'',value:'',
       unit:'',reference_interval:'',sample_date:'',source:source.name + ' page ' + page +
       ' sha256:' + source.sha256,verified:false,comment:'UNVERIFIED — compare source PDF before confirming'});
-    interviewPathologyDirty = true;
+    interviewPathologyDirty = true; if(typeof invalidateEvidenceReferences==='function')invalidateEvidenceReferences();
     renderInterview(); return true;
   }
   if (b.dataset.pathologyAdd !== undefined && interviewPathology) {
     interviewPathology.records.push({id: crypto.randomUUID().replace(/-/g,''),test:'',value:'',unit:'',
       reference_interval:'',sample_date:'',source:'',verified:false,comment:''});
-    interviewPathologyDirty = true; renderInterview(); return true;
+    interviewPathologyDirty = true; if(typeof invalidateEvidenceReferences==='function')invalidateEvidenceReferences(); renderInterview(); return true;
   }
   if (b.dataset.pathologyRemove !== undefined && interviewPathology) {
     interviewPathology.records.splice(Number(b.dataset.pathologyRemove),1);
-    interviewPathologyDirty = true; renderInterview(); return true;
+    interviewPathologyDirty = true; if(typeof invalidateEvidenceReferences==='function')invalidateEvidenceReferences(); renderInterview(); return true;
   }
   if (b.dataset.pathologySave !== undefined) {
     await savePathologyRecords(); renderInterview(); return true;
