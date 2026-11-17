@@ -51,3 +51,15 @@ def test_scan_fails_closed_without_ocr(tmp_path, monkeypatch):
     extracted = local_referral_extraction.extract(folder, folder / 'case-images')
     assert 'OCR UNAVAILABLE' in extracted and 'VIEW ORIGINAL PDF' not in extracted
     assert (folder / 'scan.pdf').is_file()
+
+
+def test_clean_strips_common_pdf_bullet_glyphs():
+    import referral
+    # Synthetic leading-bullet variants observed in PDF text extraction.
+    variants = ['•', '●', '■', '·', '∙', '‣', '▪', '⁃', '*', '-']
+    for mark in variants:
+        assert referral.clean(mark + ' Aspirin 100mg tablet') == 'Aspirin 100mg tablet'
+        assert referral.clean('  ' + mark + ' ' + mark + ' Warfarin 5mg') == 'Warfarin 5mg'
+    # Interior glyphs are content, never stripped.
+    assert referral.clean('Give 1 · 2 doses daily') == 'Give 1 · 2 doses daily'
+    assert referral.clean('Metformin 500mg') == 'Metformin 500mg'
