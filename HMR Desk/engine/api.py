@@ -847,6 +847,14 @@ def handle(conn, method, path, query, body):
             try: return 200, reference_matches.for_patient(conn,patient)
             except reference_library.ReferenceUnavailable as exc:
                 return 409, {'error':str(exc),'matches':[], 'review_status':'reference_unavailable'}
+        match = re.fullmatch(r'/api/patients/(\d+)/candidate-checks', path)
+        if method == 'GET' and match:
+            import candidate_checks
+            patient=conn.execute('SELECT * FROM patients WHERE id=?',(int(match[1]),)).fetchone()
+            if not patient: return 404, {'error':'patient not found'}
+            try: return 200, candidate_checks.for_patient(conn,patient)
+            except ValueError as exc:
+                return 409, {'error':str(exc),'observations':[], 'review_status':'checks_unavailable'}
         match = re.fullmatch(r'/api/patients/(\d+)/suggestions(?:/context)?', path)
         if method == 'GET' and match:
             import suggest
