@@ -145,3 +145,22 @@ def test_install_refuses_target_as_source(tmp_path=None):
             ref.install(str(target)); assert False
         except ValueError as e:
             assert 'already the installed reference' in str(e)
+
+
+def test_install_first_time_reports_no_previous_retained():
+    with tempfile.TemporaryDirectory() as t:
+        fresh(t)
+        new = candidate(t)
+        result = ref.install(str(new))
+        assert result['previous_retained'] is False
+        assert not (Path(t) / 'medicine-reference.previous.sqlite').exists()
+
+
+def test_install_replace_reports_previous_retained():
+    with tempfile.TemporaryDirectory() as t:
+        target = fresh(t)
+        build(target)
+        new = candidate(t)
+        result = ref.install(str(new))
+        assert result['previous_retained'] is True
+        assert (Path(t) / 'medicine-reference.previous.sqlite').exists()
