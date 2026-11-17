@@ -1,5 +1,7 @@
-﻿import datetime as dt
+import datetime as dt
 import hashlib
+import copy
+import medicine_snapshot
 from contextlib import contextmanager
 import threading
 import importlib.util
@@ -68,6 +70,9 @@ def reference_text(meta):
     return 'Reference: ' + ref['display'] + ' (' + ref['source'].upper() + ' ' + ref['code'] + ', release ' + ref['release'] + ')' if valid_reference(ref) else ''
 
 def valid_use(m, base, optional):
+    if 'item_id' in m:
+        if not medicine_snapshot.valid_id(m['item_id']): return False
+        m = {k: v for k, v in m.items() if k != 'item_id'}
     if 'reference' in m:
         if not valid_reference(m['reference']): return False
         m = {k: v for k, v in m.items() if k != 'reference'}
@@ -243,6 +248,7 @@ def validate(record):
         if 'other_meds' in d and (not isinstance(d['other_meds'], list) or len(d['other_meds']) != len(record['other_meds']) or any(not isinstance(m, dict) or not valid_use(m, {'checked', 'priority'}, {'kind'}) or type(m['checked']) is not bool or type(m['priority']) is not int or not 0 <= m['priority'] <= 1000000 for m in d['other_meds'])): raise ValueError('invalid other medicine details')
         for key, field in (('meds', 'prn_use'), ('other_meds', 'kind')):
             for m in d.get(key, []): m.setdefault(field, '')
+    medicine_snapshot.validate_ids(record)
     if 'consent_signed_draft' in record and (type(record['consent_signed_draft']) is not bool or (record['consent_signed_draft'] and c['signed'])): raise ValueError('invalid consent draft')
     if 'revision' in record and (not isinstance(record['revision'], str) or not re.fullmatch(r'missing|[0-9a-f]{64}', record['revision'])): raise ValueError('invalid revision')
     if 'saved' in record and not isinstance(record['saved'], bool): raise ValueError('invalid saved flag')
@@ -315,6 +321,16 @@ def save(conn, patient, record, *, locked=False, signing=False):
     previous = json.loads(previous_bytes.decode('utf-8')) if previous_bytes is not None else {}
     was_signed = previous.get('consent', {}).get('signed') is True
     if not signing and was_signed and signed_file(folder) and (data['consent'] != previous['consent'] or data.get('consent_signed_draft', False)): raise ValueError('signed consent cannot be changed')
+    # IDs are technical metadata only. No actual-use or identity approval is inferred.
+    # Normalise only an explicit save, never a read, retaining previous exact bytes below.
+    data = copy.deepcopy(data)
+    if 'details' not in data:
+        data['details'] = empty_details()
+        data['details']['meds'] = [{'packed': '', 'as_instructed': False} for _ in data['meds']]
+    data['details'].setdefault('meds', [{'packed': '', 'as_instructed': False} for _ in data['meds']])
+    data['details'].setdefault('other_meds', [{'checked': False, 'priority': 0} for _ in data['other_meds']])
+    data = medicine_snapshot.assign_ids(data)
+    validate(data)
     if previous_bytes is not None:
         records.put(conn, patient['id'], 'interview.json.bak', previous_bytes)
     records.put(conn, patient['id'], 'interview.json', json.dumps(data, ensure_ascii=False, indent=2).encode('utf-8'))
