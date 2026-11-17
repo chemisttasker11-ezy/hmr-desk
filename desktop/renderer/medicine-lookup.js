@@ -6,7 +6,7 @@ function interviewLookupControls(key, meta, i) {
   const evidence = meta?.source_evidence;
   const original = evidence ? `<details class="med-source"><summary>Extracted referral text (not current use)</summary>${evidence.lines.map((line,n)=>`<p>${esc(line)} <small>${evidence.page_candidates[n].length === 1 ? `Text located on page ${evidence.page_candidates[n][0]}` : evidence.page_candidates[n].length ? `Page candidates: ${evidence.page_candidates[n].join(', ')}` : 'Page not established'}</small></p>`).join('')}</details>` : '';
   const proposal = medicineSuggestions.get(meta);
-  const suggestions = !ref && proposal ? `<div class="medicine-proposals"><p>${esc(({exact_candidate:'Exact displayed-text candidate, not confirmed. Check strength, form and release type.',ambiguous:'More than one exact text candidate. Choose only after reviewing the original.',review_candidates:'Possible matches only. OCR or product details differ; do not guess.',unmatched:'No catalogue candidate. Keep the source/free text and review it.',unavailable:'Medicine reference unavailable. Free text still works.'})[proposal.state] || 'Review medicine candidates.')}${proposal.truncated ? ' More candidates exist; use manual lookup to narrow.' : ''}</p>${proposal.candidates.map((r,n)=>`<div class="med-lookup-result"><span>${esc(r.display)} [${esc(r.kind)}]${r.generic_name ? ` | Modelled generic: ${esc(r.generic_name)}` : ''} | ${esc(r.source.toUpperCase())} ${esc(r.code)}, release ${esc(r.release)}</span><button type="button" data-med-suggestion="${esc(key)}" data-row="${i}" data-candidate="${n}">Use this</button></div>`).join('')}</div>` : '';
+  const suggestions = !ref && proposal ? `<div class="medicine-proposals"><p>${esc(({exact_candidate:'Exact displayed-text candidate, not confirmed. Check strength, form and release type.',ambiguous:'More than one exact text candidate. Choose only after reviewing the original.',review_candidates:'Possible matches only. OCR or product details differ; do not guess.',unmatched:'No catalogue candidate. Keep the source/free text and review it.',unavailable:'Medicine reference unavailable. Free text still works.'})[proposal.state] || 'Review medicine candidates.')}${proposal.prepared==='intake' ? ' Prepared at intake from the referral text; the catalogue entry was re-checked when this interview opened.' : ''}${proposal.truncated ? ' More candidates exist; use manual lookup to narrow.' : ''}</p>${proposal.candidates.map((r,n)=>`<div class="med-lookup-result"><span>${esc(r.display)} [${esc(r.kind)}]${r.generic_name ? ` | Modelled generic: ${esc(r.generic_name)}` : ''} | ${esc(r.source.toUpperCase())} ${esc(r.code)}, release ${esc(r.release)}</span><button type="button" data-med-suggestion="${esc(key)}" data-row="${i}" data-candidate="${n}">Use this</button></div>`).join('')}</div>` : '';
   return `<div class="med-lookup">${original}${suggestions}<button type="button" data-med-lookup="${esc(key)}" data-row="${i}">Look up medicine</button>${linked}<div class="med-lookup-results" data-med-results="${esc(key)}-${i}" role="status"></div></div>`;
 }
 // Editing a linked name makes the previous identity ambiguous. Never keep a silent stale link.
@@ -83,8 +83,15 @@ async function medicinePrefillSuggestions() {
     if (page !== 'interview' || interviewId !== patient || interviewRecord !== record) return;
     if (!Array.isArray(result.results) || result.results.length !== rows.length) return;
     rows.forEach((entry,n)=>{
-      const proposal=result.results[n], {row,meta,i}=entry;
+      let proposal=result.results[n], {row,meta,i}=entry;
       if (record.meds[i] !== row || record.details.meds[i] !== meta || row[0] !== queries[n] || meta.reference || proposal.input_text !== queries[n]) return;
+      // A stored intake proposal is provenance, never authority: show it as
+      // intake-prepared only when the current catalogue still resolves the same
+      // unique exact candidate with identical contents for this row's text.
+      const p=meta.prefill_proposal;
+      if (p && p.candidate && p.input_text===row[0] && proposal.state==='exact_candidate' && proposal.candidates.length===1
+          && ['source','code','display','kind','generic_name','brand_name','dose_form','release'].every(k=>proposal.candidates[0][k]===p.candidate[k]))
+        proposal={...proposal,prepared:'intake'};
       medicineSuggestions.set(meta,proposal);
       const block=document.querySelector(`[data-med-results="meds-${i}"]`)?.closest('.med-lookup');
       if (block) block.outerHTML=interviewLookupControls('meds',meta,i);
@@ -92,4 +99,4 @@ async function medicinePrefillSuggestions() {
   } catch {
     // Suggestions never block the saved interview or silently set a reference.
   }
-                                                                                   }
+    }
