@@ -81,3 +81,21 @@ def test_excerpt_omissions_are_explicit_and_text_stays_within_page():
     assert hit['snippet'] in text and len(hit['snippet'])<=300
     assert hit['omitted_before'] and hit['omitted_after']
     assert 'target-match' in hit['snippet']
+
+
+def test_structured_marker_mode_keeps_inline_bold_body_emphasis(tmp_path,monkeypatch):
+    monkeypatch.setattr(db,'DATA_DIR',str(tmp_path/'cache'));path=tmp_path/'markers.pdf';doc=fitz.open();p=doc.new_page()
+    marker=(0,166/255,237/255)
+    p.insert_text((40,40),'Synthetic actual heading',color=marker)
+    p.insert_text((40,70),'Beginning source body, enough original text to retain this section.')
+    p.insert_text((40,100),'An emphasised interval is body text',fontname='hebo')
+    p.insert_text((40,130),'Continuation still belongs to the original marked heading.')
+    p.insert_text((40,170),'Synthetic second heading',color=marker)
+    p.insert_text((40,200),'Second original body, independently indexed and page-linked.')
+    doc.save(path);doc.close()
+    sections=brainstorm.sections(path,True)
+    assert len(sections)==2 and 'emphasised interval' in sections[0]['text']
+    assert sections[0]['title']=='Synthetic actual heading'
+    assert all('emphasised interval' not in s['title'] for s in sections)
+    # Separate cache means existing manual/legacy parser results are not substituted.
+    assert len(brainstorm.sections(path))==3
