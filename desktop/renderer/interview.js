@@ -722,9 +722,14 @@ document.addEventListener('focusout', (event) => {
 let interviewPathologySaveChain = Promise.resolve();
 async function savePathologyRecords() {
   if (!interviewPathology || !interviewPathologyDirty) return true;
-  // Serialize saves for this screen: an older in-flight response must never
-  // overwrite a newer adopted revision.
-  const run = interviewPathologySaveChain.then(() => savePathologyRecordsNow());
+  // Capture the queue boundary NOW: the chain body must not read globals when
+  // it later executes - a save queued for one patient/screen must never run
+  // after a switch and act on the new patient.
+  const queuePatient = interviewId, queueRequest = interviewRequest;
+  const run = interviewPathologySaveChain.then(() => {
+    if (interviewId !== queuePatient || interviewRequest !== queueRequest) return false;
+    return savePathologyRecordsNow();
+  });
   interviewPathologySaveChain = run.catch(() => {});
   return run;
 }
