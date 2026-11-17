@@ -7,6 +7,8 @@ sqlcipher_datas, sqlcipher_binaries, sqlcipher_hidden = collect_all('sqlcipher3'
 root = Path(SPECPATH)
 assets = root / 'assets'
 datas = [(str(assets), 'assets')] if assets.is_dir() else []
+# Application-owned mapping, not a licensed clinical corpus.
+datas.append((str(root / 'drug_classes.json'), '.'))
 # Include the legacy parser as a bundled application-owned resource until it is
 # completely replaced by local modules. The frozen runtime never uses a Python script path.
 legacy = root.parent.parent / 'scripts' / 'intake'
