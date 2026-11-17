@@ -42,7 +42,7 @@ with tempfile.TemporaryDirectory() as tmp:
   future=time.time()+2; os.utime(refs/'finding-library.md',(future,future)); assert 'stale' not in suggest.build_index()
   conn=db.connect(str(root/'db.sqlite')); conn.execute("INSERT INTO patients(key,name,folder) VALUES ('a','A','patient')"); conn.commit()
   status,result=api.handle(conn,'GET','/api/patients/1/suggestions',{},None)
-  assert status==200 and set(result)=={'suggestions','context_gaps'}
+  assert status==200 and set(result)=={'suggestions','context_gaps','context_snapshot_sha256'}
   status,result=api.handle(conn,'GET','/api/library',{'q':['metformin']},None)
   assert status==200 and any(x['source']=='Brainstorm V2 p.1' and x['title']=='Metformin' and 'Metformin' in x['snippet'] for x in result['results'])
   conn.close()
