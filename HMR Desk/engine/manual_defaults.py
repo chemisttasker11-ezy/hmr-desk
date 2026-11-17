@@ -27,8 +27,9 @@ _STOCK = re.compile(r"^If you have no objections, I will see .+ again in a few m
 _PROPOSED = re.compile(r"^No follow-up interview is planned at this time\. Please contact me if you would like to discuss these findings or if .+'s clinical condition changes\.$")
 
 
-def text_sha(text):
-    return hashlib.sha256((text or "").strip().encode("utf-8")).hexdigest()
+def text_sha(text, decision=""):
+    """Review hash covers the decision as well as the exact wording."""
+    return hashlib.sha256(((decision or "") + "\n" + (text or "").strip()).encode("utf-8")).hexdigest()
 
 
 def looks_generated(text):
@@ -39,7 +40,7 @@ def looks_generated(text):
 
 def review_valid(data):
     """A review is bound to the exact follow-up text (sha256 stored when the pharmacist confirmed it)."""
-    return bool(data.get("followup_reviewed_sha256")) and data["followup_reviewed_sha256"] == text_sha(data.get("followup", ""))
+    return bool(data.get("followup_reviewed_sha256")) and data["followup_reviewed_sha256"] == text_sha(data.get("followup", ""), data.get("followup_decision", ""))
 
 
 def initial_text(patient_name, gp_name):

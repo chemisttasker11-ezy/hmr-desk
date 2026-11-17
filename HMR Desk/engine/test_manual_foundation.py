@@ -146,7 +146,7 @@ def test_not_required_wording_is_proposed_until_reviewed_for_that_exact_text():
     base = {**manual_defaults.initial_text("Synthetic Patient", "GP"), "name": "Synthetic Patient", "followup_decision": "not_required"}
     d = manual_defaults.apply_followup_decision(base)
     assert "No follow-up interview is planned" in d["followup"] and manual_defaults.unresolved(d) == ["followup_review"]
-    ok = {**d, "followup_reviewed_sha256": manual_defaults.text_sha(d["followup"])}
+    ok = {**d, "followup_reviewed_sha256": manual_defaults.text_sha(d["followup"], "not_required")}
     assert manual_defaults.unresolved(ok) == []
     assert manual_defaults.unresolved({**ok, "followup": d["followup"] + " Edited."}) == []  # authored edit is no longer generated wording
 
@@ -156,7 +156,7 @@ def test_legacy_stock_flagged_for_any_name_until_reviewed_and_new_specs_cannot_d
     legacy = {"name": "Synthetic Patient", "followup": stock, "needs_review": []}
     assert manual_defaults.unresolved(legacy) == ["followup_review"]
     assert manual_defaults.apply_followup_decision(legacy)["followup"] == stock  # words preserved
-    assert manual_defaults.unresolved({**legacy, "followup_reviewed_sha256": manual_defaults.text_sha(stock)}) == []
+    assert manual_defaults.unresolved({**legacy, "followup_reviewed_sha256": manual_defaults.text_sha(stock, "")}) == []
     assert manual_defaults.unresolved({**legacy, "followup": "My own plan."}) == []
     new = manual_defaults.initial_text("Synthetic Patient", "GP"); del new["followup_decision"]
     assert manual_defaults.unresolved(new) == ["followup_decision"]

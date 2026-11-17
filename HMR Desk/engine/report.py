@@ -49,6 +49,7 @@ def load(conn, patient, ai=False):
     data = records.get_json(conn, patient['id'], 'report_spec.ai.json' if ai else 'report_spec.json')
     if data is None: return {'saved': False}
     validate(data)
+    if not ai: data = with_trusted_policy(conn, patient, data)
     if not ai: data['followup_text_reviewed'] = manual_defaults.review_valid(data)
     if not ai: data['interview_newer'] = 'interview_revision' in data and interview.revision(conn, patient) != data['interview_revision']
     if not ai:
@@ -59,6 +60,22 @@ def load(conn, patient, ai=False):
 def save(conn, patient, data):
     with _lock: return _save(conn, patient, data)
 
+POLICY_RECORD = 'report_spec.policy.json'
+
+
+def trusted_policy(conn, patient):
+    """Whether this spec was created under the follow-up decision policy. Persisted by the engine when the spec is
+    created, never taken from a request, so deleting the marker or the decision from a payload cannot downgrade it."""
+    saved = records.get_json(conn, patient['id'], POLICY_RECORD)
+    return manual_defaults.POLICY_VERSION if isinstance(saved, dict) and saved.get('version') == manual_defaults.POLICY_VERSION else None
+
+
+def with_trusted_policy(conn, patient, data):
+    data = {k: v for k, v in data.items() if k != 'followup_policy'}
+    policy = trusted_policy(conn, patient)
+    return {**data, 'followup_policy': policy} if policy else data
+
+
 def _bind_followup_review(data, old):
     """followup_text_reviewed=True from the client means 'I reviewed the follow-up text now saved'. It is stored as a hash
     of that exact text, and only when the text and the decision are unchanged from the previous save; otherwise it is dropped."""
@@ -66,12 +83,13 @@ def _bind_followup_review(data, old):
     text = data.get('followup', '').strip()
     unchanged = bool(old) and old.get('followup', '').strip() == text and old.get('followup_decision') == data.get('followup_decision')
     keep = old.get('followup_reviewed_sha256', '') if unchanged else ''
-    if asked and unchanged: keep = manual_defaults.text_sha(text)
-    if keep != manual_defaults.text_sha(text): keep = ''
+    if asked and unchanged: keep = manual_defaults.text_sha(text, data.get('followup_decision', ''))
+    if keep != manual_defaults.text_sha(text, data.get('followup_decision', '')): keep = ''
     return {**data, 'followup_reviewed_sha256': keep} if (keep or old.get('followup_reviewed_sha256') or 'followup_decision' in data) else data
 
 
 def _save(conn, patient, data):
+    data = with_trusted_policy(conn, patient, data)
     validate(data)
     data = manual_defaults.apply_followup_decision({k: v for k, v in data.items() if k not in ('interview_newer', 'pathology_newer')})
     previous = records.get(conn, patient['id'], 'report_spec.json')
@@ -250,6 +268,7 @@ def start(conn, patient):
     validate(data)
     try: records.put(conn, patient['id'], 'report_spec.json', records.dumps(data), expected_revision='missing')
     except records.Conflict: raise FileExistsError('report spec already exists')
+    records.put_json(conn, patient['id'], POLICY_RECORD, {'version': manual_defaults.POLICY_VERSION})
     db.log(conn, patient['id'], 'report_started', {}, 'job')
     conn.commit()
     return data

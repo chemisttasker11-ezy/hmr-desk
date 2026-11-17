@@ -259,7 +259,7 @@ def report_build(patient_id, pdf=False):
         folder = patient_folder(p)
         spec_bytes = record_store.get(conn, p['id'], 'report_spec.json')
         if spec_bytes is None: raise FileNotFoundError('Report spec missing')
-        data = json.loads(spec_bytes.decode('utf-8-sig'))
+        data = report.with_trusted_policy(conn, p, json.loads(spec_bytes.decode('utf-8-sig')))
         report.validate(data)
         import interview, pathology_records
         if data.get('interview_revision') and data['interview_revision'] != interview.revision(conn, p):

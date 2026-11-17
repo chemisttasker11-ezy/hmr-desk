@@ -161,6 +161,11 @@ def test_report_workflow(monkeypatch):
             assert api.handle(conn,'POST','/api/patients/1/report',{},spec)[0] == 200
             assert records.exists(conn, p['id'], 'report_spec.json.bak') and api.next_step(p, conn) == 'build report'
             assert report.placeholders(spec) == ['intro', 'followup_decision']
+            # Trusted provenance: removing the decision and/or marker from a request cannot downgrade the spec to legacy.
+            stripped = {k: v for k, v in spec.items() if k not in ('followup_decision', 'followup_policy')}
+            assert api.handle(conn,'POST','/api/patients/1/report',{},stripped)[0] == 400
+            assert api.handle(conn,'POST','/api/patients/1/report',{},{k: v for k, v in spec.items() if k != 'followup_decision'})[0] == 400
+            assert report.load(conn, p)['followup_policy'] == 2
             try: jobs.report_build(p['id']); assert False
             except ValueError as exc: assert 'intro' in str(exc) and 'followup_decision' in str(exc) and 'thanks' not in str(exc)
             # Placeholder semantics (a4c195f): a needs_review field is unresolved while its text is empty.
@@ -324,7 +329,7 @@ def test_real_pdf_converter_when_available(tmp_path):
 def test_followup_review_binding_and_key_validation(tmp_path):
     import manual_defaults
     base = {'followup_decision': 'not_required', 'followup': 'x'}
-    old = {**base, 'followup': manual_defaults.not_required_followup('A B'), 'followup_reviewed_sha256': manual_defaults.text_sha(manual_defaults.not_required_followup('A B'))}
+    old = {**base, 'followup': manual_defaults.not_required_followup('A B'), 'followup_reviewed_sha256': manual_defaults.text_sha(manual_defaults.not_required_followup('A B'), 'not_required')}
     same = report._bind_followup_review({**old, 'followup_text_reviewed': True}, old)
     assert same['followup_reviewed_sha256'] == old['followup_reviewed_sha256'] and 'followup_text_reviewed' not in same
     edited = report._bind_followup_review({**old, 'followup': old['followup'] + ' more', 'followup_text_reviewed': True}, old)
