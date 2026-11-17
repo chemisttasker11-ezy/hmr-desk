@@ -207,3 +207,79 @@ def test_invalid_cached_page_is_not_a_crash_or_false_citation(tmp_path,monkeypat
     conn=reference_tables.open_index(library.current(),matches.anchors);conn.execute('UPDATE sections SET page_end=99999');conn.commit();conn.close()
     with pytest.raises(library.ReferenceUnavailable,match='pages are invalid'):
         matches.retrieve(context([evidence('notes','interview notes','Synthetic hydration')]))
+
+def test_verified_comment_matches_and_unmatched_rows_are_listed_not_assessed(tmp_path,monkeypatch):
+    monkeypatch.setattr(db,'DATA_DIR',str(tmp_path/'data'));reference(tmp_path,monkeypatch)
+    base={'date':'2026-11-01','flags':[],'unit':'mL/min/1.73m2','reference_interval':'original range',
+        'verified_by':'Synthetic Reviewer','verified_at':'2026-11-17T12:00:00'}
+    commented=evidence('pathology:'+'c'*32,'pathology','eGFR: 41 | synthetic hydration noted',
+        verification='named pharmacist verified',comment='synthetic hydration noted',**base)
+    unverified=evidence('pathology:'+'d'*32,'pathology','eGFR: 40 | synthetic hydration noted',
+        verification='UNVERIFIED: check original',comment='synthetic hydration noted',**base)
+    plain=evidence('pathology:'+'e'*32,'pathology','Potassium: 4.1',
+        verification='named pharmacist verified',comment='',**base)
+    result=matches.retrieve(context([commented,unverified,plain]))
+    ids={h['evidence']['id'] for h in result['matches']}
+    assert commented['id'] in ids and unverified['id'] not in ids
+    assert any('synthetic hydration' in h['matched_heading_words'] for h in result['matches'] if h['evidence']['id']==commented['id'])
+    # Unmatched verified rows are reported as checked, never dropped or inferred.
+    assert [e['id'] for e in result['unmatched_evidence']]==[plain['id']]
+    assert result['unmatched_evidence'][0]['text']=='Potassium: 4.1'
+    assert unverified['id'] in result['excluded_evidence_ids']
+
+def test_comment_edit_and_removal_change_snapshot_and_matches(tmp_path,monkeypatch):
+    monkeypatch.setattr(db,'DATA_DIR',str(tmp_path/'data'));reference(tmp_path,monkeypatch)
+    base={'date':'2026-11-01','flags':[],'unit':'mL/min/1.73m2','reference_interval':'original range',
+        'verified_by':'Synthetic Reviewer','verified_at':'2026-11-17T12:00:00',
+        'verification':'named pharmacist verified'}
+    # Test name chosen so no fixture heading matches it; only the comment can drive a match.
+    with_comment=evidence('pathology:'+'c'*32,'pathology','Potassium: 4.1 | synthetic hydration noted',comment='synthetic hydration noted',**base)
+    edited=evidence('pathology:'+'c'*32,'pathology','Potassium: 4.1 | fluid status reviewed',comment='fluid status reviewed',**base)
+    removed=evidence('pathology:'+'c'*32,'pathology','Potassium: 4.1',comment='',**base)
+    first=matches.retrieve(context([with_comment]))
+    assert any('synthetic hydration' in h['matched_heading_words'] for h in first['matches'])
+    second=matches.retrieve(context([edited]))
+    assert not any('synthetic hydration' in h['matched_heading_words'] for h in second['matches'])
+    third=matches.retrieve(context([removed]))
+    assert third['matches']==[] and [e['id'] for e in third['unmatched_evidence']]==[removed['id']]
+    # Each saved comment state produces a distinct evidence snapshot, so cached results cannot survive an edit.
+    snaps={matches.retrieve(context([r]))['context_snapshot_sha256'] for r in [with_comment,edited,removed]}
+    assert len(snaps)==3
+
+def big_reference(tmp_path,monkeypatch,sections):
+    path=tmp_path/'synthetic-big.pdf';doc=fitz.open()
+    cover=doc.new_page();cover.insert_text((72,60),'Brainstorm synthetic test catalogue',fontname='hebo',fontsize=16)
+    cover.insert_text((72,90),'Synthetic catalogue fixture only. No real reference or clinical recommendation is included.')
+    for n in range(sections):
+        p=doc.new_page()
+        p.insert_text((72,60),'Synthetic hydration',fontname='hebo',fontsize=16)
+        p.insert_text((72,90),'Synthetic hydration marker-%d passage text.'%n)
+    tail=doc.new_page()
+    tail.insert_text((72,60),'eGFR',fontname='hebo',fontsize=16)
+    tail.insert_text((72,90),'eGFR synthetic source label only, not a threshold or clinical rule.')
+    doc.save(path);doc.close()
+    monkeypatch.setattr(db,'DATA_DIR',str(tmp_path/'data'))
+    library.register({'path':str(path),'edition':'Synthetic big V1','local_use_confirmed':True});return path
+
+
+def test_display_cap_row_with_unshown_matches_is_not_listed_unmatched(tmp_path,monkeypatch):
+    big_reference(tmp_path,monkeypatch,25)
+    hit=evidence('notes','interview notes','Synthetic hydration noted.')
+    later=evidence('notes-later','interview notes','eGFR mentioned in the referral summary.')
+    plain=evidence('obs','observation','Blood pressure 120 over 80 recorded.')
+    result=matches.retrieve(context([hit,later,plain]))
+    assert result['total_matches']>20 and len(result['matches'])==20 and result['truncated']
+    # The later row's only hit sorts after display capacity is consumed: every shown
+    # match belongs to the first row, yet the later row is still not reported unmatched.
+    assert all(h['evidence']['id']==hit['id'] for h in result['matches'])
+    assert [e['id'] for e in result['unmatched_evidence']]==[plain['id']]
+
+
+def test_processing_cap_rows_beyond_200_are_not_reported_checked(tmp_path,monkeypatch):
+    reference(tmp_path,monkeypatch)
+    rows=[evidence('notes-%d'%n,'interview notes','Blood pressure reading %d.'%n) for n in range(200)]
+    late=evidence('notes-late','interview notes','Synthetic hydration noted.')
+    result=matches.retrieve(context(rows+[late]))
+    assert result['processed_evidence_rows']==200 and result['truncated'] and result['total_matches']==0
+    unmatched_ids=[e['id'] for e in result['unmatched_evidence']]
+    assert len(unmatched_ids)==200 and late['id'] not in unmatched_ids
