@@ -362,3 +362,30 @@ test('unchanged records during a pathology save install the response and clear d
   assert.equal(vm.runInContext('interviewPathology.revision', context), 2);
   assert.equal(vm.runInContext('interviewPathologyDirty', context), false);
 });
+
+test('a save queued for patient A never POSTs after switching to patient B', async () => {
+  const deferred = [];
+  const posts = [];
+  const { context } = setup((method, path, body) => {
+    if (path.endsWith('/pathology-records') && method === 'POST') {
+      posts.push(path);
+      return new Promise(resolve => deferred.push(resolve));
+    }
+    return Promise.resolve({});
+  });
+  vm.runInContext(`page = 'interview'; interviewId = '1'; interviewRequest = 7;
+    interviewPathology = { revision: 1, records: [{ id: 'x', test: 'eGFR', value: '28', unit: '', reference_interval: '', sample_date: '', source: '', verified: false, comment: '' }] };
+    interviewPathologyDirty = true;`, context);
+  const first = vm.runInContext('savePathologyRecords()', context);
+  await new Promise(r => setImmediate(r));
+  assert.equal(deferred.length, 1, 'first A save in flight');
+  // Queue a second save while A is still on screen, then switch to B.
+  const second = vm.runInContext('savePathologyRecords()', context);
+  vm.runInContext(`interviewRequest = 8; interviewId = '2'; interviewPathology = null; interviewPathologyDirty = false; interviewPathologyError = '';`, context);
+  deferred[0]({ revision: 2, records: [] });
+  assert.equal(await first, false, 'late first response dropped after switch');
+  assert.equal(await second, false, 'queued save must refuse to run for the new screen');
+  await new Promise(r => setImmediate(r));
+  assert.equal(posts.length, 1, 'queued A save must never initiate a POST after the switch');
+  assert.ok(posts[0].includes('/1/'), 'the only POST was the original A save');
+});
