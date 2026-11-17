@@ -70,6 +70,14 @@ def reference_text(meta):
     return 'Reference: ' + ref['display'] + ' (' + ref['source'].upper() + ' ' + ref['code'] + ', release ' + ref['release'] + ')' if valid_reference(ref) else ''
 
 def valid_use(m, base, optional):
+    if 'source_evidence' in m:
+        evidence = m['source_evidence']
+        if not isinstance(evidence, dict) or set(evidence) != {'kind', 'lines', 'page_candidates', 'text_sha256'}: return False
+        if evidence['kind'] != 'referral_text' or not isinstance(evidence['text_sha256'], str) or not re.fullmatch('[a-f0-9]{64}', evidence['text_sha256']): return False
+        lines, pages = evidence['lines'], evidence['page_candidates']
+        if not isinstance(lines, list) or not 1 <= len(lines) <= 80 or any(not isinstance(line, str) or len(line) > 20000 for line in lines): return False
+        if not isinstance(pages, list) or len(pages) != len(lines) or any(not isinstance(group, list) or len(group) > 500 or any(type(page) is not int or not 1 <= page <= 500 for page in group) for group in pages): return False
+        m = {k: v for k, v in m.items() if k != 'source_evidence'}
     if 'item_id' in m:
         if not medicine_snapshot.valid_id(m['item_id']): return False
         m = {k: v for k, v in m.items() if k != 'item_id'}
@@ -165,6 +173,16 @@ def blank(conn, patient):
     record['details']['meds'] = [{'packed': '', 'as_instructed': False} for _ in record['meds']]
     if found is not None:
         for i in ceased: record['details']['meds'][i].update(use_status='not_using', use_reason='', use_details='Ceased per referral')
+        # Attach only rows actually derived from this referral, not an older spec.
+        if stored_spec is None and not spec.is_file():
+            pages = [page.splitlines() for page in text.split('\f')]
+            for meta, lines in zip(record['details']['meds'], found.get('medicine_source_lines', [])):
+                meta['source_evidence'] = {
+                    'kind': 'referral_text', 'lines': lines,
+                    'page_candidates': [[n + 1 for n, page in enumerate(pages) if any(raw.strip() == line.strip() for raw in page)] for line in lines],
+                    'text_sha256': hashlib.sha256(text.encode('utf-8')).hexdigest(),
+                }
+
     # Clinical fields entered at intake are not automatically promoted unless
     # a named pharmacist confirmed them against an exact original PDF page.
     reviewed_source = folder / 'referral_source.json'
