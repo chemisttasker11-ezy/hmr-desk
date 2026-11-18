@@ -4,7 +4,7 @@ These files assert at import time and define no test functions, so `pytest file.
 nothing ("no tests ran") and CI never executed them. Running each as a script makes an assertion
 failure fail a real test. Each script creates its own temporary data directory.
 Not included (each fails when run as a script in an isolated data dir on Linux; causes found so far):
-- test_messaging, test_scenarios, test_replies, test_referral_fields, test_revision4: they assume a default
+- test_messaging, test_scenarios, test_replies, test_revision4: they assume a default
   pharmacist name ("Consultant Pharmacist"); the product default is now empty and messages need name and phone.
   Setting both makes test_messaging fail on a literal (the signature now also carries the phone), so the
   expected literals need a deliberate update, not a wrapper. test_autopilot only needed the name and is included.
@@ -26,7 +26,7 @@ import pytest
 HERE = Path(__file__).resolve().parent
 SCRIPTS = ['test_lifecycle.py', 'test_days.py', 'test_consent_sign.py', 'test_mims_binding.py', 'test_proda_sms.py',
            'test_engine.py', 'test_referral.py', 'test_run_catalog.py', 'test_suggest.py', 'test_timeline.py',
-           'test_tracking_followon.py', 'test_autopilot.py']
+           'test_tracking_followon.py', 'test_autopilot.py', 'test_referral_fields.py']
 # Each script runs in its own interpreter, so module state, environment variables and temp data
 # never leak between scripts or into the pytest session. A non-zero exit (any assertion) fails.
 BOOT = ("import runpy, sys, types\n"

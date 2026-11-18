@@ -3,8 +3,10 @@
 Moved verbatim from api.handle. handle() returns (status, payload) for a route it owns and None
 otherwise. ValueError and TypeError still propagate to api.handle (same 400 response).
 """
+import importlib.util
 import re
 from contextlib import nullcontext
+from pathlib import Path
 
 import db
 import jobs
