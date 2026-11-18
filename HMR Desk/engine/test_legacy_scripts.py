@@ -4,10 +4,6 @@ These files assert at import time and define no test functions, so `pytest file.
 nothing ("no tests ran") and CI never executed them. Running each as a script makes an assertion
 failure fail a real test. Each script creates its own temporary data directory.
 Not included (each fails when run as a script in an isolated data dir on Linux; causes found so far):
-- test_messaging, test_scenarios, test_replies, test_revision4: they assume a default
-  pharmacist name ("Consultant Pharmacist"); the product default is now empty and messages need name and phone.
-  Setting both makes test_messaging fail on a literal (the signature now also carries the phone), so the
-  expected literals need a deliberate update, not a wrapper. test_autopilot only needed the name and is included.
 - test_independent_repairs: steps.built(conn, p) call is stale and the assertion still fails after fixing it.
 - test_actions: stale steps.exists call (fixed), then api.claim_list returns [] in this environment.
 - test_importer: needs an appointment plan file in the data directory. test_interview: expects an
@@ -26,7 +22,8 @@ import pytest
 HERE = Path(__file__).resolve().parent
 SCRIPTS = ['test_lifecycle.py', 'test_days.py', 'test_consent_sign.py', 'test_mims_binding.py', 'test_proda_sms.py',
            'test_engine.py', 'test_referral.py', 'test_run_catalog.py', 'test_suggest.py', 'test_timeline.py',
-           'test_tracking_followon.py', 'test_autopilot.py', 'test_referral_fields.py']
+           'test_tracking_followon.py', 'test_autopilot.py', 'test_referral_fields.py',
+           'test_messaging.py', 'test_replies.py', 'test_scenarios.py', 'test_revision4.py']
 # Each script runs in its own interpreter, so module state, environment variables and temp data
 # never leak between scripts or into the pytest session. A non-zero exit (any assertion) fails.
 BOOT = ("import runpy, sys, types\n"
