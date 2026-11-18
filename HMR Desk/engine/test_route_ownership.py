@@ -14,7 +14,7 @@ import db
 
 HERE = Path(__file__).resolve().parent
 # api.py may only shrink. When code moves out, lower this number in the same change.
-API_LINE_CEILING = 613
+API_LINE_CEILING = 504
 
 
 def _tree(name):
@@ -31,7 +31,7 @@ def test_api_module_does_not_grow():
 
 
 def test_route_modules_do_not_import_the_facade():
-    for name in ('routes_system.py', 'routes_work.py', 'routes_schedule.py', 'routes_pathology.py', 'patient_actions.py', 'followup_schedule.py'):
+    for name in ('routes_system.py', 'routes_work.py', 'routes_schedule.py', 'routes_pathology.py', 'routes_report.py', 'routes_clinical_records.py', 'patient_actions.py', 'followup_schedule.py'):
         for node in ast.walk(_tree(name)):
             modules = [a.name for a in node.names] if isinstance(node, ast.Import) else [node.module or ''] if isinstance(node, ast.ImportFrom) else []
             assert 'api' not in [m.split('.')[0] for m in modules], f'{name} imports api: that would be a cycle'
@@ -112,7 +112,7 @@ def test_work_routes_keep_their_success_shapes(conn):
 
 def test_moved_functions_are_defined_once_in_their_owner():
     api_defs = {n.name for n in _tree('api.py').body if isinstance(n, ast.FunctionDef)}
-    for module in ('patient_actions.py', 'followup_schedule.py', 'routes_work.py', 'routes_schedule.py', 'routes_pathology.py'):
+    for module in ('patient_actions.py', 'followup_schedule.py', 'routes_work.py', 'routes_schedule.py', 'routes_pathology.py', 'routes_report.py', 'routes_clinical_records.py'):
         owned = {n.name for n in _tree(module).body if isinstance(n, ast.FunctionDef)} - {'handle'}
         assert not (owned & api_defs), f'{module} and api.py both define {sorted(owned & api_defs)}'
 
@@ -151,3 +151,28 @@ def test_schedule_and_pathology_routes_keep_their_literal_behaviour(conn):
     assert api.handle(conn, 'POST', '/api/pathology/result', {}, {'id': 1, 'saved': ['a'], 'status': 'ok', 'irn': '2'}) == (200, {'ok': True})
     assert api.handle(conn, 'GET', '/api/pathology/queue', {}, None) == (200, {'patients': []})
     assert conn.execute('SELECT state,has_pathology,irn FROM patients WHERE id=1').fetchone()[:] == ('pathology_ready', 1, '2')
+
+
+def test_report_and_clinical_record_routes_have_one_owner():
+    report, records = _route_literals(_tree('routes_report.py')), _route_literals(_tree('routes_clinical_records.py'))
+    patterns = lambda tree: {n.value for n in ast.walk(tree) if isinstance(n, ast.Constant) and isinstance(n.value, str) and n.value.startswith('/api/patients/(')}
+    mine_report, mine_records = patterns(_tree('routes_report.py')), patterns(_tree('routes_clinical_records.py'))
+    assert {r"/api/patients/(\d+)/report", r"/api/patients/(\d+)/consent/(preview|sign)", r"/api/patients/(\d+)/report-versions"} <= mine_report
+    assert {r"/api/patients/(\d+)/pathology-records", r"/api/patients/(\d+)/reconciliation", r"/api/patients/(\d+)/interview", r"/api/patients/(\d+)/medicine-context"} <= mine_records
+    elsewhere = patterns(_tree('api.py')) | patterns(_tree('patient_actions.py')) | patterns(_tree('routes_work.py'))
+    assert not ((mine_report | mine_records) & elsewhere) and not (mine_report & mine_records)
+
+
+def test_report_and_record_routes_keep_their_literal_behaviour(conn, tmp_path):
+    folder = tmp_path / 'Ann_Alpha'; folder.mkdir()
+    conn.execute("INSERT INTO patients(key,name,state,is_test,folder) VALUES ('ann','Ann Alpha','confirmed',0,?)", (str(folder),)); conn.commit()
+    h = api.handle
+    assert h(conn, 'GET', '/api/patients/999/report', {}, None) == (404, {'error': 'patient not found'})
+    assert h(conn, 'POST', '/api/patients/999/report/refresh', {}, {}) == (404, {'error': 'patient not found'})
+    assert h(conn, 'POST', '/api/patients/1/report/refresh', {}, {}) == (400, {'error': 'report spec does not exist'})
+    assert h(conn, 'POST', '/api/patients/1/report/demographics', {}, {}) == (400, {'error': 'invalid body'})
+    assert h(conn, 'POST', '/api/patients/1/reconciliation', {}, {}) == (400, {'error': 'invalid reconciliation review'})
+    assert h(conn, 'POST', '/api/patients/1/interview', {}, {}) == (400, {'error': 'invalid interview fields'})
+    assert h(conn, 'POST', '/api/patients/1/consent/preview', {}, {}) == (404, {'error': 'not found'})
+    s, r = h(conn, 'GET', '/api/patients/1/reconciliation', {}, None)
+    assert s == 200 and (r['flag_count'], r['medicines'], r['reviewed']) == (0, [], False)

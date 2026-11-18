@@ -26,7 +26,9 @@ import medicine_snapshot
 import steps
 import app_paths
 import manual_medicine_names
+import routes_clinical_records
 import routes_pathology
+import routes_report
 import routes_schedule
 import routes_system
 import routes_work
@@ -392,120 +394,9 @@ def handle(conn, method, path, query, body):
                 return 503, {'error': 'Offline suggestions unavailable: the reviewed reference library is not installed or cannot be read. Current interview evidence is retained; no suggestions were generated.'}
             return 200, {'suggestions': suggestions, 'context_gaps': suggest.context_gaps(context),
                          'context_snapshot_sha256': context['context_snapshot_sha256']}
-        match = re.fullmatch(r'/api/patients/(\d+)/report/refresh', path)
-        if method == 'POST' and match:
-            import report
-            p = conn.execute('SELECT * FROM patients WHERE id=?', (int(match[1]),)).fetchone()
-            if not p: return 404, {'error': 'patient not found'}
-            replace = body.get('replace_demographics', []) if isinstance(body, dict) else []
-            try: result = report.refresh(conn, p, replace)
-            except ValueError as exc: conn.rollback(); return 400, {'error': str(exc)}
-            conn.commit(); return 200, result
-        match = re.fullmatch(r'/api/patients/(\d+)/report/demographics', path)
-        if method == 'POST' and match:
-            import report
-            p = conn.execute('SELECT * FROM patients WHERE id=?', (int(match[1]),)).fetchone()
-            if not p: return 404, {'error': 'patient not found'}
-            if not isinstance(body, dict) or set(body) != {'action', 'keys'}: return 400, {'error': 'invalid body'}
-            try: return 200, report.resolve_demographics(conn, p, body['action'], body['keys'])
-            except ValueError as exc: conn.rollback(); return 400, {'error': str(exc)}
-        match = re.fullmatch(r'/api/patients/(\d+)/report', path)
-        if match:
-            import report
-            p = conn.execute('SELECT * FROM patients WHERE id=?', (int(match[1]),)).fetchone()
-            if not p: return 404, {'error': 'patient not found'}
-            if method == 'GET':
-                ai = query.get('ai', '')
-                return 200, report.load(conn, p, (ai[0] if isinstance(ai, list) and ai else ai) == '1')
-            if method == 'POST':
-                try: result = report.save(conn, p, body)
-                except records.Conflict:
-                    conn.rollback(); return 409, {'error': 'report changed since it was read; reload before saving', 'revision': records.revision(conn, p['id'], 'report_spec.json')}
-                conn.commit(); return 200, result
-        match = re.fullmatch(r'/api/patients/(\d+)/consent/(preview|sign)', path)
-        if match:
-            import consent_sign
-            import interview
-            p = conn.execute('SELECT * FROM patients WHERE id=?', (int(match[1]),)).fetchone()
-            if not p: return 404, {'error': 'patient not found'}
-            if method == 'GET' and match[2] == 'preview': return 200, consent_sign.preview(conn, p)
-            if method == 'POST' and match[2] == 'sign':
-                if not isinstance(body, dict) or set(body) != {'png', 'revision'}: raise ValueError('invalid body')
-                try: result = consent_sign.sign(conn, p, body['png'], body['revision'])
-                except interview.Conflict:
-                    conn.rollback(); return 409, {'error': 'interview conflict'}
-                return 200, result
-        match = re.fullmatch(r'/api/patients/(\d+)/report-versions', path)
-        if match and method == 'GET':
-            import report_auth
-            p = conn.execute('SELECT * FROM patients WHERE id=?', (int(match[1]),)).fetchone()
-            if not p: return 404, {'error': 'patient not found'}
-            return 200, {'versions': report_auth.generated_versions(conn, p)}
-        match = re.fullmatch(r'/api/patients/(\d+)/pathology/sources', path)
-        if match and method in ('GET', 'POST'):
-            import pathology_import
-            p = conn.execute('SELECT * FROM patients WHERE id=?', (int(match[1]),)).fetchone()
-            if not p: return 404, {'error': 'patient not found'}
-            if method == 'GET':
-                return 200, pathology_import.sources(conn, p)
-            if not isinstance(body, dict) or set(body) != {'path'} or not isinstance(body['path'], str):
-                raise ValueError('Invalid pathology import')
-            result = pathology_import.import_pdf(conn, p, body['path'])
-            db.log(conn, p['id'], 'pathology_source_imported',
-                   {'sha256': result['sha256'], 'pages': result['page_count'], 'name': result['name']}, 'api')
-            conn.commit()
-            return 200, result
-        match = re.fullmatch(r'/api/patients/(\d+)/pathology-records', path)
-        if match and method in ('GET', 'POST'):
-            import pathology_records
-            p = conn.execute('SELECT * FROM patients WHERE id=?', (int(match[1]),)).fetchone()
-            if not p: return 404, {'error': 'patient not found'}
-            if method == 'GET':
-                return 200, pathology_records.load(conn, p)
-            try:
-                result = pathology_records.save(conn, p, body, reviewer=settings.get(conn, 'pharmacist_name'))
-            except ValueError as exc:
-                if 'changed; reload' in str(exc): return 409, {'error': str(exc)}
-                raise
-            db.log(conn, p['id'], 'pathology_records_saved',
-                   {'count': len(result['records']), 'revision': result['revision']}, 'api')
-            conn.commit()
-            return 200, result
-        match = re.fullmatch(r'/api/patients/(\d+)/reconciliation', path)
-        if match and method in ('GET', 'POST'):
-            import interview
-            import reconciliation
-            p = conn.execute('SELECT * FROM patients WHERE id=?', (int(match[1]),)).fetchone()
-            if not p: return 404, {'error': 'patient not found'}
-            record = interview.load(conn, p)
-            saved_review = records.get_json(conn, p['id'], 'reconciliation_review.json') or {}
-            if method == 'POST':
-                if not isinstance(body, dict) or set(body) != {'source_hash', 'reviewed_by'}: raise ValueError('invalid reconciliation review')
-                review = reconciliation.acknowledge(record, body['source_hash'], body['reviewed_by'])
-                records.put_json(conn, p['id'], 'reconciliation_review.json', review)
-                db.log(conn, p['id'], 'reconciliation_reviewed', {'source_hash': review['source_hash']}, 'api')
-                conn.commit()
-                return 200, reconciliation.review_status(record, review)
-            result = reconciliation.audit(record)
-            result.update(reconciliation.review_status(record, saved_review))
-            return 200, result
-        match = re.fullmatch(r'/api/patients/(\d+)/interview', path)
-        if match:
-            import interview
-            p = conn.execute('SELECT * FROM patients WHERE id=?', (int(match[1]),)).fetchone()
-            if not p: return 404, {'error': 'patient not found'}
-            if method == 'GET': return 200, interview.load(conn, p)
-            if method == 'POST':
-                try: result = interview.save(conn, p, body)
-                except interview.Conflict:
-                    conn.rollback(); return 409, {'error': 'interview conflict'}
-                return 200, result
-        match = re.fullmatch(r'/api/patients/(\d+)/medicine-context', path)
-        if match and method == 'GET':
-            p = conn.execute('SELECT * FROM patients WHERE id=?', (int(match[1]),)).fetchone()
-            if not p: return 404, {'error': 'patient not found'}
-            import followup
-            return 200, followup.medicine_context(conn, p)
+        for module in (routes_report, routes_clinical_records):
+            routed = module.handle(conn, method, path, query, body)
+            if routed is not None: return routed
         match = re.fullmatch(r'/api/patients/(\d+)/(timeline|followup/([12])(/export)?)', path)
         if match:
             p = conn.execute('SELECT * FROM patients WHERE id=?', (int(match[1]),)).fetchone()
