@@ -88,6 +88,60 @@ def test_failed_migration_leaves_original_untouched(tmp_path, monkeypatch):
     assert not (tmp_path / 'userdata' / 'hmr.db.encrypting').exists()
 
 
+def test_second_replace_failure_restores_the_original_database(tmp_path, monkeypatch):
+    target = _paths(tmp_path, monkeypatch)
+    with plain(target) as legacy:
+        legacy.execute('CREATE TABLE t(x)')
+        legacy.execute("INSERT INTO t VALUES ('keep')")
+    key = os.urandom(32)
+    real = db._replace_retry
+    calls = []
+
+    def second_fails(source, dest, *a, **k):
+        calls.append((source, dest))
+        if len(calls) == 2:
+            raise PermissionError('locked by another program')
+        return real(source, dest, *a, **k)
+    monkeypatch.setattr(db, '_replace_retry', second_fails)
+    with pytest.raises(PermissionError):
+        db.encrypt_plain_file(str(target), key)
+    assert _is_plain(target)
+    with plain(target) as check:
+        assert check.execute('SELECT x FROM t').fetchone()[0] == 'keep'
+    assert not (tmp_path / 'userdata' / 'hmr.db.plain-old').exists()
+
+
+def test_restore_failure_keeps_both_files_and_says_so(tmp_path, monkeypatch):
+    target = _paths(tmp_path, monkeypatch)
+    with plain(target) as legacy:
+        legacy.execute('CREATE TABLE t(x)')
+        legacy.execute("INSERT INTO t VALUES ('keep')")
+    key = os.urandom(32)
+    real = db._replace_retry
+    calls = []
+
+    def fails_after_first(source, dest, *a, **k):
+        calls.append(1)
+        if len(calls) >= 2:
+            raise PermissionError('locked')
+        return real(source, dest, *a, **k)
+    monkeypatch.setattr(db, '_replace_retry', fails_after_first)
+    with pytest.raises(RuntimeError, match='plain-old'):
+        db.encrypt_plain_file(str(target), key)
+    folder = tmp_path / 'userdata'
+    assert (folder / 'hmr.db.plain-old').exists()
+    assert (folder / 'hmr.db.encrypting').exists()
+
+
+def test_no_fresh_database_while_an_unfinished_migration_copy_exists(tmp_path, monkeypatch):
+    target = _paths(tmp_path, monkeypatch)
+    (tmp_path / 'userdata').mkdir(exist_ok=True)
+    (tmp_path / 'userdata' / 'hmr.db.plain-old').write_bytes(b'records')
+    with pytest.raises(RuntimeError, match='new empty database was not created'):
+        db.ensure_encrypted(str(target))
+    assert not target.exists()
+
+
 def test_missing_key_is_refused_and_no_new_key_made(tmp_path, monkeypatch):
     target = _paths(tmp_path, monkeypatch)
     db.connect(str(target)).close()

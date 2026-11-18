@@ -317,6 +317,7 @@ def encrypt_plain_file(path, key, keep_original=False):
                 os.unlink(leftover)
         raise
     src.close()
+    old = path + '.plain-old'
     try:
         with closing(open_encrypted(tmp, key=key)) as check:
             if check.execute('PRAGMA integrity_check').fetchone()[0] != 'ok':
@@ -325,16 +326,25 @@ def encrypt_plain_file(path, key, keep_original=False):
                 raise ValueError('Encrypted copy has a different schema version')
             if {t: check.execute('SELECT count(*) FROM "%s"' % t).fetchone()[0] for t in _user_tables(check)} != counts:
                 raise ValueError('Encrypted copy does not match the original')
-        old = path + '.plain-old'
         for suffix in ('-wal', '-shm', '-journal'):
             if os.path.exists(path + suffix):
                 os.unlink(path + suffix)
         _replace_retry(path, old)
         _replace_retry(tmp, path)
     except Exception:
-        for leftover in (tmp, tmp + '-wal', tmp + '-shm', tmp + '-journal'):
-            if os.path.exists(leftover):
-                os.unlink(leftover)
+        # If the original was already moved aside, put it back before anything is deleted. When that
+        # fails too, keep both files: the records sit in the .plain-old copy and the verified encrypted
+        # copy stays, so nothing is lost and no fresh empty database may replace them.
+        if os.path.exists(old) and not os.path.exists(path):
+            try:
+                _replace_retry(old, path)
+            except Exception:
+                raise RuntimeError('Encryption could not finish and the original could not be restored automatically. '
+                                   'Your records are kept in the file ending .plain-old next to the database; do not delete it.')
+        if os.path.exists(path):
+            for leftover in (tmp, tmp + '-wal', tmp + '-shm', tmp + '-journal'):
+                if os.path.exists(leftover):
+                    os.unlink(leftover)
         raise
     if not keep_original:
         _wipe_and_remove(old)
@@ -372,6 +382,9 @@ def ensure_encrypted(path):
         kind = dbkey.file_kind(path)
         if kind == 'encrypted':
             return 'encrypted'
+        if kind == 'missing' and (os.path.exists(path + '.plain-old') or os.path.exists(path + '.encrypting')):
+            raise RuntimeError('An unfinished encryption left your records in a file ending .plain-old or .encrypting '
+                               'next to the database. A new empty database was not created. Keep those files and get help to recover them.')
         keys = dbkey.candidates(path) if dbkey.has_key_file(path) else []
         key = keys[0] if keys else dbkey.create_key(path)
         if kind == 'plain':
