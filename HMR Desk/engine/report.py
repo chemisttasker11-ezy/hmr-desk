@@ -89,11 +89,12 @@ def with_trusted_policy(conn, patient, data):
 def _bind_followup_review(data, old):
     """followup_text_reviewed=True from the client means 'I reviewed the follow-up text now saved'. It is stored as a hash
     of that exact text, and only when the text and the decision are unchanged from the previous save; otherwise it is dropped."""
-    asked = data.pop('followup_text_reviewed', False)
+    asked = data.pop('followup_text_reviewed', None)  # None = the client did not say; False = explicitly unticked
     text = data.get('followup', '').strip()
     unchanged = bool(old) and old.get('followup', '').strip() == text and old.get('followup_decision') == data.get('followup_decision')
     keep = old.get('followup_reviewed_sha256', '') if unchanged else ''
-    if asked and unchanged: keep = manual_defaults.text_sha(text, data.get('followup_decision', ''))
+    if asked is False: keep = ''
+    elif asked and unchanged: keep = manual_defaults.text_sha(text, data.get('followup_decision', ''))
     if keep != manual_defaults.text_sha(text, data.get('followup_decision', '')): keep = ''
     return {**data, 'followup_reviewed_sha256': keep} if (keep or old.get('followup_reviewed_sha256') or 'followup_decision' in data) else data
 
