@@ -68,6 +68,8 @@ def folder_check(p):
     expected = {'visited': 'Visited', 'report_drafted': 'Visited', 'signed_off': 'Visited',
                 'sent': 'To CLAIM', 'claimed': 'Completed & Claimed',
                 'declined': 'Declined-Exp', 'expired': 'Declined-Exp'}.get(p['state'], 'Scheduled')
+    # Referrals imported but not yet booked legitimately sit in TO SORT (referral_entry puts them there).
+    also_ok = ('TO SORT',) if p['state'] in ('new', 'pooled', 'offered', 'hold') else ()
     base = Path(db.BASE).resolve()
     actual = None
     try:
@@ -76,7 +78,7 @@ def folder_check(p):
             actual = path.relative_to(base).parts[0]
     except (OSError, ValueError):
         pass
-    return {'actual': actual, 'expected': expected, 'ok': actual is None or actual == expected}
+    return {'actual': actual, 'expected': expected, 'ok': actual is None or actual == expected or actual in also_ok}
 
 def flags(conn, p, today=None, now=None):
     import api
