@@ -66,9 +66,10 @@ with tempfile.TemporaryDirectory() as tmp:
     assert conn.execute('SELECT state FROM patients WHERE id=?', (byname[names[10]]['id'],)).fetchone()[0] == 'visited'
     conn.close()
     os.environ['HMR_DB'] = str(root / 'real.db'); conn = db.connect()
-    importer.run(conn, db.BASE)
+    # The default data folder holds a developer's real plan (and none on a clean machine), so this uses the fixture plan.
+    importer.run(conn, base)
     out = export_plan.export(conn, root / 'export.json', render=False)
-    original = importer.newest(Path(db.BASE).glob('Appointment_Plan_[0-9]*.json'))
+    original = importer.newest(Path(base).glob('Appointment_Plan_[0-9]*.json'))
     assert importer.read(out) == importer.read(original)
     empty = db.connect(str(root / 'empty.db')); empty.execute("INSERT INTO meta VALUES ('plan_meta','{}'),('plan_file',?)", (str(out),)); empty.commit()
     try:

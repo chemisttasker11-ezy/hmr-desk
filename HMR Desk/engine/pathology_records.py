@@ -66,7 +66,10 @@ def validate(records):
 def save(conn, patient, data, reviewer=''):
     if not isinstance(data, dict) or set(data) != {'revision', 'records'}:
         raise ValueError('Invalid pathology save')
+    # Compare and write in one write transaction so two saves cannot both pass the check.
+    if not conn.in_transaction: conn.execute('BEGIN IMMEDIATE')
     if data['revision'] != revision(conn, patient):
+        conn.rollback()
         raise ValueError('Pathology changed; reload before saving')
     validate(data['records'])
     previous = load(conn, patient)

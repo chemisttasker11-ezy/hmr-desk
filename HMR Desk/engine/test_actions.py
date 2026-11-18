@@ -59,7 +59,7 @@ with tempfile.TemporaryDirectory() as tmp:
     source = item('Scheduled/Stale Example_ Doctor', True)
     stale = patient('Stale Example', 'visited', str(Path('Visited/Nov') / source.name))
     assert jobs.patient_folder(row(stale)) == source.resolve()
-    assert steps.exists(row(stale), 'referral.pdf')
+    assert steps.exists(conn, row(stale), 'referral.pdf')
     assert row(stale)['folder'] == str(Path('Visited/Nov') / source.name)
     today = dt.date.today().isoformat(); p6 = patient('Fay Example')
     for visit, sent in [('bad', today), (today, 'bad'), (today, '2000-01-01'), (today, (dt.date.today()+dt.timedelta(days=1)).isoformat())]:

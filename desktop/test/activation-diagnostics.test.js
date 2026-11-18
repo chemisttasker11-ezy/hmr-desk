@@ -96,6 +96,20 @@ test('activation failure is tagged with the validate stage', async ()=>{
   } finally { await fsp.rm(s.root,{recursive:true,force:true}); }
 });
 
+test('nested restore is refused when the data folder is given through a link or short-name alias', async ()=>{
+  // On Windows runners os.tmpdir() is an 8.3 short path while realpath returns the long one; a junction reproduces
+  // the same mismatch on every platform without needing 8.3 names.
+  const s=scenario();
+  try {
+    const nested=path.join(s.data,'restored-inside-data');
+    fs.cpSync(s.recovered,nested,{recursive:true});
+    const alias=path.join(s.root,'data-alias');
+    fs.symlinkSync(s.data,alias,'junction');
+    await assert.rejects(activateRestored(nested,alias,s.configPath),
+      error => error.stage==='validate' && /outside the active app data directory/.test(error.message));
+  } finally { await fsp.rm(s.root,{recursive:true,force:true}); }
+});
+
 test('activation failure is tagged with the stage-database stage (injected copy error, all platforms)', async (t)=>{
   const s=scenario();
   try {

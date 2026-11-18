@@ -58,3 +58,49 @@ test('report refresh does not post when saving pending edits fails', async () =>
   assert.equal(await context.reportEditorClick({ dataset: { reportRefresh: '' } }), true);
   assert.equal(saves, 1); assert.equal(posts, 0); assert.equal(screen.inert, false);
 });
+
+test('report refresh offers each edited-block conflict and replaces only the ones accepted', async () => {
+  const calls = [], prompts = [];
+  const screen = { inert: false };
+  const conflicts = [{ key: 'doctor', label: 'GP details block', report: 'Typed GP', record: 'Dr Record' },
+    { key: 'patient', label: 'patient details block', report: 'Typed patient', record: 'DOB: 01-Feb-1950' }];
+  const context = vm.createContext({ H: { autosaver: () => ({ save: async () => true, reset() {} }), esc: (x) => x },
+    page: 'report_editor', $: () => screen, errorText: String, alert() {},
+    confirm: (text) => { prompts.push(text); return !/The patient details block/.test(text); },
+    hmr: { api: async (method, url, body) => { calls.push([method, url, body]); return method === 'POST' && !body ? { demographic_conflicts: conflicts } : {}; } },
+    document: { addEventListener() {} } });
+  vm.runInContext(fs.readFileSync(require.resolve('../renderer/report-editor.js'), 'utf8'), context);
+  vm.runInContext("reportId = 'one'; reportRecord = {}; renderReport = () => {}; loadSuggestions = () => {}", context);
+  await context.reportEditorClick({ dataset: { reportRefresh: '' } });
+  assert.equal(prompts.length, 3);                               // initial confirm, then one per conflict
+  assert.match(prompts[1], /GP details block[\s\S]*Typed GP[\s\S]*Dr Record/);
+  const replace = calls.find((c) => c[2] && c[2].replace_demographics);
+  assert.deepEqual(replace[2].replace_demographics, ['doctor']); // the declined block is not replaced
+});
+
+test('report editor shows each differing block with both texts and sends only the chosen action', async () => {
+  const calls = [];
+  const screen = { inert: false, innerHTML: '' };
+  const mismatch = [{ key: 'doctor', label: 'GP details block', report: 'Typed <GP>', record: 'Dr Record', acknowledged: false },
+    { key: 'patient', label: 'patient details block', report: 'Old patient', record: 'New patient', acknowledged: true }];
+  const questions = [];
+  const context = vm.createContext({ H: { autosaver: () => ({ save: async () => true, reset() {} }), esc: (x) => String(x).replace(/</g, '&lt;') },
+    esc: (x) => String(x).replace(/</g, '&lt;'), page: 'report_editor', $: () => screen, errorText: String, alert() {},
+    confirm: (q) => { questions.push(q); return true; },
+    hmr: { api: async (method, url, body) => { calls.push([method, url, body]); return { issues: [], demographic_mismatches: [] }; } },
+    document: { addEventListener() {} } });
+  vm.runInContext(fs.readFileSync(require.resolve('../renderer/report-editor.js'), 'utf8'), context);
+  vm.runInContext("reportId = 'one'; renderReport = () => {}; reportRecord = { demographic_mismatches: " + JSON.stringify(mismatch) + " }", context);
+  const html = context.demographicsHtml();
+  assert.match(html, /GP details block differs from the patient record[\s\S]*Typed &lt;GP>[\s\S]*Dr Record/);
+  assert.match(html, /data-demo-action="keep" data-demo-key="doctor"/);
+  assert.match(html, /patient details block differs from the patient record \(kept as written\)/);
+  assert.doesNotMatch(html, /data-demo-action="keep" data-demo-key="patient"/);   // already kept; only Use patient record remains
+  await context.reportEditorClick({ dataset: { demoAction: 'keep', demoKey: 'doctor' } });
+  assert.match(questions[0], /Keep the report's GP details block as written[\s\S]*differs from the patient record[\s\S]*asks again/);
+  assert.equal(JSON.stringify(calls[0]), JSON.stringify(['POST', '/api/patients/one/report/demographics', { action: 'keep', keys: ['doctor'] }]));
+  vm.runInContext("reportRecord = { demographic_mismatches: " + JSON.stringify(mismatch) + " }", context);
+  await context.reportEditorClick({ dataset: { demoAction: 'replace', demoKey: 'doctor' } });
+  assert.match(questions[1], /Replace the report's GP details block with the patient record's text/);
+  assert.equal(calls[1][2].action, 'replace');
+});

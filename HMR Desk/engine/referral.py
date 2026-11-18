@@ -94,11 +94,16 @@ def parse(text):
     if 'ceased' in sec and (bad or not ceased): result['unparsed'].append('ceased')
     for key in ('conditions', 'allergies'):
         lines = [clean(x) for x in sec.get(key, []) if not DATE.fullmatch(x) and not NOISE.fullmatch(x)]
-        if key == 'allergies' and any(re.fullmatch(r'(?i)(?:nil|none|no(?:ne)? known|nil known|no known allergies|nkda)\.?', x) for x in lines):
+        nil = [bool(re.fullmatch(r'(?i)(?:nil|none|no(?:ne)? known|nil known|no known allergies|nkda)\.?', x)) for x in lines]
+        if key == 'allergies' and any(nil) and all(nil):
             result[key] = ['nil known']
+        elif key == 'allergies' and any(nil):
+            # A nil line next to a real allergy is a conflict: keep every positive line, never report "nil known".
+            result[key] = [x for x, is_nil in zip(lines, nil) if not is_nil and x and len(x) <= 100 and not re.search(r'(?i)\b(?:patient|phone|address|dob|medicare)\s*:', x)]
+            result['unparsed'].append(key)
         else:
             result[key] = [x for x in lines if x and len(x) <= 100 and not re.search(r'(?i)\b(?:patient|phone|address|dob|medicare)\s*:', x)]
-        if key in sec and len(result[key]) < len(lines): result['unparsed'].append(key)
+        if key in sec and len(result[key]) < len(lines) and key not in result['unparsed']: result['unparsed'].append(key)
         if key in sec and not result[key] and key not in result['unparsed']: result['unparsed'].append(key)
     lines = sec.get('obs', [])
     for i, line in enumerate(lines):

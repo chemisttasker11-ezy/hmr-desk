@@ -23,7 +23,7 @@ def _date(value):
 
 
 def build(conn, patient, today=None):
-    import api
+    import medicine_review
     today = today or dt.date.today()
     pid = patient['id']
     saved = records.exists(conn, pid, 'interview.json')
@@ -49,7 +49,7 @@ def build(conn, patient, today=None):
         evidence.append(item)
 
     confirmed = records.get_json(conn, pid, 'confirmed_meds.json')
-    current = confirmed is not None and api.confirmed_medicines_current(conn, patient)
+    current = confirmed is not None and medicine_review.confirmed_medicines_current(conn, patient)
     bound = bool(current and confirmed.get('medicine_snapshot_sha256'))
     if confirmed is not None and not current:
         gaps.append('Medicine confirmation is stale; review the current interview and confirm again')

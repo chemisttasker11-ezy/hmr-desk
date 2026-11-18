@@ -1,5 +1,6 @@
 """Local report editor data and reusable finding search."""
 import datetime as dt
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -20,6 +21,13 @@ WIDTHS = {'meds': 4, 'otc': 3, 'ceased': 3, 'path': 5}
 REVIEW = ['thanks', 'reason', 'intro', 'followup']
 _cache = {}
 _lock = threading.RLock()
+
+def _dmy(value):
+    """Display an ISO date as DD/MM/YYYY like the assessment and report dates; other text is unchanged."""
+    import re
+    match = re.fullmatch(r'(\d{4})-(\d{2})-(\d{2})', str(value).strip())
+    return match[3] + '/' + match[2] + '/' + match[1] if match else value
+
 
 def validate(data):
     if not isinstance(data, dict) or not jobs.REPORT_KEYS <= data.keys(): raise ValueError('report spec missing required keys')
@@ -51,6 +59,8 @@ def load(conn, patient, ai=False):
     validate(data)
     if not ai: data = with_trusted_policy(conn, patient, data)
     if not ai: data['followup_text_reviewed'] = manual_defaults.review_valid(data)
+    if not ai: data['revision'] = records.revision(conn, patient['id'], 'report_spec.json')
+    if not ai: data['demographic_mismatches'] = demographic_mismatches(conn, patient, data)
     if not ai: data['interview_newer'] = 'interview_revision' in data and interview.revision(conn, patient) != data['interview_revision']
     if not ai:
         import pathology_records
@@ -79,26 +89,33 @@ def with_trusted_policy(conn, patient, data):
 def _bind_followup_review(data, old):
     """followup_text_reviewed=True from the client means 'I reviewed the follow-up text now saved'. It is stored as a hash
     of that exact text, and only when the text and the decision are unchanged from the previous save; otherwise it is dropped."""
-    asked = data.pop('followup_text_reviewed', False)
+    asked = data.pop('followup_text_reviewed', None)  # None = the client did not say; False = explicitly unticked
     text = data.get('followup', '').strip()
     unchanged = bool(old) and old.get('followup', '').strip() == text and old.get('followup_decision') == data.get('followup_decision')
     keep = old.get('followup_reviewed_sha256', '') if unchanged else ''
-    if asked and unchanged: keep = manual_defaults.text_sha(text, data.get('followup_decision', ''))
+    if asked is False: keep = ''
+    elif asked and unchanged: keep = manual_defaults.text_sha(text, data.get('followup_decision', ''))
     if keep != manual_defaults.text_sha(text, data.get('followup_decision', '')): keep = ''
     return {**data, 'followup_reviewed_sha256': keep} if (keep or old.get('followup_reviewed_sha256') or 'followup_decision' in data) else data
 
 
 def _save(conn, patient, data):
+    expected = data.get('expected_revision') if isinstance(data, dict) else None
+    if expected is not None and not isinstance(expected, str): raise ValueError('invalid expected_revision')
     data = with_trusted_policy(conn, patient, data)
     validate(data)
-    data = manual_defaults.apply_followup_decision({k: v for k, v in data.items() if k not in ('interview_newer', 'pathology_newer')})
+    data = manual_defaults.apply_followup_decision({k: v for k, v in data.items() if k not in ('interview_newer', 'pathology_newer', 'revision', 'expected_revision', 'demographic_mismatches', 'demographic_conflicts')})
+    if expected is not None:
+        # Compare and write in one write transaction so two saves cannot both pass the check.
+        if not conn.in_transaction: conn.execute('BEGIN IMMEDIATE')
+        if records.revision(conn, patient['id'], 'report_spec.json') != expected: raise records.Conflict('report changed since it was read')
     previous = records.get(conn, patient['id'], 'report_spec.json')
     data = _bind_followup_review(data, json.loads(previous) if previous else {})
     if previous is not None: records.put(conn, patient['id'], 'report_spec.json.bak', previous)
     records.put_json(conn, patient['id'], 'report_spec.json', data)
     db.log(conn, patient['id'], 'report_saved', {}, 'api')
     conn.commit()
-    return data
+    return dict(data, revision=records.revision(conn, patient['id'], 'report_spec.json'))  # the caller's next conditional save needs it
 
 def placeholders(data):
     return manual_defaults.unresolved(data)
@@ -179,11 +196,11 @@ def other_actual(r, m):
 
 def _derived(conn, patient):
     folder = jobs.patient_folder(patient)
-    import api
+    import medicine_review
     with interview.record_lock(patient):
         has_interview = records.exists(conn, patient['id'], 'interview.json')
         if not records.exists(conn, patient['id'], 'confirmed_meds.json'): raise ValueError('confirm the medicine list first')
-        if not api.confirmed_medicines_current(conn, patient): raise ValueError('Medicine use changed; review and confirm medicines first')
+        if not medicine_review.confirmed_medicines_current(conn, patient): raise ValueError('Medicine use changed; review and confirm medicines first')
         record = interview.load(conn, patient); p = dict(patient); h = record['header']
     if not has_interview:
         confirmed = records.get_json(conn, patient['id'], 'confirmed_meds.json')
@@ -248,18 +265,25 @@ def _derived(conn, patient):
     ))
     return record, dict(conditions=record['conditions'], allergies=record['allergies'], obs=observations(record), meds=[[r[0], actual(r, m), referral_note(r, m), ''] for r, m in zip(referral_rows, referral_meta) if any(r) and m.get('use_status') != 'not_using'] + [[r[0], other_actual(r, m), ' | '.join(filter(None, r[2:])), ''] for r, m in zip(other_rows, other_meta) if any(r) and m.get('use_status') != 'not_using' and m.get('kind') not in ('otc', 'complementary')], otc=[[r[0], other_actual(r, m), ' | '.join(filter(None, r[2:]))] for r, m in zip(other_rows, other_meta) if any(r) and m.get('use_status') != 'not_using' and m.get('kind') in ('otc', 'complementary')], ceased=[[r[0], r[1], ' | '.join(filter(None, ['Referral medicine', r[2], '\n'.join(filter(None, (referral_note(r, m), interview.use_text(m))))]))] for r, m in zip(referral_rows, referral_meta) if any(r) and m.get('use_status') == 'not_using'] + [[r[0], r[1], ' | '.join(filter(None, ['Found during interview', other_note(r, m)]))] for r, m in zip(other_rows, other_meta) if any(r) and m.get('use_status') == 'not_using'], path=pathology_table), ', '.join(dates)
 
+def _demographics(conn, patient, record):
+    """Patient, GP and date blocks, built the same way at start and at refresh."""
+    p = dict(patient); h = record['header']
+    name = p['name']; gp = p.get('gp') or h['gp'] or ''
+    address = ', '.join(filter(None, (p.get('address'), p.get('suburb'))))
+    patient_lines = [name, 'DOB: ' + _dmy(p.get('dob') or h['dob']), 'Medicare No: ' + (p.get('medicare') or ''), 'Address: ' + address, 'Phone: ' + (p.get('phone') or '')]
+    doctor_lines = [gp, p.get('clinic') or '', 'Request date: ' + _dmy(p.get('referral_date') or '')]
+    import steps
+    visit = steps.event_date(conn, patient, 'visited') or p.get('visit_date') or h['visit'].split(' ')[0]
+    return dict(name=name, assess_date=visit, patient='\n'.join(patient_lines), doctor='\n'.join(filter(None, doctor_lines)), dear='Dear ' + gp + ',')
+
 def start(conn, patient):
     folder = jobs.patient_folder(patient)
     if records.exists(conn, patient['id'], 'report_spec.json'): raise FileExistsError('report spec already exists')
     record, derived, dates = _derived(conn, patient); p = dict(patient); h = record['header']
     name = p['name']; gp = p.get('gp') or h['gp'] or ''
     data = manual_defaults.initial_text(name, gp)
-    address = ', '.join(filter(None, (p.get('address'), p.get('suburb'))))
-    patient_lines = [name, 'DOB: ' + (p.get('dob') or h['dob']), 'Medicare No: ' + (p.get('medicare') or ''), 'Address: ' + address, 'Phone: ' + (p.get('phone') or '')]
-    doctor_lines = [gp, p.get('clinic') or '', 'Request date: ' + (p.get('referral_date') or '')]
-    import steps
-    visit = steps.event_date(conn, patient, 'visited') or p.get('visit_date') or h['visit'].split(' ')[0]
-    data.update(out=str(folder / ('HMR ' + re.sub(r'[<>:"/\\|?*]', '', name).rstrip(' .') + '.docx')), name=name, assess_date=visit, report_date=dt.date.today().strftime('%d/%m/%Y'), patient='\n'.join(patient_lines), doctor='\n'.join(filter(None, doctor_lines)), dear='Dear ' + gp + ',', path_date=dates, issues=[], needs_review=REVIEW.copy())
+    demo = _demographics(conn, patient, record); name = demo['name']; visit = demo['assess_date']
+    data.update(out=str(folder / ('HMR ' + re.sub(r'[<>:"/\\|?*]', '', name).rstrip(' .') + '.docx')), report_date=dt.date.today().strftime('%d/%m/%Y'), path_date=dates, demographics_generated=demo, **demo, issues=[], needs_review=REVIEW.copy())
     data.update(derived, medicine_snapshot=medicine_snapshot.snapshot(record), medicine_snapshot_sha256=medicine_snapshot.digest(medicine_snapshot.snapshot(record)), interview_revision=record['revision'], interview_reason=record['details']['reason'], pathology_revision=__import__('pathology_records').revision(conn, patient))
     intro = intro_text(record, name, visit)
     if intro: data['intro'] = intro
@@ -273,20 +297,98 @@ def start(conn, patient):
     conn.commit()
     return data
 
-def refresh(conn, patient):
-    with _lock: return _refresh(conn, patient)
+DEMOGRAPHIC_LABELS = {'name': 'patient name', 'assess_date': 'assessment date', 'patient': 'patient details block', 'doctor': 'GP details block', 'dear': 'salutation'}
 
-def _refresh(conn, patient):
+def _merge_demographics(data, new, replace=()):
+    """Refresh brings corrected record values into blocks the pharmacist has not touched. A block that differs from
+    what the app last generated was edited (or is from an older spec): it is kept, and returned as a conflict so
+    the pharmacist chooses. Only blocks named in `replace` are overwritten."""
+    if not isinstance(replace, (list, tuple)) or any(k not in DEMOGRAPHIC_LABELS for k in replace): raise ValueError('invalid replace_demographics')
+    generated = data.get('demographics_generated') if isinstance(data.get('demographics_generated'), dict) else {}
+    conflicts = []
+    for key in DEMOGRAPHIC_LABELS:
+        current = data.get(key, '')
+        if current == new[key]: continue
+        if key in replace or (key in generated and generated[key] == current): data[key] = new[key]
+        else: conflicts.append({'key': key, 'label': DEMOGRAPHIC_LABELS[key], 'report': current, 'record': new[key]})
+    data['demographics_generated'] = new
+    return conflicts
+
+ACK_RECORD = 'report_spec.demographics_ack.json'
+
+def _ack_hash(key, text, record_value):
+    """A keep decision is bound to this block's exact text and to what the patient record says now."""
+    return hashlib.sha256(json.dumps([key, text, record_value], ensure_ascii=False).encode('utf-8')).hexdigest()
+
+def demographic_mismatches(conn, patient, data):
+    """Blocks whose text differs from what the current patient record produces. Response-only. A block is
+    acknowledged only while the exact text and the exact record value are unchanged since the pharmacist kept it."""
+    record = interview.load(conn, patient)
+    new = _demographics(conn, patient, record)
+    acks = records.get_json(conn, patient['id'], ACK_RECORD)
+    acks = acks if isinstance(acks, dict) else {}
+    result = []
+    for key, label in DEMOGRAPHIC_LABELS.items():
+        text = data.get(key, '')
+        if text == new[key]: continue
+        result.append({'key': key, 'label': label, 'report': text, 'record': new[key],
+                       'acknowledged': acks.get(key) == _ack_hash(key, text, new[key])})
+    return result
+
+def unresolved_demographics(conn, patient, data):
+    return [m['key'] for m in demographic_mismatches(conn, patient, data) if not m['acknowledged']]
+
+def demographic_status(conn, patient, data):
+    """Key -> matches/kept/unresolved, for build evidence. Carries no patient text."""
+    status = {key: 'matches' for key in DEMOGRAPHIC_LABELS}
+    for m in demographic_mismatches(conn, patient, data): status[m['key']] = 'kept' if m['acknowledged'] else 'unresolved'
+    return status
+
+def resolve_demographics(conn, patient, action, keys):
+    """Per-block choice. 'replace' writes the record's value into the block; 'keep' records an acknowledgement bound to
+    the exact text and record value. Nothing else in the report changes."""
+    if action not in ('replace', 'keep') or not isinstance(keys, list) or not keys or any(k not in DEMOGRAPHIC_LABELS for k in keys):
+        raise ValueError('invalid demographic choice')
+    with _lock:
+        data = records.get_json(conn, patient['id'], 'report_spec.json')
+        if data is None: raise ValueError('report spec does not exist')
+        validate(data)
+        mismatches = {m['key']: m for m in demographic_mismatches(conn, patient, data)}
+        if any(k not in mismatches for k in keys): raise ValueError('That block already matches the patient record; reload the report')
+        if action == 'replace':
+            for k in keys: data[k] = mismatches[k]['record']
+            generated = dict(data.get('demographics_generated') or {})
+            generated.update({k: mismatches[k]['record'] for k in keys})
+            data['demographics_generated'] = generated
+            _save(conn, patient, data)
+        else:
+            acks = records.get_json(conn, patient['id'], ACK_RECORD)
+            acks = dict(acks) if isinstance(acks, dict) else {}
+            for k in keys: acks[k] = _ack_hash(k, mismatches[k]['report'], mismatches[k]['record'])
+            records.put_json(conn, patient['id'], ACK_RECORD, acks)
+            db.log(conn, patient['id'], 'report_demographics_kept', {'blocks': sorted(keys)}, 'api')  # block names only, no text
+            conn.commit()
+        return load(conn, patient)
+
+def refresh(conn, patient, replace=()):
+    with _lock: return _refresh(conn, patient, replace)
+
+def _refresh(conn, patient, replace=()):
     data = records.get_json(conn, patient['id'], 'report_spec.json')
     if data is None: raise ValueError('report spec does not exist')
     validate(data)
     record, derived, _ = _derived(conn, patient)
     import pathology_records
+    conflicts = _merge_demographics(data, _demographics(conn, patient, record), replace)
+    folder = jobs.patient_folder(patient)
+    stored = Path(str(data.get('out') or ''))
+    if stored.name and (not stored.is_absolute() or stored.parent.resolve() != folder):
+        data['out'] = str(folder / stored.name)  # a restored or moved workspace must not keep a path outside the patient folder
     data.update(derived, medicine_snapshot=medicine_snapshot.snapshot(record), medicine_snapshot_sha256=medicine_snapshot.digest(medicine_snapshot.snapshot(record)), interview_revision=record['revision'], interview_reason=record['details']['reason'],
                 pathology_revision=pathology_records.revision(conn, patient))
-    save(conn, patient, data)
+    saved = save(conn, patient, data)
     db.log(conn, patient['id'], 'report_refreshed', {}, 'job')
-    return data
+    return dict(saved, demographic_conflicts=conflicts)  # response only; never stored
 
 def _read(path):
     stamp = path.stat().st_mtime_ns

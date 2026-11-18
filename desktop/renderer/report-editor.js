@@ -15,6 +15,9 @@ let reportId = '',
   reportUndo,
   reportUndoTimer,
   reportOutput = '',
+  reportBuildStatus = '',
+  reportBuildRunning = false,
+  lastBuildResult = null,
   reportSaveStatus = 'All changes saved',
   reportSuggestions = [],
   reportGaps = [],
@@ -30,10 +33,11 @@ const reportSaver = H.autosaver({
   getRecord: () => reportRecord,
   getId: () => reportId,
   draftKey: () => `report:${reportId}`,
-  endpoint: (id, record) => hmr.api('POST', `/api/patients/${encodeURIComponent(id)}/report`, record),
+  endpoint: (id, record) => hmr.api('POST', `/api/patients/${encodeURIComponent(id)}/report`, typeof record.revision === 'string' ? { ...record, expected_revision: record.revision } : record), // conditional save: a stale window cannot overwrite a newer report
   status: (message) => {
     reportSaveStatus = message.startsWith('Saved ') ? 'All changes saved' : message === 'Not saved' ? 'Unsaved changes' : message;
     if ($('report-status')) $('report-status').textContent = reportSaveStatus;
+    if (message.startsWith('Saved ') && page === 'report_editor' && $('report-currency-status')) loadReportStatus();
   },
   errorText: (...args) => errorText(...args), // defined in renderer.js, which loads after this file
 });
@@ -84,6 +88,7 @@ async function reportScreen() {
   reportQuery = '';
   reportUndo = null;
   reportOutput = '';
+  reportBuildStatus = '';
   ((reportSaveStatus = 'All changes saved'),
     (reportSuggestions = []),
     (reportGaps = []),
@@ -102,6 +107,18 @@ async function reportScreen() {
   reportSaver.reset(record);
   renderReport();
   loadSuggestions();
+}
+let reportStatusRun = 0;
+async function loadReportStatus() {
+  const id = reportId, run = ++reportStatusRun;
+  try {
+    const status = await hmr.api('GET', `/api/patients/${encodeURIComponent(id)}/report-status`);
+    if (id !== reportId || page !== 'report_editor' || run !== reportStatusRun || !$('report-currency-status')) return;
+    $('report-currency-status').innerHTML = H.reportStatusHtml(status);
+  } catch (error) {
+    if (id !== reportId || page !== 'report_editor' || run !== reportStatusRun || !$('report-currency-status')) return;
+    $('report-currency-status').innerHTML = '<p class="muted">Report status could not be checked.</p>';
+  }
 }
 async function loadSuggestions() {
   const id = reportId, run = ++reportSuggestionRun;
@@ -204,9 +221,10 @@ function renderReport() {
     .split(/[\\/]/)
     .pop();
   $('screen').innerHTML =
-    `<div class="report-top"><button data-page="reports">Back to reports</button><div><strong>${esc(reportDetail.name || reportRecord.name)}</strong><span class="muted"> &middot; ${esc(reportDetail.gp || String(reportRecord.doctor || '').split('\n')[0] || 'GP not set')}</span><br><small class="muted">${esc(outputName)}</small></div><div class="report-dates">${reportField('assess_date', 'Assessment date (DD/MM/YYYY)', false)}${reportField('report_date', 'Report date (DD/MM/YYYY)', false)}</div><span id="report-status" role="status">${esc(reportSaveStatus)}</span><div class="actions"><button data-report-save>Save</button><button data-report-build="word" ${!reportRecord.issues.length ? 'disabled' : ''}>Build Word</button><button class="primary" data-report-build="pdf" ${!reportRecord.issues.length ? 'disabled' : ''}>Build Word + PDF</button></div></div>${H.showInterviewRefresh(reportRecord, reportDetail) || reportRecord.pathology_newer ? `<div class="report-refresh" role="status"><span>${esc(reportRecord.pathology_newer ? 'Verified pathology has changed since this report was prepared. Refresh and re-review the report before building.' : 'The interview was changed after this report was started.')}</span><button data-report-refresh>Refresh report from current interview and pathology</button></div>` : ''}<div class="report-layout"><div class="report-main"><section class="report-findings"><h2>Findings</h2><p class="muted">${reportRecord.issues.length} findings &middot; about 4-8</p>${findings}<div class="actions"><button data-finding-add>Add finding</button>${reportUndo ? '<button data-finding-undo>Undo deletion</button>' : ''}</div></section><details class="interview-section report-disclosure" id="report-letter" ${reportLetterOpen ? 'open' : ''}><summary>Letter wording</summary><div class="report-fields">${letter}</div></details><details class="interview-section report-disclosure" id="report-details" ${reportDetailsOpen ? 'open' : ''}><summary>Patient details in the report</summary><div class="report-fields">${details}</div></details></div><aside class="report-sidebar">${typeof evidenceReferencePanel==='function' ? evidenceReferencePanel() : ''}${localReferencePanel()}<section><div class="helper-heading"><h2>Suggestions for this patient</h2><button data-suggestions-reload>Reload</button></div><div id="suggestions" role="status">${suggestionsHtml()}</div></section><section><h2>Find in library</h2><label>Search<input id="library-search" type="search" value="${esc(reportQuery)}"></label><div id="library-results" role="status">${libraryResultsHtml()}</div></section>${reportAi ? `<section><h2>AI assist (optional)</h2><p>${esc(reportAgent)}</p><button data-report-assist>Draft with AI</button>${reportDraft ? '<div class="actions"><button data-report-load="all">Load AI draft</button><button data-report-load="findings">Take findings only</button></div>' : ''}${file ? `<p>${esc(file)} <button data-open-interactions="${esc(file)}">Open</button></p>` : ''}<pre id="report-output" role="status">${esc(reportOutput)}</pre></section>` : ''}</aside></div>`;
+    `<div class="report-top"><button data-page="reports">Back to reports</button><div><strong>${esc(reportDetail.name || reportRecord.name)}</strong><span class="muted"> &middot; ${esc(reportDetail.gp || String(reportRecord.doctor || '').split('\n')[0] || 'GP not set')}</span><br><small class="muted">${esc(outputName)}</small></div><div class="report-dates">${reportField('assess_date', 'Assessment date (DD/MM/YYYY)', false)}${reportField('report_date', 'Report date (DD/MM/YYYY)', false)}</div><span id="report-status" role="status">${esc(reportSaveStatus)}</span><span id="report-build-status" role="status" aria-live="polite">${esc(reportBuildStatus)}</span><div class="actions"><button data-report-save>Save</button><button data-report-build="word" ${!reportRecord.issues.length ? 'disabled' : ''}>Build Word</button><button class="primary" data-report-build="pdf" ${!reportRecord.issues.length ? 'disabled' : ''}>Build Word + PDF</button></div></div>${demographicsHtml()}${H.showInterviewRefresh(reportRecord, reportDetail) || reportRecord.pathology_newer ? `<div class="report-refresh" role="status"><span>${esc(reportRecord.pathology_newer ? 'Verified pathology has changed since this report was prepared. Refresh and re-review the report before building.' : 'The interview was changed after this report was started.')}</span><button data-report-refresh>Refresh report from current interview and pathology</button></div>` : ''}<div id="report-currency-status" role="status"></div><div class="report-layout"><div class="report-main"><section class="report-findings"><h2>Findings</h2><p class="muted">${reportRecord.issues.length} findings &middot; about 4-8</p>${findings}<div class="actions"><button data-finding-add>Add finding</button>${reportUndo ? '<button data-finding-undo>Undo deletion</button>' : ''}</div></section><details class="interview-section report-disclosure" id="report-letter" ${reportLetterOpen ? 'open' : ''}><summary>Letter wording</summary><div class="report-fields">${letter}</div></details><details class="interview-section report-disclosure" id="report-details" ${reportDetailsOpen ? 'open' : ''}><summary>Patient details in the report</summary><div class="report-fields">${details}</div></details></div><aside class="report-sidebar">${typeof evidenceReferencePanel==='function' ? evidenceReferencePanel() : ''}${localReferencePanel()}<section><div class="helper-heading"><h2>Suggestions for this patient</h2><button data-suggestions-reload>Reload</button></div><div id="suggestions" role="status">${suggestionsHtml()}</div></section><section><h2>Find in library</h2><label>Search<input id="library-search" type="search" value="${esc(reportQuery)}"></label><div id="library-results" role="status">${libraryResultsHtml()}</div></section>${reportAi ? `<section><h2>AI assist (optional)</h2><p>${esc(reportAgent)}</p><button data-report-assist>Draft with AI</button>${reportDraft ? '<div class="actions"><button data-report-load="all">Load AI draft</button><button data-report-load="findings">Take findings only</button></div>' : ''}${file ? `<p>${esc(file)} <button data-open-interactions="${esc(file)}">Open</button></p>` : ''}<pre id="report-output" role="status">${esc(reportOutput)}</pre></section>` : ''}</aside></div>`;
   document.querySelectorAll('.report-layout textarea').forEach(H.growTextarea);
   refreshLocalReferenceStatus();
+  loadReportStatus();
   if(typeof refreshEvidenceReferences==='function')refreshEvidenceReferences();
   $('report-letter').addEventListener('toggle', (event) => {
     reportLetterOpen = event.target.open;
@@ -214,6 +232,29 @@ function renderReport() {
   $('report-details').addEventListener('toggle', (event) => {
     reportDetailsOpen = event.target.open;
   });
+}
+function demographicsHtml() {
+  const rows = (reportRecord.demographic_mismatches || []).map((m) => `<div class="report-demographic" data-demographic="${esc(m.key)}"><strong>${esc(m.label)} differs from the patient record${m.acknowledged ? ' (kept as written)' : ''}</strong>
+    <div>In the report:<pre>${esc(m.report)}</pre></div><div>In the patient record:<pre>${esc(m.record)}</pre></div>
+    ${m.acknowledged ? '<small class="muted">You chose to keep the report text. This asks again if the text or the record changes.</small>' : ''}
+    <div class="actions"><button data-demo-action="replace" data-demo-key="${esc(m.key)}">Use patient record</button>${m.acknowledged ? '' : `<button data-demo-action="keep" data-demo-key="${esc(m.key)}">Keep report text</button>`}</div></div>`);
+  return rows.length ? `<div class="report-refresh" role="alert">${rows.join('')}</div>` : '';
+}
+async function resolveDemographic(action, key) {
+  const label = (reportRecord.demographic_mismatches || []).find((m) => m.key === key)?.label || 'block';
+  const question = action === 'replace'
+    ? `Replace the report's ${label} with the patient record's text? The text now in the report is removed (the previous report is backed up).`
+    : `Keep the report's ${label} as written? The report will print and be signed with this text, which differs from the patient record. This is recorded, and it asks again if the text or the record changes.`;
+  if (!confirm(question)) return true;
+  const id = reportId, screen = $('screen');
+  screen.inert = true;
+  try {
+    if (!(await reportSaver.save())) return true;
+    const updated = await hmr.api('POST', `/api/patients/${encodeURIComponent(id)}/report/demographics`, { action, keys: [key] });
+    if (page === 'report_editor' && reportId === id) { reportRecord = updated; reportSaver.reset(updated); renderReport(); }
+  } catch (error) { alert(errorText(error)); }
+  finally { screen.inert = false; }
+  return true;
 }
 let reportQuery = '';
 function libraryResultsHtml() {
@@ -257,8 +298,8 @@ document.addEventListener('input', (event) => {
     (async () => {  // the engine fills only blank or unedited generated wording, so re-read it
       if (!(await reportSaver.save(true))) return;
       const fresh = await hmr.api('GET', `/api/patients/${encodeURIComponent(reportId)}/report`);
-      reportRecord.followup = fresh.followup;
-      reportSaver.reset(reportRecord);
+      // Keep edits made while this ran (a later tick or typing). reset() would mark them saved.
+      reportSaver.adopt({ followup: fresh.followup });
       renderReport();
     })().catch((e) => alert(errorText(e)));
     return;
@@ -288,6 +329,7 @@ async function reportJob(job, extra = {}) {
       reportOutput = `${result.state}: ${result.output || ''}`;
       if (page === 'report_editor' && reportId === id && $('report-output')) $('report-output').textContent = reportOutput;
     } while (['running', 'queued'].includes(result.state));
+    if (job === 'report_build') lastBuildResult = result;
     if (job === 'report_build' && result.state !== 'done') showBuildError(result.output || 'Report build failed');
     return result.state === 'done';
   } catch (error) {
@@ -313,18 +355,35 @@ async function buildReport(pdf) {
     alert('add at least one finding');
     return;
   }
-  if (await reportSaver.save(true)) await reportJob('report_build', { pdf });
+  if (reportBuildRunning) return;  // a build is already running: a second click must not start a second job
+  reportBuildRunning = true;
+  try { if (!await reportSaver.save(true)) return; await runBuild(pdf); } finally { reportBuildRunning = false; }
+}
+async function runBuild(pdf) {
+  const setStatus = (text) => { reportBuildStatus = text; const el = $('report-build-status'); if (el) el.textContent = text; };
+  const buttons = () => [...document.querySelectorAll('[data-report-build]')];
+  buttons().forEach((b) => { b.disabled = true; });
+  lastBuildResult = null;
+  setStatus(pdf ? 'Building Word and PDF. This can take up to a minute...' : 'Building Word...');
+  let ok = false;
+  try { ok = await reportJob('report_build', { pdf }); } finally { buttons().forEach((b) => { b.disabled = false; }); }
+  loadReportStatus();
+  setStatus(ok ? H.buildOutcomeText(lastBuildResult, pdf) : H.buildOutcomeText(lastBuildResult || { state: 'failed', output: reportOutput }, pdf));
 }
 async function reportEditorClick(b) {
   if (page !== 'report_editor' || !reportRecord) return false;
   const d = b.dataset;
+  if (d.demoAction !== undefined) return resolveDemographic(d.demoAction, d.demoKey);
   if (d.reportRefresh !== undefined) {
-    if (!confirm("This replaces the report's conditions, allergies, observations, medicine tables and pathology with the current interview. Your findings and letter text are kept. A backup of the current report is saved.")) return true;
+    if (!confirm("This replaces the report's conditions, allergies, observations, medicine tables and pathology with the current interview. Patient, GP and date blocks follow the patient record unless you edited them; you will be asked about each edited block. Your findings and letter text are kept. A backup of the current report is saved.")) return true;
     const id = reportId, screen = $('screen');
     screen.inert = true;
     try {
       if (!(await reportSaver.save())) return true;
-      await hmr.api('POST', `/api/patients/${encodeURIComponent(id)}/report/refresh`);
+      let result = await hmr.api('POST', `/api/patients/${encodeURIComponent(id)}/report/refresh`);
+      // Blocks the pharmacist edited are kept; each difference from the patient record is offered, never replaced silently.
+      const replace = (result?.demographic_conflicts || []).filter((c) => confirm(`The ${c.label} in this report was edited and differs from the current patient record.\n\nIn the report:\n${c.report}\n\nIn the patient record:\n${c.record}\n\nOK replaces the report text with the patient record. Cancel keeps your edited text.`)).map((c) => c.key);
+      if (replace.length) await hmr.api('POST', `/api/patients/${encodeURIComponent(id)}/report/refresh`, { replace_demographics: replace });
       if (page === 'report_editor' && reportId === id) {
         const updated = await hmr.api('GET', `/api/patients/${encodeURIComponent(id)}/report`);
         if (page === 'report_editor' && reportId === id) { reportRecord = updated; reportSaver.reset(updated); renderReport(); loadSuggestions(); }

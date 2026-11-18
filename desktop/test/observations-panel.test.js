@@ -317,6 +317,25 @@ test('leaveInterview refuses to navigate while an in-flight save retains edits',
   assert.equal(vm.runInContext('interviewPathology.records[0].value', context), '31');
 });
 
+test('in-flight pathology edit keeps the server revision token as returned (SHA-256 string, not a number)', async () => {
+  const token = 'a'.repeat(63) + 'b';
+  const deferred = [];
+  const { context } = setup((method, path) => {
+    if (path.endsWith('/pathology-records') && method === 'POST')
+      return new Promise(resolve => deferred.push(resolve));
+    return Promise.resolve({});
+  });
+  vm.runInContext(`interviewId = '1'; interviewRequest = 7;
+    interviewPathology = { revision: '${'0'.repeat(64)}', records: [{ id: 'x', test: 'eGFR', value: '28', unit: '', reference_interval: '', sample_date: '', source: '', verified: false, comment: '' }] };
+    interviewPathologyDirty = true;`, context);
+  const saving = vm.runInContext('savePathologyRecords()', context);
+  await new Promise(r => setImmediate(r));
+  vm.runInContext(`interviewPathology.records[0].value = '31';`, context);
+  deferred[0]({ revision: token, records: [{ id: 'x', test: 'eGFR', value: '28', unit: '', reference_interval: '', sample_date: '', source: '', verified: false, comment: '' }] });
+  assert.equal(await saving, false);
+  assert.equal(vm.runInContext('interviewPathology.revision', context), token);
+});
+
 test('overlapping pathology saves are serialized so an older response never lowers the adopted revision', async () => {
   const deferred = [];
   const posts = [];

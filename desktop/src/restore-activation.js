@@ -230,7 +230,10 @@ async function activateRestored(restoredDir,dataDir,configPath) {
     return raw;
   });
   const config = parseJsonText(previousConfig);
-  if (inside(restored.folder,data) || inside(data,restored.folder))
+  // restored.folder is a real path. Compare it with the real path of the data folder too: a link, junction or
+  // Windows 8.3 short name for the same folder would otherwise hide a nested restore from this guard.
+  const dataReal = await fs.realpath(data).catch(() => data);
+  if (inside(restored.folder,dataReal) || inside(dataReal,restored.folder) || inside(restored.folder,data) || inside(data,restored.folder))
     fail('validate', 'Restore data must be outside the active app data directory');
   const targetWorkspace = path.join(data,'activated-workspaces','restore-'+stamp);
   const rollback = path.join(data,'restore-rollbacks','rollback-'+stamp);

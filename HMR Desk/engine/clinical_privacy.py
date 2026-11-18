@@ -18,8 +18,21 @@ SENSITIVE = re.compile(
     r"\b8003\s?\d{4}\s?\d{4}\s?\d{4}\b|"
     r"\b(?:04\d{2}[ -]?\d{3}[ -]?\d{3})\b|"
     r"[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}|"
-    r"\b(?:19|20)\d{2}[-/]\d{1,2}[-/]\d{1,2}\b)"
+    r"\b(?:19|20)\d{2}[-/]\d{1,2}[-/]\d{1,2}\b|"
+    r"\b\d{1,2}[-/.]\d{1,2}[-/.](?:\d{4}|\d{2})\b|"
+    r"\b\d{1,2}[ -](?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*[ ,-]*(?:\d{4}|\d{2})\b|"
+    r"\b(?:born|dob|d\.o\.b)\b)"
 )
+# Free-text directions: two consecutive capitalised words look like a person's name.
+# Plain clinical phrases are listed so ordinary directions are not blocked.
+NAME_PAIR = re.compile(r"\b([A-Z][a-z]{2,})\s+([A-Z][a-z]{2,})\b")
+CLINICAL_WORDS = {
+    "Take", "Use", "Apply", "Insert", "Inhale", "Swallow", "With", "Without", "Food", "Water", "Before", "After",
+    "Meals", "Morning", "Night", "Evening", "Daily", "Twice", "Once", "Weekly", "Monthly", "Each", "Every", "When",
+    "Required", "Needed", "Tablet", "Tablets", "Capsule", "Capsules", "Puffs", "Drops", "Patch", "Patches",
+    "Dose", "Doses", "Hours", "Days", "Weeks", "Left", "Right", "Eye", "Eyes", "Ear", "Ears", "Mouth", "Skin",
+    "Bedtime", "Breakfast", "Lunch", "Dinner", "Stat", "Mane", "Nocte", "Not", "Crush", "Does", "Open",
+}
 SAFE_LABEL = re.compile(r"^[\w ,.'()/+%:-]{1,160}$", re.UNICODE)
 SAFE_VALUE = re.compile(r"^[\w ,.'()/+%:;=-]{1,180}$", re.UNICODE)
 
@@ -34,6 +47,8 @@ def clean(value, *, label=False):
     value = value.strip()
     if not value:
         return ""
+    if not label and any(not ({m.group(1), m.group(2)} <= CLINICAL_WORDS) for m in NAME_PAIR.finditer(value)):
+        raise PrivacyBlocked("Clinical value contains unsupported or potentially identifying text")
     if SENSITIVE.search(value) or not (SAFE_LABEL if label else SAFE_VALUE).fullmatch(value):
         raise PrivacyBlocked("Clinical value contains unsupported or potentially identifying text")
     return value

@@ -8,6 +8,7 @@ import db, messaging, outbox, settings
 with tempfile.TemporaryDirectory() as tmp:
     db.BASE = tmp
     conn = db.connect(os.path.join(tmp, 'db.sqlite'))
+    import settings; settings.update(conn, {'pharmacist_name': 'Consultant Pharmacist', 'pharmacist_phone': '0400 000 000'})  # product defaults are empty: set before messages are built
     # Owner preference: messages are drafted for approval; nothing sends itself until a kind is switched to auto.
     assert all(settings.get(conn, 'auto_' + k) == 'ask' for k in ('confirmation', 'thanks_decline', 'follow_up', 'reminder'))
     settings.update(conn, {'ai_reply_reading': 'off', 'auto_confirmation': 'auto', 'auto_thanks_decline': 'auto', 'auto_follow_up': 'auto', 'auto_reminder': 'auto'})
@@ -66,6 +67,12 @@ with tempfile.TemporaryDirectory() as tmp:
     conn.execute("INSERT OR REPLACE INTO meta VALUES ('outbox_mode','live')")
     messaging.autopilot(conn, now)
     assert messages(held, 'confirmation')[0]['state'] == 'draft'
+    # A confirmed patient with no postcode is skipped for reminders: no draft, no exception, one audit event.
+    nopc = patient('nopostcode', 'confirmed', postcode='', visit='2026-11-12')
+    with patch('logging.exception') as logged:
+        messaging.autopilot(conn, now + dt.timedelta(hours=1)); messaging.autopilot(conn, now + dt.timedelta(hours=1))
+    assert not logged.called and not messages(nopc, 'reminder')
+    assert conn.execute("SELECT COUNT(*) FROM events WHERE patient_id=? AND type='autopilot_skipped_no_postcode'", (nopc['id'],)).fetchone()[0] == 1
     # A reply after an offer stops follow-up, including a call-list escalation.
     reply = patient('reply', 'offered'); msg(reply, 'oldoffer', 'out', 'offer', '2026-11-09T12:00:00+10:00')
     msg(reply, 'replyin', 'in', 'OTHER', '2026-11-10T12:00:00+10:00')

@@ -88,6 +88,60 @@ def test_failed_migration_leaves_original_untouched(tmp_path, monkeypatch):
     assert not (tmp_path / 'userdata' / 'hmr.db.encrypting').exists()
 
 
+def test_second_replace_failure_restores_the_original_database(tmp_path, monkeypatch):
+    target = _paths(tmp_path, monkeypatch)
+    with plain(target) as legacy:
+        legacy.execute('CREATE TABLE t(x)')
+        legacy.execute("INSERT INTO t VALUES ('keep')")
+    key = os.urandom(32)
+    real = db._replace_retry
+    calls = []
+
+    def second_fails(source, dest, *a, **k):
+        calls.append((source, dest))
+        if len(calls) == 2:
+            raise PermissionError('locked by another program')
+        return real(source, dest, *a, **k)
+    monkeypatch.setattr(db, '_replace_retry', second_fails)
+    with pytest.raises(PermissionError):
+        db.encrypt_plain_file(str(target), key)
+    assert _is_plain(target)
+    with plain(target) as check:
+        assert check.execute('SELECT x FROM t').fetchone()[0] == 'keep'
+    assert not (tmp_path / 'userdata' / 'hmr.db.plain-old').exists()
+
+
+def test_restore_failure_keeps_both_files_and_says_so(tmp_path, monkeypatch):
+    target = _paths(tmp_path, monkeypatch)
+    with plain(target) as legacy:
+        legacy.execute('CREATE TABLE t(x)')
+        legacy.execute("INSERT INTO t VALUES ('keep')")
+    key = os.urandom(32)
+    real = db._replace_retry
+    calls = []
+
+    def fails_after_first(source, dest, *a, **k):
+        calls.append(1)
+        if len(calls) >= 2:
+            raise PermissionError('locked')
+        return real(source, dest, *a, **k)
+    monkeypatch.setattr(db, '_replace_retry', fails_after_first)
+    with pytest.raises(RuntimeError, match='plain-old'):
+        db.encrypt_plain_file(str(target), key)
+    folder = tmp_path / 'userdata'
+    assert (folder / 'hmr.db.plain-old').exists()
+    assert (folder / 'hmr.db.encrypting').exists()
+
+
+def test_no_fresh_database_while_an_unfinished_migration_copy_exists(tmp_path, monkeypatch):
+    target = _paths(tmp_path, monkeypatch)
+    (tmp_path / 'userdata').mkdir(exist_ok=True)
+    (tmp_path / 'userdata' / 'hmr.db.plain-old').write_bytes(b'records')
+    with pytest.raises(RuntimeError, match='new empty database was not created'):
+        db.ensure_encrypted(str(target))
+    assert not target.exists()
+
+
 def test_missing_key_is_refused_and_no_new_key_made(tmp_path, monkeypatch):
     target = _paths(tmp_path, monkeypatch)
     db.connect(str(target)).close()
@@ -164,6 +218,51 @@ def test_rotate_key_reencrypts_and_old_key_stops_working(tmp_path, monkeypatch):
     with db.connect(str(target)) as again:
         assert again.execute('SELECT name FROM patients').fetchone()[0] == 'Synthetic Person'
     assert dbkey.status(str(target))['recovery_pending'] is True
+
+
+def test_connect_during_rotation_does_not_drop_the_pending_key(tmp_path, monkeypatch):
+    import threading
+    target = _paths(tmp_path, monkeypatch)
+    conn = db.connect(str(target))
+    conn.execute("INSERT INTO patients(key,name) VALUES ('s','Synthetic Person')")
+    conn.commit()
+    real_finish = dbkey.finish_rotation
+    seen = {}
+
+    def finish_after_a_health_request(path):
+        # The database is rekeyed and the pending key exists. A health request connects now.
+        def health():
+            try:
+                db.connect(str(target)).close()
+            except Exception:
+                pass   # failing to open is acceptable; deleting the pending key is not
+        probe = threading.Thread(target=health)
+        probe.start()
+        probe.join(3)
+        seen['pending_kept'] = (tmp_path / 'userdata' / dbkey.PENDING_FILE).exists()
+        return real_finish(path)
+    monkeypatch.setattr(dbkey, 'finish_rotation', finish_after_a_health_request)
+    db.rotate_key(conn)
+    assert seen['pending_kept'], 'pending key was deleted during rotation'
+    conn.close()
+    with db.connect(str(target)) as again:
+        assert again.execute('SELECT name FROM patients').fetchone()[0] == 'Synthetic Person'
+
+
+def test_backups_keep_working_after_a_rotation(tmp_path, monkeypatch):
+    target = _paths(tmp_path, monkeypatch)
+    conn = db.connect(str(target))
+    conn.execute("INSERT INTO patients(key,name) VALUES ('s','Synthetic Person')")
+    conn.commit()
+    first = db.backup(conn)                      # encrypted with the old key
+    db.rotate_key(conn)
+    for _ in range(3):
+        assert db.backup(conn) == first          # same weekday file is replaced, never opened with the new key
+    key = conn.hmr_key
+    conn.close()
+    with db.open_encrypted(first, key=key) as check:
+        assert check.execute('SELECT name FROM patients').fetchone()[0] == 'Synthetic Person'
+    assert not list((tmp_path / 'userdata').glob('*.new'))
 
 
 def test_interrupted_rotation_is_settled_on_next_connect(tmp_path, monkeypatch):

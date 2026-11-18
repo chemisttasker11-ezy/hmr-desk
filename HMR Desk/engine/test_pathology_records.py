@@ -83,3 +83,28 @@ def test_legacy_verified_records_retained_without_forged_reviewer(tmp_path, monk
     assert migrated['version'] == 2
     assert migrated['records'] == [legacy]
     assert migrated['verification'] == {}
+
+
+def test_revision_check_and_write_share_one_write_transaction(tmp_path, monkeypatch):
+    """While a save is between its revision check and its write, another connection cannot write."""
+    import db
+    path = str(tmp_path / 'p.db')
+    conn = db.connect(path)
+    other = db.connect(path)
+    other.execute('PRAGMA busy_timeout=0')
+    seen = {}
+    real = pathology_records.validate
+
+    def probing_validate(records_):
+        if 'locked' in seen:
+            return real(records_)  # only the check inside save matters; later calls run after commit
+        try:
+            other.execute('BEGIN IMMEDIATE')
+            other.rollback()
+            seen['locked'] = False
+        except Exception as exc:
+            seen['locked'] = 'locked' in str(exc)
+        return real(records_)
+    monkeypatch.setattr(pathology_records, 'validate', probing_validate)
+    pathology_records.save(conn, {'id': 1}, {'revision': 'missing', 'records': [row()]}, reviewer='Synthetic Pharmacist')
+    assert seen['locked'] is True

@@ -1,8 +1,13 @@
 import datetime as dt
+import json
 import os
 import tempfile
+from pathlib import Path
 from unittest.mock import patch
-import api, db, inbox, messaging, outbox
+import api, db, inbox, messaging, outbox, settings
+
+
+PHONE = '0400000000'  # messages now end with the pharmacist phone line
 
 
 def call(conn, method, path, body=None):
@@ -12,23 +17,30 @@ def call(conn, method, path, body=None):
 with tempfile.TemporaryDirectory() as tmp:
     outbox.config = lambda: {'test_number': '0412345678'}
     conn = db.connect(os.path.join(tmp, 'test.db'))
+    # The product has no default pharmacist name or phone (messages refuse to render without them), so the fixture sets both.
+    settings.update(conn, {'pharmacist_name': 'Consultant Pharmacist', 'pharmacist_phone': PHONE})
     conn.execute("INSERT INTO patients(key,name,phone,address,postcode,gp,state,visit_date,visit_time) VALUES ('a','Mrs Jane Smith','0412345678','1 Main St','2486','Dr John Jones','pooled','2026-11-11','10:30')")
     conn.execute("INSERT INTO patients(key,name,phone,address,postcode,gp,state,visit_date,visit_time,call_list) VALUES ('b','John Brown','0412345679','2 Main St','4216','Jones','confirmed','2026-11-11','10:30',1)")
     conn.commit()
     a = conn.execute('SELECT * FROM patients WHERE id=1').fetchone()
     b = conn.execute('SELECT * FROM patients WHERE id=2').fetchone()
     when = dt.datetime(2026, 11, 11, 10, 30)
-    short = 'Kind regards,\nConsultant Pharmacist, Consultant Pharmacist\n'
-    offer = "Dear Mrs Jane Smith,\n\nAs part of your health assessment plan, Dr John Jones has referred you for a Home Medicines Review. I will visit you at home to go through your medicines with you, and then send a report to Dr Jones. The review is covered by Medicare, so there is no cost to you. It takes about 20 to 30 minutes.\n\nYour appointment is on Wednesday 11 November at 11:30 am, at 1 Main St.\n\nPlease reply YES to confirm. If the time does not suit you, reply with a better day or time. If you would prefer not to go ahead, reply DECLINE and I will let Dr Jones know.\n\nKind regards,\nConsultant Pharmacist\nCredentialed Consultant Pharmacist\n"
+    short = 'Kind regards,\nConsultant Pharmacist, Consultant Pharmacist\n' + PHONE
+    offer = "Dear Mrs Jane Smith,\n\nAs part of your health assessment plan, Dr John Jones has referred you for a Home Medicines Review. I will visit you at home to go through your medicines with you, and then send a report to Dr Jones. The review is covered by Medicare, so there is no cost to you. It takes about 20 to 30 minutes.\n\nYour appointment is on Wednesday 11 November at 11:30 am, at 1 Main St.\n\nPlease reply YES to confirm. If the time does not suit you, reply with a better day or time. If you would prefer not to go ahead, reply DECLINE and I will let Dr Jones know.\n\nKind regards,\nConsultant Pharmacist\nCredentialed Consultant Pharmacist\n" + PHONE
     assert messaging.render(conn, a, 'offer', when) == offer
     follow = messaging.render(conn, a, 'follow_up', when)
     assert follow == f'Dear Mrs Jane Smith, I am following up my message about the Home Medicines Review that Dr Jones referred you for. Your appointment is on Wednesday 11 November at 11:30 am.\n\n{short}'
     assert 'Reply YES' not in follow
     assert messaging.render(conn, a, 'confirmation') == f'Dear Mrs Jane Smith, thank you. Your Home Medicines Review is confirmed for Wednesday 11 November at 11:30 am at your home. I will send you a reminder the day before. Please have all your medicines nearby, including vitamins, creams, puffers and eye drops.\n\n{short}'
     assert messaging.render(conn, a, 'thanks_decline') == 'Dear Mrs Jane Smith, thank you for letting me know. I will let Dr Jones know. If you change your mind, you are welcome to reply to this message.\n\nKind regards,\nConsultant Pharmacist'
-    assert messaging.render(conn, a, 'reminder') == 'Dear Mrs Jane Smith, this is a reminder of your Home Medicines Review tomorrow, Wednesday 11 November, at 11:30 am. Please have your medicines nearby. If anything has changed, please let me know.\n\nKind regards,\nConsultant Pharmacist\n'
+    assert messaging.render(conn, a, 'reminder') == 'Dear Mrs Jane Smith, this is a reminder of your Home Medicines Review tomorrow, Wednesday 11 November, at 11:30 am. Please have your medicines nearby. If anything has changed, please let me know.\n\nKind regards,\nConsultant Pharmacist\n' + PHONE
     assert messaging.render(conn, b, 'offer', when).startswith('Dear John Brown,') and '10:30 am' in messaging.render(conn, b, 'offer', when)
     conn.execute("UPDATE patients SET gp='Dr.  Samir   Ibrahim' WHERE id=1")
+    # The shipped clinics.json is an empty placeholder (the real GP directory is private), so the fixture supplies the mapping.
+    directory = Path(tmp) / 'clinics.json'
+    directory.write_text(json.dumps({'samir ibrahim': 'Harbourtown Day/Night Surgery'}), encoding='utf-8')
+    clinics_patch = patch.object(messaging, 'Path', lambda *a: type('P', (), {'with_name': staticmethod(lambda n: directory)})())
+    clinics_patch.start()
     mapped = conn.execute('SELECT * FROM patients WHERE id=1').fetchone()
     assert 'Dr Samir   Ibrahim at Harbourtown Day/Night Surgery has referred you' in messaging.render(conn, mapped, 'offer', when)
     assert conn.execute('SELECT clinic FROM patients WHERE id=1').fetchone()[0] == 'Harbourtown Day/Night Surgery'
@@ -37,6 +49,7 @@ with tempfile.TemporaryDirectory() as tmp:
     assert conn.total_changes == changes
     conn.execute("UPDATE patients SET clinic='Existing Clinic' WHERE id=1")
     assert messaging.clinic(conn, mapped) == 'Existing Clinic'
+    clinics_patch.stop()
     assert conn.execute('SELECT clinic FROM patients WHERE id=1').fetchone()[0] == 'Existing Clinic'
     current = conn.execute('SELECT * FROM patients WHERE id=1').fetchone()
     assert 'at Existing Clinic has referred you' in messaging.render(conn, current, 'offer', when)
@@ -78,7 +91,7 @@ with tempfile.TemporaryDirectory() as tmp:
     assert call(conn, 'POST', '/api/patients/1/messages', {'kind':'change','date':'2026-11-16','time':'07:00'})[0] == 400
     status, change = call(conn, 'POST', '/api/patients/1/messages', {'kind':'change','date':'2026-11-16','time':'10:30'})
     assert status == 200
-    assert change['body'] == "Hi Jane, unfortunately I have to change our appointment on Wednesday 11 November at 11:30 am due to unforeseen circumstances, and I'm sorry for the inconvenience. Would 11:30 am on Monday 16 November suit you instead? If so, just reply YES. If not, let me know a day or time that works better for you.\n\nKind regards,\nConsultant Pharmacist\nCredentialed Consultant Pharmacist\n"
+    assert change['body'] == "Hi Jane, unfortunately I have to change our appointment on Wednesday 11 November at 11:30 am due to unforeseen circumstances, and I'm sorry for the inconvenience. Would 11:30 am on Monday 16 November suit you instead? If so, just reply YES. If not, let me know a day or time that works better for you.\n\nKind regards,\nConsultant Pharmacist\nCredentialed Consultant Pharmacist\n" + PHONE
     conn.execute("UPDATE patients SET state='confirmed' WHERE id=1")
     assert call(conn, 'POST', f"/api/messages/{change['id']}/approve")[0] == 200
     p = conn.execute('SELECT * FROM patients WHERE id=1').fetchone()
@@ -100,8 +113,8 @@ with tempfile.TemporaryDirectory() as tmp:
             return cls(2026, 11, 10, 12, tzinfo=tz)
     p = conn.execute('SELECT * FROM patients WHERE id=1').fetchone()
     with patch('messaging.dt.datetime', FixedDateTime):
-        assert messaging.render(conn, p, 'change_request', FixedDateTime(2026, 11, 16, 12, 0)) == 'Hi Jane, would 1:00 pm on Monday 16 November suit you instead of 11:30 am? It would help with my schedule, but no worries at all if 11:30 am is better for you.\n\nKind regards,\nConsultant Pharmacist, '
-        assert messaging.render(conn, p, 'change_request', FixedDateTime(2026, 11, 18, 10, 0)) == 'Hi Jane, would 11:00 am on Wednesday 18 November suit you instead of 11:30 am on Monday 16 November? It would help with my schedule, but no worries at all if the original time is better for you.\n\nKind regards,\nConsultant Pharmacist, '
+        assert messaging.render(conn, p, 'change_request', FixedDateTime(2026, 11, 16, 12, 0)) == 'Hi Jane, would 1:00 pm on Monday 16 November suit you instead of 11:30 am? It would help with my schedule, but no worries at all if 11:30 am is better for you.\n\nKind regards,\nConsultant Pharmacist, ' + PHONE
+        assert messaging.render(conn, p, 'change_request', FixedDateTime(2026, 11, 18, 10, 0)) == 'Hi Jane, would 11:00 am on Wednesday 18 November suit you instead of 11:30 am on Monday 16 November? It would help with my schedule, but no worries at all if the original time is better for you.\n\nKind regards,\nConsultant Pharmacist, ' + PHONE
         assert '11:00 am tomorrow, Wednesday 11 November' in messaging.render(conn, p, 'change_request', FixedDateTime(2026, 11, 11, 10, 0))
     status, request = call(conn, 'POST', '/api/patients/1/messages', {'kind':'change_request','date':'2026-11-18','time':'10:00'})
     assert status == 200 and call(conn, 'POST', f"/api/messages/{request['id']}/approve")[0] == 200

@@ -14,7 +14,13 @@ def main(argv=None):
                         help='developer only (needs HMR_DEV_TOOLS=1): add a synthetic visit-stage patient')
     parser.add_argument('--recover-key', action='store_true',
                         help='read a recovery key from standard input and unlock this PC\'s database')
+    parser.add_argument('--self-test-pdf', metavar='DIR',
+                        help='CI only: convert a synthetic Word file in DIR to PDF; touches no patient data')
+    parser.add_argument('--self-test-result', metavar='FILE', help='where --self-test-pdf writes its verdict')
     args = parser.parse_args(argv)
+    if args.self_test_pdf:
+        import pdf_selftest
+        return pdf_selftest.run(args.self_test_pdf, args.self_test_result)
     if args.version:
         print('hmr-engine 0.1.0')
         return 0

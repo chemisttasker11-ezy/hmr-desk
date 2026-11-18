@@ -198,9 +198,11 @@ are not overwritten. Tests use synthetic feeds only (`test_ncts_download.py`).
 
 - **Annual Statement of Usage:** NCTS access depends on completing the annual survey
   each June. Missing it can lose access. Put a reminder in the owner calendar.
-- **Australia only:** the licence answers recorded for this account were "No" to use
-  outside Australia. The monthly update therefore runs in Australia only. Do not run it
-  from, or ship the downloaded data to, a location outside Australia.
+- **Use in Australia:** the licence answers recorded for this account were "No" to use
+  outside Australia. The restriction is on how the data is used. These terms do not say
+  which machine may perform the download. Use the data, and the built database, only
+  within the licence; check the current NCTS and SNOMED affiliate terms before any use
+  or transfer outside Australia.
 - The `--accept-ncts-licence` flag records the operator's precondition, not proof of a
   licence. Do not bundle the ZIP or derived terminology in a distribution.
 - NCTS also publishes official Java and .NET syndication clients

@@ -10,7 +10,7 @@ Rules that keep records safe:
     app's encryption. Export never overwrites an existing file.
 Word, PDF and source-file outputs are not stored here and stay plain files.
 """
-import datetime, hashlib, json, os, re
+import datetime, hashlib, json, os, re, threading
 from pathlib import Path
 
 # Patient-folder files that hold patient-specific clinical content. Fixed templates, reference data and the
@@ -19,6 +19,7 @@ RECORD_PATTERNS = (
     r'interview\.json(\.bak)?',
     r'report_spec(\.ai)?\.json(\.bak)?',
     r'report_spec\.policy\.json',
+    r'report_spec\.demographics_ack\.json',
     r'confirmed_meds\.json',
     r'followup[12]\.json',
     r'pathology_sources\.json',
@@ -54,8 +55,21 @@ class Conflict(Exception):
     pass
 
 
+_last_stamp = ['']
+_stamp_lock = threading.Lock()
+
+
 def _now():
-    return datetime.datetime.now().isoformat(timespec='microseconds')
+    """Sortable write time. The clock can return the same value for two writes made close together (Windows clock
+    ticks are coarse), which would make "written after" and "written at the same time" indistinguishable for the
+    freshness checks. Each stamp is therefore strictly later than the previous one from this process."""
+    with _stamp_lock:
+        moment = datetime.datetime.now()
+        stamp = moment.isoformat(timespec='microseconds')
+        if stamp <= _last_stamp[0]:
+            stamp = (datetime.datetime.fromisoformat(_last_stamp[0]) + datetime.timedelta(microseconds=1)).isoformat(timespec='microseconds')
+        _last_stamp[0] = stamp
+        return stamp
 
 
 def is_record_name(name):

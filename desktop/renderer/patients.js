@@ -39,7 +39,7 @@ function patientShell() {
   $('screen').innerHTML =
     `<div class="patient-layout"><div class="patient-list-pane"><label class="search">Search patients<input id="search" placeholder="Name, suburb, GP or phone"></label>
     <div class="actions"><label>Sort by <select id="patient-sort"><option value="urgency">Priority</option><option value="first">First name</option><option value="last">Last name</option><option value="referral">Referral date (newest)</option><option value="appointment">Appointment date</option></select></label><label>Appointments <select id="appointment-range"><option value="all">All appointments</option><option value="today">Today</option><option value="week">This week</option><option value="month">This month</option></select></label></div>
-    <div id="chips" class="chips"></div><div id="bulk"></div><div id="queue-message" role="status" aria-live="polite">${esc(runMessage)}</div><p id="patient-selection-error" class="error" role="alert" hidden></p><div class="actions patient-layout-actions"><button data-patient-layout="list">Maximise list</button><button data-patient-layout="patient">Maximise patient</button><button data-patient-layout="split">Restore split</button></div><div id="patient-list"></div></div>
+    <div id="chips" class="chips"></div><div id="bulk"></div><div id="queue-message" role="status" aria-live="polite">${esc(H.runStatusText(runMessage, runTasks))}</div><p id="patient-selection-error" class="error" role="alert" hidden></p><div class="actions patient-layout-actions"><button data-patient-layout="list">Maximise list</button><button data-patient-layout="patient">Maximise patient</button><button data-patient-layout="split">Restore split</button></div><div id="patient-list"></div></div>
     <div id="patient-divider" role="separator" tabindex="0" aria-label="Resize patient list" aria-orientation="vertical" aria-valuemin="25" aria-valuemax="75"></div><div id="detail" class="detail" hidden></div></div>`;
   const divider = $('patient-divider');
   divider.addEventListener('keydown', e => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); resizePatientPane(patientWidth + (e.key === 'ArrowLeft' ? -5 : 5)); } });
@@ -526,6 +526,7 @@ function openForm(action, patient) {
     const saveButton = event.target.querySelector?.('button.primary') || event.submitter || $('action-form')?.querySelector?.('button.primary');
     if (saveButton) saveButton.disabled = true;
     const fields = Object.fromEntries(new FormData(event.target));
+    const staleError = $('action-error'); if (staleError) staleError.textContent = '';
     try {
       await hmr.api(
         'POST',
@@ -544,10 +545,12 @@ function openForm(action, patient) {
     formOpen = false;
     try {
       await refresh();
-      if (action === 'visited' && page === 'patients' && selected === String(patient.id) && !formOpen) {
-        detailTab = 'Overview';
+      // refresh() leaves the open patient alone while a field has focus, so a saved action must redraw the patient
+      // itself; otherwise the old form, its old error and its disabled Save button stay on screen after the save.
+      if (typeof page !== 'undefined' && page === 'patients' && selected === String(patient.id) && !formOpen) {
+        if (action === 'visited') detailTab = 'Overview';
         if (!await showPatient(patient.id)) throw Error('patient view unavailable');
-        setPatientLayout('patient');
+        if (action === 'visited') setPatientLayout('patient');
       }
     } catch (error) {
       alert(action === 'visited' ? `Visit recorded, but the patient view could not be refreshed: ${errorText(error)}` : `Saved, but the view could not be refreshed: ${errorText(error)}`);
