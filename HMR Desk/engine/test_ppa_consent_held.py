@@ -119,6 +119,25 @@ def test_unticking_the_box_withdraws_an_attestation_and_a_stub_file_adds_nothing
     assert api.consent_evidence(c, p) == ''
 
 
+def test_authorised_person_consent_needs_relationship_and_name_in_the_backend(tmp_path, monkeypatch):
+    c, p, folder = _setup(tmp_path, monkeypatch)
+    def put(**extra):
+        records.put(c, 1, 'interview.json', json.dumps({'consent': {'signed': True, 'date': '2026-11-18', **extra}}).encode('utf-8'))
+    put(by='authorised', relationship=0, authorised_name='Test Carer')
+    assert api.consent_evidence(c, p) == ''
+    put(by='authorised', relationship=2, authorised_name='  ')
+    assert api.consent_evidence(c, p) == ''
+    put(by='authorised', relationship=2, authorised_name='Test Carer')
+    assert api.consent_evidence(c, p) == 'manual_attested'
+    _pdf(folder / SIGNED)
+    put(by='authorised', relationship=0, authorised_name='')
+    assert api.consent_evidence(c, p) == ''            # an app PDF does not bypass missing details
+    put(by='someone else')
+    assert api.consent_evidence(c, p) == ''
+    put(by='patient')
+    assert api.consent_evidence(c, p) == 'app_signed'
+
+
 def test_app_artifact_wins_over_attestation(tmp_path, monkeypatch):
     c, p, folder = _setup(tmp_path, monkeypatch)
     _attest(c)

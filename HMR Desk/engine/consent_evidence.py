@@ -17,6 +17,9 @@ def consent_evidence(conn, p):
         data = records.get_json(conn, p['id'], 'interview.json') or {}
         consent = data.get('consent', {})
         if consent.get('signed') is not True: return ''
+        if consent.get('by', 'patient') not in ('patient', 'authorised'): return ''
+        if consent.get('by') == 'authorised' and (not consent.get('relationship') or not str(consent.get('authorised_name') or '').strip()):
+            return ''  # interview.validate enforces this on save; re-checked here for records written another way
         try:
             import consent_sign, fitz
             path = consent_sign.unsigned_path(p)
