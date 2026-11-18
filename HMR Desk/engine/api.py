@@ -128,6 +128,13 @@ def valid_alternatives(meds, usage, alternatives):
         if normal(row[0]) != normal(choice['name']) or any(normal(choice['name']) == normal(item['name']) for item in stopped): return False
     return True
 
+def same_name_as_stopped(meds, usage):
+    """Listed medicines whose name equals a medicine recorded as not using in the interview. No alternative can resolve these."""
+    def normal(value): return re.sub(r'[^a-z0-9]+', '', value.casefold())
+    stopped = {normal(item['name']) for item in usage if item['status'] == 'not_using'}
+    return [row[0] for row in meds if normal(row[0]) in stopped]
+
+
 def current_medicine_snapshot(conn, p):
     data = records.get_json(conn, p['id'], 'interview.json')
     if data is None: return None
@@ -1116,7 +1123,9 @@ def handle(conn, method, path, query, body):
                     if relevant and snapshot is None: raise ValueError('Review and reconcile interview medicine use before confirming')
                     if snapshot is not None and (not isinstance(snapshot, list) or any(not isinstance(item, dict) or not isinstance(item.get('name'), str) for item in snapshot) or relevant_usage(snapshot, meds) != relevant): raise ValueError('Interview medicine use changed; review before confirming')
                     alternatives = body.get('alternatives', [None] * len(meds))
-                    if not valid_alternatives(meds, relevant, alternatives): raise ValueError('Select the medicine actually taking for each stopped overlap')
+                    if not valid_alternatives(meds, relevant, alternatives):
+                        if same_name_as_stopped(meds, relevant): raise ValueError('A listed medicine has the same name as one recorded as not using in the interview. Remove it from the list, or correct its use in the interview.')
+                        raise ValueError('Select the medicine actually taking for each stopped overlap')
                     if not isinstance(allergies, list) or len(allergies) > 60 or any(not isinstance(x, str) for x in allergies): raise ValueError('invalid allergies')
                     data = {'meds': meds, 'allergies': allergies, 'confirmed_at': db.now(), 'interview_usage': relevant, 'alternatives': alternatives}
                     if current_snapshot is not None:

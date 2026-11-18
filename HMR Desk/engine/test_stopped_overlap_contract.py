@@ -38,3 +38,51 @@ def test_same_normalised_name_is_an_overlap_and_no_selection_resolves_it():
 
 def test_a_stopped_medicine_not_in_the_confirmed_list_causes_no_overlap():
     assert check([['Synthmed B 5 mg tablet', '']], [STOPPED, usage('Synthmed B 5 mg tablet', 'taking')], None) is True
+
+
+# ---- wording of the refusal, through the real request handler (synthetic patient, temporary database)
+import pytest
+import db
+import interview
+
+
+@pytest.fixture
+def patient(tmp_path, monkeypatch):
+    monkeypatch.setattr(db, 'BASE', str(tmp_path / 'workspace')); monkeypatch.setattr(db, 'DATA_DIR', str(tmp_path / 'userdata'))
+    (tmp_path / 'workspace' / 'Visited' / 'Synthetic').mkdir(parents=True)
+    conn = db.connect(str(tmp_path / 'userdata' / 'hmr.db'))
+    pid = conn.execute("INSERT INTO patients(key,name,state,folder) VALUES(?,?,?,?)", ('syn-overlap', 'Synthetic Overlap', 'visited', 'Visited/Synthetic')).lastrowid
+    conn.commit(); p = conn.execute('SELECT * FROM patients WHERE id=?', (pid,)).fetchone()
+    d = interview.blank(conn, p)
+    d['meds'] = [['Synthmed A 10 mg tablet', '', 'one daily', '', '']]
+    d['other_meds'] = [['synthmed  A 10 mg   tablet', '', 'twice daily', ''], ['Synthmed A 20 mg tablet', '', 'once daily', '']]
+    d['details']['meds'] = [{'packed': '', 'as_instructed': False, 'use_status': 'not_using', 'use_reason': 'stopped_gp', 'use_details': ''}]
+    d['details']['other_meds'] = [{'checked': False, 'priority': 0, 'use_reason': '', 'use_details': '', 'kind': 'prescribed', 'use_status': 'taking'} for _ in range(2)]
+    interview.validate(d); d['revision'] = 'missing'; interview.save(conn, p, d); conn.commit()
+    yield conn, pid
+    conn.close()
+
+
+def save(conn, pid, name):
+    got = api.handle(conn, 'GET', '/api/patients/%d/meds' % pid, {}, None)[1]
+    body = {'meds': [[name, '']], 'allergies': [], 'interview_usage': got['interview_usage'], 'alternatives': [None]}
+    if 'medicine_snapshot_sha256' in got: body['medicine_snapshot_sha256'] = got['medicine_snapshot_sha256']
+    return api.handle(conn, 'POST', '/api/patients/%d/meds' % pid, {}, body)
+
+
+def test_same_name_as_a_not_using_medicine_gets_an_accurate_refusal(patient):
+    conn, pid = patient
+    status, body = save(conn, pid, 'synthmed  A 10 mg   tablet')
+    assert status == 400
+    assert body['error'] == 'A listed medicine has the same name as one recorded as not using in the interview. Remove it from the list, or correct its use in the interview.'
+
+
+def test_different_strength_is_accepted(patient):
+    conn, pid = patient
+    assert save(conn, pid, 'Synthmed A 20 mg tablet')[0] == 200
+
+
+def test_helper_ignores_unrelated_names_and_non_stopped_items():
+    items = [STOPPED, usage('Synthmed B 5 mg tablet', 'taking')]
+    assert api.same_name_as_stopped([['SYNTHMED A 10MG TABLET', '']], items) == ['SYNTHMED A 10MG TABLET']
+    assert api.same_name_as_stopped([['Synthmed B 5 mg tablet', '']], items) == []
