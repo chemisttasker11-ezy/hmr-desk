@@ -51,6 +51,7 @@ def load(conn, patient, ai=False):
     validate(data)
     if not ai: data = with_trusted_policy(conn, patient, data)
     if not ai: data['followup_text_reviewed'] = manual_defaults.review_valid(data)
+    if not ai: data['revision'] = records.revision(conn, patient['id'], 'report_spec.json')
     if not ai: data['interview_newer'] = 'interview_revision' in data and interview.revision(conn, patient) != data['interview_revision']
     if not ai:
         import pathology_records
@@ -89,9 +90,15 @@ def _bind_followup_review(data, old):
 
 
 def _save(conn, patient, data):
+    expected = data.get('expected_revision') if isinstance(data, dict) else None
+    if expected is not None and not isinstance(expected, str): raise ValueError('invalid expected_revision')
     data = with_trusted_policy(conn, patient, data)
     validate(data)
-    data = manual_defaults.apply_followup_decision({k: v for k, v in data.items() if k not in ('interview_newer', 'pathology_newer')})
+    data = manual_defaults.apply_followup_decision({k: v for k, v in data.items() if k not in ('interview_newer', 'pathology_newer', 'revision', 'expected_revision')})
+    if expected is not None:
+        # Compare and write in one write transaction so two saves cannot both pass the check.
+        if not conn.in_transaction: conn.execute('BEGIN IMMEDIATE')
+        if records.revision(conn, patient['id'], 'report_spec.json') != expected: raise records.Conflict('report changed since it was read')
     previous = records.get(conn, patient['id'], 'report_spec.json')
     data = _bind_followup_review(data, json.loads(previous) if previous else {})
     if previous is not None: records.put(conn, patient['id'], 'report_spec.json.bak', previous)

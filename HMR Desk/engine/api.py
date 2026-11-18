@@ -958,7 +958,10 @@ def handle(conn, method, path, query, body):
                 ai = query.get('ai', '')
                 return 200, report.load(conn, p, (ai[0] if isinstance(ai, list) and ai else ai) == '1')
             if method == 'POST':
-                result = report.save(conn, p, body); conn.commit(); return 200, result
+                try: result = report.save(conn, p, body)
+                except records.Conflict:
+                    conn.rollback(); return 409, {'error': 'report changed since it was read; reload before saving', 'revision': records.revision(conn, p['id'], 'report_spec.json')}
+                conn.commit(); return 200, result
         match = re.fullmatch(r'/api/patients/(\d+)/consent/(preview|sign)', path)
         if match:
             import consent_sign
