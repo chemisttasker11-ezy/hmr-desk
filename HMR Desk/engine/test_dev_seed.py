@@ -51,3 +51,12 @@ def test_seed_is_synthetic_and_ready_for_report(tmp_path, monkeypatch):
         spec = report.start(conn, patient)
         assert spec['name'] == result['name']
         assert conn.execute("SELECT COUNT(*) FROM events WHERE type='dev_seed'").fetchone()[0] == 2
+
+
+def test_seed_folder_sits_in_its_stage_folder(tmp_path, monkeypatch):
+    import lifecycle
+    monkeypatch.setenv(dev_seed.ENV_FLAG, '1')
+    with contextlib.closing(db.connect(_setup(tmp_path, monkeypatch))) as conn:
+        result = dev_seed.seed_visit(conn)
+        patient = conn.execute('SELECT * FROM patients WHERE id=?', (result['patient_id'],)).fetchone()
+        assert lifecycle.folder_check(patient) == {'actual': 'Visited', 'expected': 'Visited', 'ok': True}

@@ -38,7 +38,7 @@ def seed_visit(conn):
     require_enabled()
     n = conn.execute("SELECT COUNT(*) FROM patients WHERE key LIKE 'dev-seed-%'").fetchone()[0] + 1
     name = 'DEV SEED Synthetic Patient %d' % n
-    folder = 'DEV SEED Synthetic Patient %d' % n
+    folder = 'Visited/DEV SEED Synthetic Patient %d' % n  # stage folder, as for real visited patients
     path = Path(db.BASE) / folder
     path.mkdir(parents=True, exist_ok=True)
     today = dt.date.today().isoformat()
