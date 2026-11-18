@@ -14,7 +14,7 @@ test('a historical built flag is not a current report after clinical changes', (
   assert.equal(stale.canSign, false);
   assert.match(stale.signReason, /outdated/i);
   assert.equal(H.patientPathway({ stage: 'report', state: 'report_drafted' }, {},
-    [{ ...historical, ...stale.build }]).find(s => s.id === 'report').detail, 'Draft in progress');
+    [{ name: 'report_start', done: true }, { ...historical, ...stale.build }]).find(s => s.id === 'report').detail, 'Draft in progress');
 });
 
 test('only verified current reports can surface sign-off as available', () => {
