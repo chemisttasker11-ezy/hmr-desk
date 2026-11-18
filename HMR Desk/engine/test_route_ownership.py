@@ -14,7 +14,7 @@ import db
 
 HERE = Path(__file__).resolve().parent
 # api.py may only shrink. When code moves out, lower this number in the same change.
-API_LINE_CEILING = 1199
+API_LINE_CEILING = 1070
 
 
 def _tree(name):
@@ -31,7 +31,7 @@ def test_api_module_does_not_grow():
 
 
 def test_route_modules_do_not_import_the_facade():
-    for name in ('routes_system.py',):
+    for name in ('routes_system.py', 'routes_work.py'):
         for node in ast.walk(_tree(name)):
             modules = [a.name for a in node.names] if isinstance(node, ast.Import) else [node.module or ''] if isinstance(node, ast.ImportFrom) else []
             assert 'api' not in [m.split('.')[0] for m in modules], f'{name} imports api: that would be a cycle'
@@ -41,6 +41,13 @@ def test_each_route_has_one_owner():
     owned = _route_literals(_tree('routes_system.py'))
     assert {'/api/settings', '/api/backups/create', '/api/storage/status', '/api/records/status', '/api/medicines/search'} <= owned
     assert not (owned & _route_literals(_tree('api.py'))), 'a route is handled by both api.py and routes_system.py'
+
+
+def test_each_work_route_has_one_owner():
+    owned = _route_literals(_tree('routes_work.py'))
+    assert {'/api/jobs', '/api/run', '/api/intake', '/api/referrals/review', '/api/referrals/commit', '/api/intake/correction'} <= owned
+    assert not (owned & _route_literals(_tree('api.py'))), 'a route is handled by both api.py and routes_work.py'
+    assert not (owned & _route_literals(_tree('routes_system.py'))), 'a route is handled by two route modules'
 
 
 @pytest.fixture
@@ -64,6 +71,22 @@ CHARACTERIZATION = [
     ('POST', '/api/backups/validate-isolated', {}, 400, {'error': 'Invalid isolated recovery validation'}),
     ('POST', '/api/backups/restore', {}, 400, {'error': 'invalid restore input'}),
     ('POST', '/api/settings', {'no_such_setting': 'x'}, 400, {'error': 'unknown setting: no_such_setting'}),
+    ('POST', '/api/jobs', {}, 400, {'error': 'unknown job name'}),
+    ('POST', '/api/jobs', {'job': 'intake_dry'}, 400, {'error': 'Use New referrals to review PDFs before adding patients'}),
+    ('POST', '/api/jobs', {'job': 'report_build', 'pdf': 'x'}, 400, {'error': 'invalid pdf'}),
+    ('POST', '/api/jobs', [], 404, {'error': 'not found'}),
+    ('GET', '/api/jobs/abc123', None, 404, {'error': 'job not found'}),
+    ('GET', '/api/jobs/zzz', None, 404, {'error': 'not found'}),
+    ('GET', '/api/jobs', None, 404, {'error': 'not found'}),
+    ('POST', '/api/run', {}, 400, {'error': 'invalid steps'}),
+    ('POST', '/api/run', [], 404, {'error': 'not found'}),
+    ('POST', '/api/run/abc123/cancel', {}, 404, {'error': 'task not found'}),
+    ('POST', '/api/run/abc123/result', {'state': 'done'}, 404, {'error': 'task not found'}),
+    ('POST', '/api/referrals/review', {}, 400, {'error': 'Choose up to 100 PDF files'}),
+    ('POST', '/api/referrals/review', {'paths': []}, 400, {'error': 'Choose up to 100 PDF files'}),
+    ('POST', '/api/referrals/commit', {}, 400, {'error': 'Invalid review'}),
+    ('POST', '/api/intake/correction', {}, 400, {'error': 'invalid file'}),
+    ('POST', '/api/intake/correction', [], 404, {'error': 'not found'}),
     ('GET', '/api/nothing', None, 404, {'error': 'not found'}),
     ('PUT', '/api/settings', {}, 404, {'error': 'not found'}),
 ]
@@ -80,3 +103,8 @@ def test_system_routes_keep_their_success_shapes(conn):
     s, r = api.handle(conn, 'GET', '/api/records/status', {}, None); assert s == 200 and isinstance(r, dict)
     s, r = api.handle(conn, 'GET', '/api/medicines/search', {'q': ['x']}, None); assert s == 200
     s, r = api.handle(conn, 'GET', '/api/agents', {}, None); assert s == 200
+
+
+def test_work_routes_keep_their_success_shapes(conn):
+    s, r = api.handle(conn, 'GET', '/api/run', {}, None); assert s == 200 and set(r) == {'steps', 'tasks'}
+    s, r = api.handle(conn, 'GET', '/api/intake', {}, None); assert s == 200 and set(r) == {'rows'}
