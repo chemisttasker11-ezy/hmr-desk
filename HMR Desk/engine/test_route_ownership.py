@@ -14,7 +14,7 @@ import db
 
 HERE = Path(__file__).resolve().parent
 # api.py may only shrink. When code moves out, lower this number in the same change.
-API_LINE_CEILING = 195
+API_LINE_CEILING = 180
 
 
 def _tree(name):
