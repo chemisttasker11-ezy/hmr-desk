@@ -281,7 +281,7 @@ def report_build(patient_id, pdf=False):
         target = Path(data['out'])
         if not target.is_absolute(): target = folder / target
         target = target.resolve()
-        if target.parent != folder or target.suffix.lower() != '.docx': raise ValueError('Report output must be a DOCX in patient folder')
+        if target.parent != folder or target.suffix.lower() != '.docx': raise ValueError('Report output must be a DOCX in patient folder; refresh the report from the interview to repair the output path')
         # Preserve every prior DOCX/PDF and any signed revision; never overwrite.
         if not Path(data['out']).is_absolute(): raise ValueError('Report spec out must be an absolute path')
         original = target
