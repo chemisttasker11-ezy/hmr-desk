@@ -9,7 +9,9 @@ Not included (each fails when run as a script in an isolated data dir on Linux; 
 - test_api, test_manual_workflow, test_independent_repairs: later sections call act('signed_off') and act('report_sent'),
   which now need an explicit pharmacist review, a built owner-approved Word and PDF pair and its checksum
   (report_auth.check_approval). The scripts cannot reach their later checks without that evidence; test_report_auth
-  covers the gate itself. test_independent_repairs also reads report_spec.json from disk, but it lives in the records store.
+  covers the gate itself. Their pre-sign-off parts run as test_*_presignoff.py (copies of the original text up to the
+  first signed_off call, with fixtures updated); the sign-off and later checks in the full scripts are NOT run and are
+  not counted as passing.
 - test_referral_entry (pytest): 1 case fails, it needs a scripts/intake folder in the default data directory.
 """
 import os
@@ -25,7 +27,8 @@ SCRIPTS = ['test_lifecycle.py', 'test_days.py', 'test_consent_sign.py', 'test_mi
            'test_engine.py', 'test_referral.py', 'test_run_catalog.py', 'test_suggest.py', 'test_timeline.py',
            'test_tracking_followon.py', 'test_autopilot.py', 'test_referral_fields.py',
            'test_messaging.py', 'test_replies.py', 'test_scenarios.py', 'test_revision4.py',
-           'test_planner.py', 'test_interview.py', 'test_importer.py']
+           'test_planner.py', 'test_interview.py', 'test_importer.py',
+           'test_api_presignoff.py', 'test_manual_workflow_presignoff.py', 'test_independent_repairs_presignoff.py']
 # Each script runs in its own interpreter, so module state, environment variables and temp data
 # never leak between scripts or into the pytest session. A non-zero exit (any assertion) fails.
 BOOT = ("import runpy, sys, types\n"
