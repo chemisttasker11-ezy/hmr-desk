@@ -830,7 +830,22 @@ def handle(conn, method, path, query, body):
             try:
                 if path == '/api/reference/local' and method == 'POST': return 200, reference_library.register(body)
                 if path == '/api/reference/local' and method == 'GET': return 200, reference_library.public(reference_library.current())
-                if path == '/api/reference/search' and method == 'GET': return 200, reference_library.search((query.get('q') or [''])[0])
+                if path == '/api/reference/search' and method == 'GET':
+                    q = (query.get('q') or [''])[0]
+                    try:
+                        return 200, reference_library.search(q)
+                    except reference_library.ReferenceUnavailable:
+                        # Packaged tier: serve the reviewed packaged tables, explicitly
+                        # labelled as unverified extraction - never as the user's own PDF.
+                        import brainstorm_tables_lookup
+                        try:
+                            return 200, brainstorm_tables_lookup.search(q)
+                        except brainstorm_tables_lookup.TablesUnavailable as tables_exc:
+                            if 'too long' in str(tables_exc):
+                                raise reference_library.ReferenceUnavailable(str(tables_exc)) from None
+                            # No usable PDF and no intact packaged tables: the same
+                            # user-facing state as before packaged tables existed.
+                            raise reference_library.ReferenceUnavailable('Local reference unavailable; choose the original PDF') from None
                 if path == '/api/reference/open' and method == 'POST' and isinstance(body,dict) and set(body)=={'pdf_sha256','page'}:
                     return 200, reference_library.open_source(body['pdf_sha256'],body['page'])
             except reference_library.ReferenceUnavailable as exc: return 409, {'error':str(exc)}
