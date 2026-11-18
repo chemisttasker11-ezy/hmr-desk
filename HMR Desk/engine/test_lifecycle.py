@@ -28,10 +28,13 @@ with tempfile.TemporaryDirectory() as tmp:
     c.execute("INSERT INTO visits(patient_id,kind,visit_date,source) VALUES (?,'hmr',?,'app')", (p['id'],str(today-dt.timedelta(days=40))))
     assert lifecycle.stage(c,p)['step'] == 'follow-up 1 due'
     c.execute("INSERT INTO visits(patient_id,kind,visit_date,source) VALUES (?,'followup1',?,'app')", (p['id'],str(today-dt.timedelta(days=31))))
+    import records  # follow-up 1 above is dated before 1 Nov 2026: historical, no delivery documentation required
     assert lifecycle.stage(c,p)['step'] == 'follow-up 1 to claim'
     c.execute("UPDATE visits SET claimed=? WHERE patient_id=? AND kind='followup1'", (str(today),p['id']))
     assert lifecycle.stage(c,p)['step'] == 'follow-up 2 due'
     c.execute("INSERT INTO visits(patient_id,kind,visit_date,source) VALUES (?,'followup2',?,'app')", (p['id'],str(today)))
+    assert lifecycle.stage(c,p)['step'] == 'follow-up 2 documentation incomplete'
+    records.put_json(c, p['id'], 'followup2.json', dict(date=str(today), method='in person', preferred_method='in person', choice_offered_on=str(today), spoke_with='', med_changes='', recommendations=[], issues='', outcome='', notes=''))
     assert lifecycle.stage(c,p)['step'] == 'follow-up 2 to claim'
     c.execute("UPDATE visits SET claimed=? WHERE patient_id=? AND kind='followup2'", (str(today),p['id']))
     assert lifecycle.stage(c,p)['stage'] == 'done'

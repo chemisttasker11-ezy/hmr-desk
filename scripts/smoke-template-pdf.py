@@ -71,7 +71,9 @@ def main():
     if not converter.is_file():
         raise RuntimeError('Pinned offline converter missing')
     os.environ['HMR_PDF_CONVERTER'] = str(converter)
-    with tempfile.TemporaryDirectory(prefix='hmr-template-pdf-') as temp:
+    temp = tempfile.mkdtemp(prefix='hmr-template-pdf-')
+    pending = []
+    try:
         folder = Path(temp)
         template = make_template(folder)
         assert template_report_builder.approved_template(folder)[0] == template
@@ -80,7 +82,8 @@ def main():
             word = folder / (stem + '.docx')
             pdf = folder / (stem + '.pdf')
             template_report_builder.render(data(long_case), word, template)
-            pdf_export.convert(word, pdf)
+            outcome = pdf_export.convert(word, pdf)
+            if outcome.get('cleanup_pending'): pending.append(outcome['cleanup_pending'])
             with fitz.open(pdf) as document:
                 assert document.page_count >= (2 if long_case else 1)
                 all_text = '\n'.join(page.get_text() for page in document)
@@ -92,8 +95,24 @@ def main():
                 flat = ' '.join(all_text.split())
                 needle = 'Synthetic medicine 34' if long_case else 'Synthetic medicine 1'
                 assert needle in flat, needle + ' missing in ' + stem + '; text sample: ' + flat[:1500]
+                if long_case:
+                    import re
+                    pages = [' '.join(page.get_text().split()) for page in document]
+                    with_rows = [t for t in pages if 'Synthetic medicine' in t]
+                    assert len(with_rows) >= 2 and all('Actual use' in t for t in with_rows), 'medicine header row not repeated on each page'
+                    for i in range(35):
+                        label = [k for k, t in enumerate(pages) if re.search(r'Synthetic medicine %d(?!\d)' % i, t)]
+                        use = [k for k, t in enumerate(pages) if re.search(r'Recorded use %d(?!\d)' % i, t)]
+                        assert len(label) == 1 and label == use, 'medicine row %d split across pages' % i
             assert word.is_file() and pdf.is_file()
-    print('PASS: synthetic short/long template DOCX and matching bundled-LibreOffice PDF pagination/text')
+    finally:
+        failure = pdf_export.remove_tree(temp)
+    print('PASS: synthetic short/long template DOCX and matching bundled-LibreOffice PDF pagination/text (conversion and assertions)')
+    if failure or pending:
+        print('CLEANUP PENDING (separate from conversion result): ' + '; '.join(pending + [temp] * bool(failure)))
+        if failure: print(failure)
+        sys.exit(3)
+    print('CLEANUP OK')
 
 
 if __name__ == '__main__':

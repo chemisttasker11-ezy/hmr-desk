@@ -106,14 +106,15 @@ class QuietStatic(http.server.BaseHTTPRequestHandler):
                 try:
                     body = None
                     if self.command == 'POST':
-                        if self.headers.get_content_type() != 'application/json':
-                            raise ValueError('Content-Type must be application/json')
                         length = int(self.headers.get('Content-Length', '0'))
-                        if not 0 < length <= 65536:
+                        if not 0 <= length <= 65536:
                             raise ValueError('invalid length')
-                        body = json.loads(self.rfile.read(length))
-                        if not isinstance(body, dict):
-                            raise ValueError('body must be an object')
+                        if length:
+                            if self.headers.get_content_type() != 'application/json':
+                                raise ValueError('Content-Type must be application/json')
+                            body = json.loads(self.rfile.read(length))
+                            if not isinstance(body, dict):
+                                raise ValueError('body must be an object')
                     if self.command == 'POST' and parsed.path == '/api/engine/stop':
                         STOP_EVENT.set()
                         status, result = 200, {'stopping': True}

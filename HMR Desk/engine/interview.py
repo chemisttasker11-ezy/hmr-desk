@@ -410,7 +410,13 @@ def available(folder, stem, suffixes):
         candidate = stem + ' ' + dt.datetime.now().strftime('%H%M') + (f' {n}' if n > 1 else ''); n += 1
     return candidate
 
+_last = threading.local()  # notice from the latest export on this thread, read by pack()
+
 def export(conn, patient, fmt):
+    _last.note = ''
+    return export_with_note(conn, patient, fmt)
+
+def export_with_note(conn, patient, fmt):
     if fmt not in ('docx', 'pdf', 'both'): raise ValueError('invalid format')
     from docx import Document
     from docx.shared import Cm, Pt
@@ -454,7 +460,18 @@ def export(conn, patient, fmt):
     with target.open('xb') as f: doc.save(f)
     if fmt in ('pdf', 'both'):
         import pdf_export
-        pdf_export.convert(target, folder / (stem + '.pdf'))
+        try:
+            converted = pdf_export.convert(target, folder / (stem + '.pdf'))
+        except Exception as exc:
+            left = getattr(exc, 'cleanup_pending', None)
+            if left:
+                db.log(conn, patient['id'], 'pdf_cleanup_pending', {'folder': left, 'conversion': 'failed', 'error': exc.cleanup_error}, 'engine'); conn.commit()
+                raise RuntimeError(str(exc) + '; ' + pdf_export.pending_note(left)) from exc
+            raise
+        if isinstance(converted, dict) and converted.get('cleanup_pending'):
+            left = Path(converted['cleanup_pending']).name
+            db.log(conn, patient['id'], 'pdf_cleanup_pending', {'folder': left, 'conversion': 'ok', 'error': converted.get('cleanup_error', '')}, 'engine'); conn.commit()
+            _last.note = 'PDF created. ' + pdf_export.pending_note(left)
     return str(target)
 
 def consent_template():
@@ -466,7 +483,9 @@ def consent_template():
 def pack(conn, patient, fmt='docx'):
     record = load(conn, patient)
     if not record['saved']: save(conn, patient, record)
+    _last.note = ''
     output = 'Interview: ' + export(conn, patient, fmt)
+    if getattr(_last, 'note', ''): output += '\n' + _last.note
     folder = jobs.patient_folder(patient); name = re.sub(r'[<>:"/\\|?*]', '', patient['name']).rstrip(' .')
     if record['consent']['signed'] or signed_file(folder): return output + '\nSigned consent kept'
     template = consent_template()

@@ -118,3 +118,47 @@ def test_unmapped_docx_cannot_be_registered_as_owner_layout(tmp_path,monkeypatch
     with pytest.raises(ValueError,match='placeholders'):
         renderer.register(template,'synthetic-unmapped','Synthetic Owner',True)
     assert not (tmp_path / 'userdata' / 'templates' / 'approved-hmr.docx').exists()
+
+
+def test_tables_repeat_header_and_keep_rows_whole(tmp_path):
+    import importlib.util, pathlib
+    spec = importlib.util.spec_from_file_location('smoke_tpl', pathlib.Path(__file__).resolve().parents[2] / 'scripts' / 'smoke-template-pdf.py')
+    smoke = importlib.util.module_from_spec(spec); spec.loader.exec_module(smoke)
+    template = smoke.make_template(tmp_path)
+    out = tmp_path / 'long.docx'
+    renderer.render(smoke.data(True), out, template)
+    from docx import Document
+    from docx.oxml.ns import qn
+    tables = Document(out).tables
+    assert tables
+    for table in tables:
+        for index, row in enumerate(table.rows):
+            props = row._tr.trPr
+            assert props is not None and props.find(qn('w:cantSplit')) is not None
+            assert (props.find(qn('w:tblHeader')) is not None) == (index == 0)
+    renderer.render(smoke.data(True), tmp_path / 'again.docx', template)  # idempotent re-render
+
+
+def test_long_medicine_table_pagination_with_real_converter(tmp_path, monkeypatch):
+    import importlib.util, pathlib, pdf_export
+    if not pdf_export.available():
+        pytest.skip('No PDF converter: pagination NOT tested here')
+    spec = importlib.util.spec_from_file_location('smoke_tpl2', pathlib.Path(__file__).resolve().parents[2] / 'scripts' / 'smoke-template-pdf.py')
+    smoke = importlib.util.module_from_spec(spec); spec.loader.exec_module(smoke)
+    template = smoke.make_template(tmp_path)
+    renderer.render(smoke.data(True), tmp_path / 'long.docx', template)
+    pdf_export.convert(tmp_path / 'long.docx', tmp_path / 'long.pdf')
+    import fitz
+    with fitz.open(tmp_path / 'long.pdf') as doc:
+        pages = [p.get_text() for p in doc]
+    table_pages = [t for t in pages if 'Synthetic medicine' in t]
+    assert len(table_pages) >= 2
+    for text in table_pages:
+        assert text.count('Actual use') >= 1  # header row on every page that has medicine rows
+    # no row is cut: a medicine's label number and its 'Recorded use N' cell sit on the same page
+    import re
+    flat = [' '.join(p.split()) for p in pages]
+    for i in range(35):
+        label = [k for k, t in enumerate(flat) if re.search(r'Synthetic medicine %d(?!\d)' % i, t)]
+        use = [k for k, t in enumerate(flat) if re.search(r'Recorded use %d(?!\d)' % i, t)]
+        assert len(label) == 1 and label == use, (i, label, use)

@@ -294,7 +294,7 @@ test('call action posts the selected outcome and note', async () => {
 test('follow-up form saves the edited record and recommendation shape', async () => {
   const vm = require('node:vm'), fs = require('node:fs'), H = require('../renderer/helpers');
   const handlers = {}, calls = [], nodes = {screen: {}, 'followup-status': {}};
-  const record = {date: '', method: 'phone', spoke_with: '', med_changes: '', recommendations: [['Take medicine', '', '']], issues: '', outcome: '', notes: ''};
+  const record = {date: '', method: '', preferred_method: '', choice_offered_on: '', spoke_with: '', med_changes: '', recommendations: [['Take medicine', '', '']], issues: '', outcome: '', notes: ''};
   const context = vm.createContext({ H, esc: H.esc, $: id => nodes[id], document: {addEventListener: (name, fn) => { handlers[name] = fn; }}, page: 'followup_editor', hmr: {api: async (...args) => { calls.push(args); if (args[0] === 'GET') return record; }}, errorText: String, setTimeout, clearTimeout, confirm: () => false });
   vm.runInContext(fs.readFileSync(require.resolve('../renderer/followup-context.js'), 'utf8'), context);
   vm.runInContext(fs.readFileSync(require.resolve('../renderer/interview.js'), 'utf8'), context);
@@ -420,4 +420,20 @@ test('report medicine notes use textareas and suggestions show specific gaps', (
   vm.runInContext(fs.readFileSync(require.resolve('../renderer/report-editor.js'), 'utf8'), context);
   vm.runInContext("reportGaps = ['Interview notes missing', 'Medicines not confirmed']", context);
   assert.match(context.suggestionsHtml(), /<li>Interview notes missing<\/li><li>Medicines not confirmed<\/li>/);
+});
+
+test('report editor shows the follow-up decision only for specs that carry it, and no timing text', () => {
+  const vm = require('node:vm'), fs = require('node:fs'), H = require('../renderer/helpers');
+  const context = vm.createContext({ H, esc: H.esc, document: { addEventListener() {} }, page: 'report_editor', errorText: String });
+  vm.runInContext(fs.readFileSync(require.resolve('../renderer/report-editor.js'), 'utf8'), context);
+  vm.runInContext("reportRecord = { followup: '' }", context);
+  assert.equal(vm.runInContext('followupDecisionHtml()', context), '');
+  vm.runInContext("reportRecord = { followup: 'x' }", context);  // earlier draft: review box only, no decision select
+  const legacy = vm.runInContext('followupDecisionHtml()', context);
+  assert.match(legacy, /data-followup-reviewed/); assert.doesNotMatch(legacy, /data-followup-decision/);
+  vm.runInContext("reportRecord = { followup_decision: 'not_required', followup_text_reviewed: false }", context);
+  const html = vm.runInContext('followupDecisionHtml()', context);
+  assert.match(html, /data-followup-decision/); assert.match(html, /data-followup-reviewed/); assert.doesNotMatch(html, /12 months|few months/);
+  vm.runInContext("reportRecord = { followup_decision: '' }", context);
+  assert.match(vm.runInContext('followupDecisionHtml()', context), /data-followup-decision/);
 });

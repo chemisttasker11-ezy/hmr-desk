@@ -85,7 +85,7 @@ def build(conn, patient):
     incoming = [m for m in messages if m['direction'] == 'in']
     follow = api.patient_followups(conn, pid)
     first = follow['followup1'] if follow else None
-    due2 = str(dt.date.fromisoformat(first) + dt.timedelta(days=int(api.meta(conn, 'followup_first_after_days', 30)))) if first else None
+    due2 = api.second_followup_due(conn, first)
     expiry = api.referral_expiry(conn, patient['referral_date'])
     milestones = dict(referral_date=day(patient['referral_date']), referral_expiry=expiry.isoformat() if expiry else None,
         first_contact=earliest([m['sent_at'] or m['created_at'] for m in outgoing] + event_dates.get('call', [])),

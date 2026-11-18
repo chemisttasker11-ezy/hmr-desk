@@ -38,12 +38,19 @@ def validate(data):
             any(not isinstance(e,dict) or not isinstance(e.get('id'),str) or not isinstance(e.get('text'),str) for e in origin['evidence']) or
             len(json.dumps(origin,ensure_ascii=False)) > 2000000):
             raise ValueError('invalid suggestion source evidence')
+    if 'followup_decision' in data and data['followup_decision'] not in manual_defaults.DECISIONS: raise ValueError('invalid followup_decision')
+    if 'followup_text_reviewed' in data and not isinstance(data['followup_text_reviewed'], bool): raise ValueError('invalid followup_text_reviewed')
+    if 'followup_reviewed_sha256' in data and (not isinstance(data['followup_reviewed_sha256'], str) or (data['followup_reviewed_sha256'] and not re.fullmatch('[a-f0-9]{64}', data['followup_reviewed_sha256']))): raise ValueError('invalid followup_reviewed_sha256')
+    if data.get('followup_policy') not in (None, manual_defaults.POLICY_VERSION): raise ValueError('invalid followup_policy')
+    if data.get('followup_policy') == manual_defaults.POLICY_VERSION and 'followup_decision' not in data: raise ValueError('followup_decision is required')
     if 'needs_review' in data and (not isinstance(data['needs_review'], list) or any(x not in REVIEW for x in data['needs_review'])): raise ValueError('invalid needs_review')
 
 def load(conn, patient, ai=False):
     data = records.get_json(conn, patient['id'], 'report_spec.ai.json' if ai else 'report_spec.json')
     if data is None: return {'saved': False}
     validate(data)
+    if not ai: data = with_trusted_policy(conn, patient, data)
+    if not ai: data['followup_text_reviewed'] = manual_defaults.review_valid(data)
     if not ai: data['interview_newer'] = 'interview_revision' in data and interview.revision(conn, patient) != data['interview_revision']
     if not ai:
         import pathology_records
@@ -53,10 +60,40 @@ def load(conn, patient, ai=False):
 def save(conn, patient, data):
     with _lock: return _save(conn, patient, data)
 
+POLICY_RECORD = 'report_spec.policy.json'
+
+
+def trusted_policy(conn, patient):
+    """Whether this spec was created under the follow-up decision policy. Persisted by the engine when the spec is
+    created, never taken from a request, so deleting the marker or the decision from a payload cannot downgrade it."""
+    saved = records.get_json(conn, patient['id'], POLICY_RECORD)
+    return manual_defaults.POLICY_VERSION if isinstance(saved, dict) and saved.get('version') == manual_defaults.POLICY_VERSION else None
+
+
+def with_trusted_policy(conn, patient, data):
+    data = {k: v for k, v in data.items() if k != 'followup_policy'}
+    policy = trusted_policy(conn, patient)
+    return {**data, 'followup_policy': policy} if policy else data
+
+
+def _bind_followup_review(data, old):
+    """followup_text_reviewed=True from the client means 'I reviewed the follow-up text now saved'. It is stored as a hash
+    of that exact text, and only when the text and the decision are unchanged from the previous save; otherwise it is dropped."""
+    asked = data.pop('followup_text_reviewed', False)
+    text = data.get('followup', '').strip()
+    unchanged = bool(old) and old.get('followup', '').strip() == text and old.get('followup_decision') == data.get('followup_decision')
+    keep = old.get('followup_reviewed_sha256', '') if unchanged else ''
+    if asked and unchanged: keep = manual_defaults.text_sha(text, data.get('followup_decision', ''))
+    if keep != manual_defaults.text_sha(text, data.get('followup_decision', '')): keep = ''
+    return {**data, 'followup_reviewed_sha256': keep} if (keep or old.get('followup_reviewed_sha256') or 'followup_decision' in data) else data
+
+
 def _save(conn, patient, data):
+    data = with_trusted_policy(conn, patient, data)
     validate(data)
-    data = {k: v for k, v in data.items() if k not in ('interview_newer', 'pathology_newer')}
+    data = manual_defaults.apply_followup_decision({k: v for k, v in data.items() if k not in ('interview_newer', 'pathology_newer')})
     previous = records.get(conn, patient['id'], 'report_spec.json')
+    data = _bind_followup_review(data, json.loads(previous) if previous else {})
     if previous is not None: records.put(conn, patient['id'], 'report_spec.json.bak', previous)
     records.put_json(conn, patient['id'], 'report_spec.json', data)
     db.log(conn, patient['id'], 'report_saved', {}, 'api')
@@ -112,6 +149,34 @@ def intro_text(record, name, visit):
     if clause: sentences.append(clause + '.')
     return ' '.join(sentences)
 
+def actual(r, m):
+    """Actual-use cell for a referral medicine row.
+
+    Confirmation of use and confirmation of directions stay distinct: an explicit
+    'taking' with no recorded directions is reported as confirmed use with missing
+    directions, never as 'Not yet confirmed' and never with invented directions.
+    """
+    prn = '; used ' + m['prn_use'] if m.get('prn_use') else ''
+    if m.get('use_status') == 'unknown':
+        return 'Not yet confirmed' + ('; previously recorded directions: ' + r[2] if r[2] else ('; referral: ' + r[1] if r[1] else '')) + prn
+    if r[2]:
+        return r[2] + prn
+    if m.get('use_status') == 'taking':
+        return 'Taking confirmed - actual directions not recorded' + ('; referral directions: ' + r[1] if r[1] else '') + prn
+    return ('Not yet confirmed; referral: ' + r[1] if r[1] else 'Not yet confirmed') + prn
+
+
+def other_actual(r, m):
+    """Actual-use cell for a medicine found during the interview (same rule as actual)."""
+    if m.get('use_status') == 'unknown':
+        return 'Not yet confirmed' + ('; previously recorded directions: ' + r[1] if r[1] else '')
+    if r[1]:
+        return r[1]
+    if m.get('use_status') == 'taking':
+        return 'Taking confirmed - actual directions not recorded'
+    return 'Not yet confirmed'
+
+
 def _derived(conn, patient):
     folder = jobs.patient_folder(patient)
     import api
@@ -129,12 +194,7 @@ def _derived(conn, patient):
     referral_meta = record['details']['meds']
     other_rows = record['other_meds']
     other_meta = record['details']['other_meds']
-    def actual(r, m):
-        if m.get('use_status') == 'unknown': return 'Not yet confirmed' + ('; previously recorded directions: ' + r[2] if r[2] else ('; referral: ' + r[1] if r[1] else '')) + ('; used ' + m['prn_use'] if m.get('prn_use') else '')
-        return (r[2] or ('Not yet confirmed; referral: ' + r[1] if r[1] else 'Not yet confirmed')) + ('; used ' + m['prn_use'] if m.get('prn_use') else '')
-    def other_actual(r, m):
-        if m.get('use_status') == 'unknown': return 'Not yet confirmed' + ('; previously recorded directions: ' + r[1] if r[1] else '')
-        return r[1] or 'Not yet confirmed'
+
     def other_note(r, m):
         return ' | '.join(filter(None, [*r[2:], interview.use_text(m)]))
     def referral_note(r, m):
@@ -208,6 +268,7 @@ def start(conn, patient):
     validate(data)
     try: records.put(conn, patient['id'], 'report_spec.json', records.dumps(data), expected_revision='missing')
     except records.Conflict: raise FileExistsError('report spec already exists')
+    records.put_json(conn, patient['id'], POLICY_RECORD, {'version': manual_defaults.POLICY_VERSION})
     db.log(conn, patient['id'], 'report_started', {}, 'job')
     conn.commit()
     return data

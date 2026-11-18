@@ -73,15 +73,15 @@ with tempfile.TemporaryDirectory() as tmp:
     visits = call('GET','/api/patients/1')[1]['visits']
     assert len(visits) == 1 and (visits[0]['visit_date'],visits[0]['report_sent'],visits[0]['claimed']) == ('2026-01-01','2026-01-02','2026-01-02')
     assert act('followup_done', date='2026-02-01', kind='bad')[0] == 400
-    for day, kind in [('2026-01-30', []), ('2026-01-31', ['follow-up 1 due']), ('2026-09-28', ['follow-up 1 due']), ('2026-09-29', [])]:
+    for day, kind in [('2026-01-31', []), ('2026-02-01', ['follow-up 1 due']), ('2026-10-01', ['follow-up 1 due']), ('2026-10-02', [])]:
         assert api.patient_followups(conn,1,dt.date.fromisoformat(day))['alerts'] == kind
-    conn.execute("UPDATE visits SET visit_date=? WHERE patient_id=1 AND kind='hmr'", ((today-dt.timedelta(days=30)).isoformat(),))
+    conn.execute("UPDATE visits SET visit_date=? WHERE patient_id=1 AND kind='hmr'", ((today-dt.timedelta(days=40)).isoformat(),))
     assert any(a['type']=='follow-up 1 due' and a['window_end'] for a in call('GET','/api/today')[1]['alerts'] if a['id']==1)
     assert call('GET','/api/patients')[1]['patients'][0]['next_step']=='follow-up due'
     conn.execute("UPDATE visits SET visit_date='2026-01-01' WHERE patient_id=1 AND kind='hmr'")
     assert act('followup_done',date='2026-02-01',kind='followup1')[0] == 200
-    assert api.patient_followups(conn,1,dt.date(2026,3,2))['alerts'] == ['follow-up 1 to claim']
-    assert api.patient_followups(conn,1,dt.date(2026,3,3))['alerts'] == ['follow-up 1 to claim', 'follow-up 2 due']
+    assert api.patient_followups(conn,1,dt.date(2026,2,28))['alerts'] == ['follow-up 1 to claim']
+    assert api.patient_followups(conn,1,dt.date(2026,3,1))['alerts'] == ['follow-up 1 to claim', 'follow-up 2 due']
     assert act('followup_done',date='2026-03-03',kind='followup2')[0] == 200
     assert api.patient_followups(conn,1,dt.date(2026,3,3))['alerts'] == ['follow-up 1 to claim', 'follow-up 2 to claim']
     assert api.patient_followups(conn,1,dt.date(2028,1,1))['alerts'] == ['follow-up 1 to claim', 'follow-up 2 to claim', 'new HMR possible']
@@ -428,3 +428,17 @@ print('history self-check ok')
 
 import test_interview
 import test_report
+
+# Calendar-month follow-up rules (PPA HMR Program Rules Oct 2026 s5.9, s8); month-end handling is a provisional reading.
+import datetime as _dt
+assert api.add_months(_dt.date(2026,1,31),1) == _dt.date(2026,2,28)
+assert api.add_months(_dt.date(2024,1,31),1) == _dt.date(2024,2,29)
+assert api.add_months(_dt.date(2026,3,31),9) == _dt.date(2026,12,31)
+assert api.add_months(_dt.date(2026,12,15),1) == _dt.date(2027,1,15)
+_f = api.followups('2026-01-31', today=_dt.date(2026,2,28))
+assert (_f['first_due'], _f['window_end'], _f['due'], _f['rule_basis']) == ('2026-02-28', '2026-10-31', True, 'calendar-months-provisional')
+assert api.followups('2026-01-31', today=_dt.date(2026,2,27))['due'] is False
+_c = api.followups('2026-01-01', 30, 270, today=_dt.date(2026,1,31))
+assert _c['first_due'] == '2026-01-31' and _c['rule_basis'] == 'custom-days-override'
+assert api.claim_deadline(_dt.date(2026,3,10)) == _dt.date(2026,4,30) and api.claim_deadline(_dt.date(2026,12,5)) == _dt.date(2027,1,31)
+assert _f['initial_claim_by'] == '2026-02-28'
