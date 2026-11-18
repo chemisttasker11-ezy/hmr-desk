@@ -390,6 +390,7 @@ function renderInterview() {
     } else if (interviewTables[key]) {
       const columns = interviewTables[key];
       input = key === 'meds' ? interviewMedicineTable(value) : key === 'other_meds' ? interviewOtherMedicineTable(value) : H.tableInput(key, title, columns, value, 'interview');
+      if (key === 'pathology') input += `<p class="field-hint" role="status" data-pathology-date-hint>${esc(H.pathologyDateHints(value).join(' '))}</p>`;
       if (key === 'obs') input += ['height', 'weight', 'bmi'].map(name => `<div class="interview-measure"><strong>${esc(name.toUpperCase())}</strong> Referral: ${esc(record.details[name + '_referral'] || 'Not separately listed')} <label><input type="checkbox" data-detail="${name}_as_listed" ${record.details[name + '_as_listed'] ? 'checked' : ''} ${record.details[name + '_referral'] ? '' : 'disabled'}> As listed</label> ${interviewDetailText(name + '_actual', 'At interview')}</div>`).join('') + interviewDetailText('home_bp', 'Home BP readings') + interviewDetailText('home_bgl', 'Home blood glucose readings');
     } else if (key === 'health_check') {
       input = `<button type="button" data-health-no>Mark all remaining as No</button><div class="interview-health">${interviewEntryChoices.filter(entry => entry.key.startsWith('sx_')).map(interviewEntry).join('')}</div>` + [['mobility','Mobility (aids, falls, driving)'],['exercise','Exercise']].map(([field, label]) => `<label id="section-${field}">${label}<textarea id="interview-${field}" data-field="${field}">${esc(record[field] || '')}</textarea></label>`).join('');
@@ -674,6 +675,10 @@ document.addEventListener('input', (event) => {
       el.type === 'checkbox' ? el.checked : el.dataset.prop === 'relationship' ? Number(el.value) : el.value;
   else interviewRecord[key] = key === 'clarify' ? el.value.split('\n') : el.value;
   if ((key === 'meds' || key === 'other_meds') && el.dataset.col === '0' && typeof medicineNameEdited === 'function') medicineNameEdited(key, Number(el.dataset.row), el);
+  if (key === 'pathology' && el.dataset.col === '2') {
+    const hint = document.querySelector('[data-pathology-date-hint]');
+    if (hint) hint.textContent = H.pathologyDateHints(interviewRecord.pathology).join(' ');
+  }
   if (key === 'consent') {
     const consent = interviewRecord.consent;
     const incomplete = consent.by === 'authorised' && (!consent.relationship || !consent.authorised_name.trim());

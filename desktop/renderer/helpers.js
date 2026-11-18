@@ -319,6 +319,15 @@ const H = (() => {
   function showInterviewRefresh(record, detail) {
     return record?.interview_newer === true && !['sent', 'claimed'].includes(detail?.state) && !detail?.report_sent && !detail?.visits?.[0]?.report_sent;
   }
+  // A typed date such as 01102026 (no separators) can be read as 1 Oct or 10 Jan. The text is never
+  // rewritten; the pharmacist is only told to write it unambiguously.
+  function dateTextHint(value) {
+    const text = String(value ?? '').trim();
+    return /^\d{6,8}$/.test(text) ? `"${text}" has no separators. Write it as DD/MM/YYYY so the day and month cannot be misread.` : '';
+  }
+  function pathologyDateHints(rows) {
+    return (rows || []).map((row, i) => (dateTextHint(Array.isArray(row) ? row[2] : '') ? `Row ${i + 1}: ${dateTextHint(row[2])}` : '')).filter(Boolean);
+  }
   function tableInput(key, title, columns, rows, prefix) {
     return `<div class="interview-table"><table><thead><tr>${columns.map((c) => `<th scope="col">${esc(c)}</th>`).join('')}<th>Remove</th></tr></thead><tbody>${(rows || []).map((row, i) => `<tr>${columns.map((c, j) => `<td>${prefix === 'report' && !(key === 'meds' && j >= 2) ? `<input data-field="${esc(key)}" data-row="${i}" data-col="${j}" aria-label="${esc(c)} row ${i + 1}" value="${esc(row[j] || '')}">` : `<textarea data-field="${esc(key)}" data-row="${i}" data-col="${j}" aria-label="${esc(c)} row ${i + 1}">${esc(row[j] || '')}</textarea>`}${j === 0 && (key === 'meds' || (prefix === 'interview' && key === 'other_meds')) ? `<button type="button" data-amh-row aria-label="Search AMH for ${esc(c)} row ${i + 1}">AMH</button>` : ''}</td>`).join('')}<td><button type="button" data-${prefix}-remove="${esc(key)}" data-row="${i}" aria-label="Remove ${esc(title)} row ${i + 1}">Remove</button></td></tr>`).join('')}</tbody></table></div><button type="button" data-${prefix}-add="${esc(key)}">Add row</button>`;
   }
@@ -713,6 +722,8 @@ const H = (() => {
     genericName,
     settingsDiff,
     consentValidation,
+    dateTextHint,
+    pathologyDateHints,
     tableInput,
     showInterviewRefresh,
     interviewDrafts,
