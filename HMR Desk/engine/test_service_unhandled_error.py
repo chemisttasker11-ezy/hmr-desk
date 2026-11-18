@@ -35,7 +35,7 @@ def test_unexpected_error_returns_a_500_with_the_error_type_and_logs_it(tmp_path
             status, payload = _get(server.server_port, '/api/patients/1/timeline')
         assert status == 500
         assert payload == {'error': 'The engine hit an internal error (%s). It was logged; reload and try again.' % type(error).__name__}
-        assert 'GET /api/patients/1/timeline failed (%s)' % type(error).__name__ in caplog.text
+        assert 'GET /api/patients/:id failed (%s)' % type(error).__name__ in caplog.text
         assert 'secret-patient-field' not in caplog.text and 'secret-patient-field' not in json.dumps(payload)
     finally:
         server.shutdown(); server.server_close(); worker.join(timeout=3)
@@ -55,3 +55,10 @@ def test_the_next_request_still_works_after_an_error(tmp_path, monkeypatch):
         assert _get(server.server_port, '/api/settings')[0] == 200
     finally:
         server.shutdown(); server.server_close(); worker.join(timeout=3)
+
+
+def test_logged_route_shape_masks_identifiers_and_drops_the_query():
+    assert service.route_shape('/api/patients/12/timeline') == '/api/patients/:id'
+    assert service.route_shape('/api/days/2026-11-18/plan') == '/api/days/:id'
+    assert service.route_shape('/api/messages/Jane Smith/approve') == '/api/messages/:id'
+    assert service.route_shape('/api/settings') == '/api/settings'

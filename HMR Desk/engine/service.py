@@ -6,6 +6,7 @@ import json
 import logging
 import logging.handlers
 import os
+import re
 import secrets
 import subprocess
 import threading
@@ -91,6 +92,13 @@ def hook_server(port, hook_token):
     return server
 
 
+def route_shape(path):
+    """A path with every identifier-like segment masked, safe to log (never the query string).
+    Only short lowercase words survive, so ids, dates, names and tokens become ':id'."""
+    parts = path.split('/')[1:4]
+    return '/' + '/'.join(p if re.fullmatch(r'[a-z][a-z-]{0,30}', p) else ':id' for p in parts)
+
+
 class QuietStatic(http.server.BaseHTTPRequestHandler):
     def log_message(self, *args):  # pythonw has no stderr
         pass
@@ -129,7 +137,7 @@ class QuietStatic(http.server.BaseHTTPRequestHandler):
                     try: conn.rollback()
                     except Exception: pass
                     kind = type(exc).__name__
-                    logging.error('API %s %s failed (%s)', self.command, parsed.path, kind)
+                    logging.error('API %s %s failed (%s)', self.command, route_shape(parsed.path), kind)
                     status, result = 500, {'error': 'The engine hit an internal error (%s). It was logged; reload and try again.' % kind}
         data = json.dumps(result, ensure_ascii=False).encode('utf-8')
         self.send_response(status)
