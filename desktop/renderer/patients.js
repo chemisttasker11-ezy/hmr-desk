@@ -227,7 +227,9 @@ async function showPatient(id, action, background = false) {
   const milestones = timeline.milestones || {};
   const canChange = action !== 'offer_new' && !!p.change_kinds?.length;
   const phone = String(p.phone || '').replace(/[^\d+]/g, '');
-  const pathway = H.patientPathway ? H.patientPathway(p, milestones, p.steps) : [];
+  const reportWorkflow = H.reportWorkflowStatus(p.state, (p.steps || []).find((step) => step.name === 'report_build'), reportCurrency);
+  const visibleSteps = (p.steps || []).map((step) => step.name === 'report_build' ? { ...step, ...reportWorkflow.build } : step);
+  const pathway = H.patientPathway ? H.patientPathway(p, milestones, visibleSteps) : [];
   const files = (list) => (list?.length ? list.map((x) => `<li>${esc(x)}</li>`).join('') : '<li>None</li>');
 
   const actions = availableActions(p, milestones);
@@ -236,7 +238,6 @@ async function showPatient(id, action, background = false) {
   const listPatient = typeof patients !== 'undefined' ? patients.find(item => String(item.id) === String(p.id)) : null;
   const proposedNext = String(p.next_step || listPatient?.next_step || p.stage_step || '').toLowerCase().replaceAll('_', ' ');
   const followupNext = p.followups?.next_action;
-  const reportWorkflow = H.reportWorkflowStatus(p.state, (p.steps || []).find((step) => step.name === 'report_build'), reportCurrency);
   const next = proposedNext === 'sign off' && !reportWorkflow.canSign && ['visited', 'report_drafted'].includes(p.state)
     ? 'build report' : proposedNext;
   const aliases = {
@@ -269,7 +270,8 @@ async function showPatient(id, action, background = false) {
     'report sent': 'report_sent',
   };
   let primaryAction = aliases[next] || null;
-  if (primaryAction && !['pathology', 'conversation', 'waiting', 'followups', ...followupActions].includes(primaryAction) && !shownActions.includes(primaryAction)) primaryAction = null;
+  if (primaryAction && !['pathology', 'conversation', 'waiting', 'followups', ...followupActions].includes(primaryAction) && !shownActions.includes(primaryAction)
+    && !(primaryAction === 'build_report' && ['visited', 'report_drafted'].includes(p.state))) primaryAction = null;
   if (!primaryAction && !next) {
     if (p.visit_date && shownActions.includes('visited')) primaryAction = 'visited';
     else if (shownActions.includes('medicines')) primaryAction = 'medicines';
@@ -405,8 +407,7 @@ async function showPatient(id, action, background = false) {
         })()}
       </section>
       ${['report', 'claim', 'followup', 'done'].includes(p.stage) ? `<section class="panel-section"><h3>Report steps</h3><ul class="step-list">${
-        (p.steps || [])
-          .map((original) => original.name === 'report_build' ? { ...original, ...reportWorkflow.build } : original)
+        visibleSteps
           .map(
             (step) =>
               `<li><span>${esc(H.steps[step.name] || step.name.replaceAll('_', ' '))}</span><span class="step-state ${step.done ? 'is-done' : step.ready ? 'is-ready' : ''}">${step.done ? 'Done' : step.ready ? 'Ready' : 'Not ready'}</span>${step.name === 'report_build' && !step.done && reportWorkflow.build.reason ? `<small>${esc(reportWorkflow.build.reason)}</small>` : (!step.done && !step.ready && step.reason ? `<small>${esc(step.reason)}</small>` : '')}</li>`,
