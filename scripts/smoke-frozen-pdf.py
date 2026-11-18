@@ -22,10 +22,11 @@ def main():
         report = Path(d) / 'self-test-result.txt'
         env = {**os.environ, 'HMR_PDF_CONVERTER': str(converter)}
         flags = DETACHED_PROCESS if os.name == 'nt' else 0
-        with open(report, 'wb') as sink:
-            process = subprocess.run([str(engine), '--self-test-pdf', str(out)], env=env, stdin=subprocess.DEVNULL,
-                                     stdout=sink, stderr=subprocess.STDOUT, creationflags=flags, timeout=240)
-        text = report.read_text(errors='replace').strip()
+        process = subprocess.run([str(engine), '--self-test-pdf', str(out), '--self-test-result', str(report)], env=env,
+                                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                 creationflags=flags, timeout=240)
+        # The packaged engine has no console: the verdict is a file, never stdout.
+        text = report.read_text(errors='replace').strip() if report.is_file() else '(no verdict file written; exit code %s)' % process.returncode
         print(text)
         pdfs = list(out.glob('*.pdf'))
         assert process.returncode == 0 and text.startswith('PASS'), 'Frozen engine PDF conversion failed'
