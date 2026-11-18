@@ -14,7 +14,7 @@ import db
 
 HERE = Path(__file__).resolve().parent
 # api.py may only shrink. When code moves out, lower this number in the same change.
-API_LINE_CEILING = 1070
+API_LINE_CEILING = 725
 
 
 def _tree(name):
@@ -31,7 +31,7 @@ def test_api_module_does_not_grow():
 
 
 def test_route_modules_do_not_import_the_facade():
-    for name in ('routes_system.py', 'routes_work.py'):
+    for name in ('routes_system.py', 'routes_work.py', 'patient_actions.py', 'followup_schedule.py'):
         for node in ast.walk(_tree(name)):
             modules = [a.name for a in node.names] if isinstance(node, ast.Import) else [node.module or ''] if isinstance(node, ast.ImportFrom) else []
             assert 'api' not in [m.split('.')[0] for m in modules], f'{name} imports api: that would be a cycle'
@@ -108,3 +108,10 @@ def test_system_routes_keep_their_success_shapes(conn):
 def test_work_routes_keep_their_success_shapes(conn):
     s, r = api.handle(conn, 'GET', '/api/run', {}, None); assert s == 200 and set(r) == {'steps', 'tasks'}
     s, r = api.handle(conn, 'GET', '/api/intake', {}, None); assert s == 200 and set(r) == {'rows'}
+
+
+def test_moved_functions_are_defined_once_in_their_owner():
+    api_defs = {n.name for n in _tree('api.py').body if isinstance(n, ast.FunctionDef)}
+    for module in ('patient_actions.py', 'followup_schedule.py', 'routes_work.py'):
+        owned = {n.name for n in _tree(module).body if isinstance(n, ast.FunctionDef)} - {'handle'}
+        assert not (owned & api_defs), f'{module} and api.py both define {sorted(owned & api_defs)}'
