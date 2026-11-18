@@ -269,6 +269,36 @@ class _migration_lock:
             pass
 
 
+class _rotation_lock(_migration_lock):
+    """One key rotation at a time, and no start-up cleanup of a pending key while one is running."""
+    def __init__(self, path, wait=True):
+        self.path = path + '.rotating'
+        self.wait = wait
+        self.held = False
+
+    def __enter__(self):
+        if self.wait:
+            super().__enter__()
+            self.held = True
+            return self
+        try:
+            os.close(os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+            self.held = True
+        except FileExistsError:
+            try:
+                if time.time() - os.path.getmtime(self.path) > _MIGRATION_LOCK_STALE:
+                    os.unlink(self.path)
+                    os.close(os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+                    self.held = True
+            except OSError:
+                pass
+        return self
+
+    def __exit__(self, *exc):
+        if self.held:
+            super().__exit__(*exc)
+
+
 def _user_tables(conn):
     return [r[0] for r in conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")]
@@ -400,17 +430,18 @@ def rotate_key(conn):
     Other open connections still hold the old key and stop working, so callers must restart the engine.
     """
     path = next(r[2] for r in conn.execute('PRAGMA database_list') if r[1] == 'main')
-    new = dbkey.begin_rotation(path)
-    try:
-        conn.commit()
-        conn.execute('PRAGMA wal_checkpoint(TRUNCATE)')
-        conn.execute('PRAGMA rekey = "%s"' % _sql_key(new))
-    except Exception:
-        dbkey.abort_rotation(path)
-        raise
-    dbkey.finish_rotation(path)
-    conn.hmr_key = new
-    return dbkey.recovery_text(new)
+    with _rotation_lock(path):
+        new = dbkey.begin_rotation(path)
+        try:
+            conn.commit()
+            conn.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+            conn.execute('PRAGMA rekey = "%s"' % _sql_key(new))
+        except Exception:
+            dbkey.abort_rotation(path)
+            raise
+        dbkey.finish_rotation(path)
+        conn.hmr_key = new
+        return dbkey.recovery_text(new)
 
 
 def storage_status(path=None):
@@ -442,7 +473,9 @@ def connect(path=None):
     conn = open_encrypted(path)
     conn.row_factory = sqlite3.Row
     try:
-        dbkey.settle_pending(path, conn.hmr_key)
+        with _rotation_lock(path, wait=False) as rotation:
+            if rotation.held:  # a running rotation owns the pending key; do not clean it up underneath it
+                dbkey.settle_pending(path, conn.hmr_key)
         conn.execute('PRAGMA journal_mode=WAL')
         # executescript has its own transaction boundary; never start a schema
         # migration transaction until the historical base tables exist.
@@ -555,12 +588,23 @@ def backup(conn=None):
     """Copy the database next to itself as hmr-backup-<weekday>.db (7 rolling copies)."""
     own = conn is None
     conn = conn or connect()
-    target = os.path.join(os.path.dirname(db_path()), f'hmr-backup-{datetime.date.today():%a}.db')
-    out = open_encrypted(target, key=conn.hmr_key)
+    main = next((r[2] for r in conn.execute('PRAGMA database_list') if r[1] == 'main' and r[2]), None) or db_path()
+    target = os.path.join(os.path.dirname(os.path.abspath(main)), f'hmr-backup-{datetime.date.today():%a}.db')
+    # Write a new file and swap it in: an older copy may still be encrypted with a previous key,
+    # so it is never opened with the current one.
+    fresh = target + '.new'
+    for leftover in (fresh, fresh + '-wal', fresh + '-shm', fresh + '-journal'):
+        if os.path.exists(leftover):
+            os.unlink(leftover)
+    out = open_encrypted(fresh, key=conn.hmr_key)
     try:
         conn.backup(out)
     finally:
         out.close()
+    for stale in (target + '-wal', target + '-shm', target + '-journal'):
+        if os.path.exists(stale):
+            os.unlink(stale)
+    _replace_retry(fresh, target)
     if own:
         conn.close()
     return target
