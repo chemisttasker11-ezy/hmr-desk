@@ -9,7 +9,7 @@ Credentials come from the environment (HMR_NCTS_CLIENT_ID / HMR_NCTS_CLIENT_SECR
 from a local env file (--env-file, or HMR_NCTS_ENV_FILE, default
 ~/HMR-Desk-data/secrets/ncts.env). An env file inside this repository is refused.
 The secret is never printed, logged or put on a command line.
-Use is for Australia only (NCTS licence); keep the monthly update in-country.
+Use of the data is governed by your NCTS licence (recorded answers: no use outside Australia); check the current terms.
 """
 import argparse
 import hashlib
