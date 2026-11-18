@@ -12,7 +12,12 @@
     "validation": "New downloader and importer both run on official public ZIP; brand and generic search checked",
     "source_dataset_committed": false
   },
-  "amt": {"validation": "Synthetic RF2 Snapshot only; owner NCTS licence and real release validation still required"},
+  "amt": {
+    "validation": "Importer tests use a Synthetic RF2 Snapshot. Separately, an isolated Windows test run on candidate 0db2612 (2026-11-18) used a real NCTS AMT release: the operator reported runtime medicine lookup, link, save and restart passing and inspected a screenshot showing linked concept 1508451000168102 (metformin) from release 20261031.",
+    "real_release_runtime_check": {"candidate": "0db2612", "release": "20261031", "evidence": "operator report and screenshot, not independently re-run", "later_candidates_rechecked": false},
+    "provenance_gap": "Release ZIP name and sha256 not yet recorded in this repository; recover from the test host before relying on this beyond the stated narrow check.",
+    "clinical_acceptance": false
+  },
   "artg": {"validation": "Synthetic CSV only; live export validation and commercial permissions still required"},
   "clinical_acceptance": false
 }
