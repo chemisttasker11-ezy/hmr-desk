@@ -289,6 +289,10 @@ def _refresh(conn, patient):
     validate(data)
     record, derived, _ = _derived(conn, patient)
     import pathology_records
+    folder = jobs.patient_folder(patient)
+    stored = Path(str(data.get('out') or ''))
+    if stored.name and (not stored.is_absolute() or stored.parent.resolve() != folder):
+        data['out'] = str(folder / stored.name)  # a restored or moved workspace must not keep a path outside the patient folder
     data.update(derived, medicine_snapshot=medicine_snapshot.snapshot(record), medicine_snapshot_sha256=medicine_snapshot.digest(medicine_snapshot.snapshot(record)), interview_revision=record['revision'], interview_reason=record['details']['reason'],
                 pathology_revision=pathology_records.revision(conn, patient))
     save(conn, patient, data)
