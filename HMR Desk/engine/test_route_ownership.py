@@ -14,7 +14,7 @@ import db
 
 HERE = Path(__file__).resolve().parent
 # api.py may only shrink. When code moves out, lower this number in the same change.
-API_LINE_CEILING = 252
+API_LINE_CEILING = 195
 
 
 def _tree(name):
@@ -31,7 +31,7 @@ def test_api_module_does_not_grow():
 
 
 def test_route_modules_do_not_import_the_facade():
-    for name in ('routes_system.py', 'routes_work.py', 'routes_schedule.py', 'routes_pathology.py', 'routes_report.py', 'routes_clinical_records.py', 'routes_messages.py', 'routes_reference.py', 'routes_followup.py', 'routes_medicines.py', 'medicine_review.py', 'external_helpers.py', 'patient_actions.py', 'followup_schedule.py'):
+    for name in ('routes_system.py', 'routes_work.py', 'routes_schedule.py', 'routes_pathology.py', 'routes_report.py', 'routes_clinical_records.py', 'routes_messages.py', 'routes_reference.py', 'routes_followup.py', 'routes_medicines.py', 'medicine_review.py', 'external_helpers.py', 'patient_actions.py', 'followup_schedule.py', 'routes_patients.py'):
         for node in ast.walk(_tree(name)):
             modules = [a.name for a in node.names] if isinstance(node, ast.Import) else [node.module or ''] if isinstance(node, ast.ImportFrom) else []
             assert 'api' not in [m.split('.')[0] for m in modules], f'{name} imports api: that would be a cycle'
@@ -223,3 +223,20 @@ def test_followup_and_medicine_routes_have_one_owner_and_medicine_review_keeps_i
     assert api.handle(conn, 'GET', '/api/patients/999/meds', {}, None) == (404, {'error': 'patient not found'})
     assert api.handle(conn, 'GET', '/api/patients/999/timeline', {}, None) == (404, {'error': 'patient not found'})
     assert api.handle(conn, 'POST', '/api/patients/1/meds', {}, {}) == (400, {'error': 'invalid medicine list'})
+
+
+def test_patient_status_list_detail_routes_have_one_owner_and_keep_their_literal_behaviour(conn, tmp_path):
+    owned = _route_literals(_tree('routes_patients.py'))
+    assert {'/api/status', '/api/patients'} <= owned and r'/api/patients/(\d+)(/action)?' in owned
+    assert not (owned & _route_literals(_tree('api.py')))
+    (tmp_path / 'Ann_Alpha').mkdir()
+    conn.execute("INSERT INTO patients(key,name,state,is_test,folder) VALUES ('ann','Ann Alpha','new',0,?)", (str(tmp_path / 'Ann_Alpha'),)); conn.commit()
+    assert api.handle(conn, 'GET', '/api/status', {}, None)[1]['patients'] == {'new': 1}
+    assert api.handle(conn, 'POST', '/api/status', {}, {}) == (404, {'error': 'not found'})
+    listed = api.handle(conn, 'GET', '/api/patients', {'q': [' ann ']}, None)[1]['patients']
+    assert [p['name'] for p in listed] == ['Ann Alpha'] and 'next_step' in listed[0]
+    assert api.handle(conn, 'GET', '/api/patients/999', {}, None) == (404, {'error': 'patient not found'})
+    assert api.handle(conn, 'POST', '/api/patients/999/action', {}, {}) == (404, {'error': 'patient not found'})
+    detail = api.handle(conn, 'GET', '/api/patients/1', {}, None)[1]
+    assert {'stage', 'flags', 'steps', 'events', 'followups'} <= set(detail)
+    assert api.handle(conn, 'POST', '/api/patients/1', {}, {}) == (404, {'error': 'not found'})
