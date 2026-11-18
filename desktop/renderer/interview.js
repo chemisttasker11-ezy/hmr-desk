@@ -754,12 +754,12 @@ async function savePathologyRecordsNow() {
       interviewInvalidateObservations();
       return true;
     }
-    // Same-patient edits landed while saving: keep them, adopt the newer
-    // server revision (never a lower one), and stay dirty. Report
+    // Same-patient edits landed while saving: keep them, adopt the server
+    // revision as an opaque token (saves are serialized, so the latest response
+    // is the newest; tokens are SHA-256 strings and are never compared as numbers), and stay dirty. Report
     // non-success so callers such as leaveInterview do not navigate away
     // or proceed as though everything was stored.
-    interviewPathology = { ...saved, revision: Math.max(saved.revision, interviewPathology.revision),
-                           records: interviewPathology.records };
+    interviewPathology = { ...saved, records: interviewPathology.records };
     interviewPathologyDirty = true;
     interviewPathologyError = 'Edits made while saving were kept; save again to store them.';
     interviewInvalidateObservations();
