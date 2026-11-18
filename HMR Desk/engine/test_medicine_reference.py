@@ -79,6 +79,84 @@ def test_reconciliation_flags_same_concept_under_different_names():
     linked = {**record, 'details': {'meds': [meta(ref), meta(ref)], 'other_meds': []}}
     assert reconciliation.digest(record) != reconciliation.digest(linked)
 
+def _synthetic_db(path, rows):
+    from medicine_data import catalog
+    db = catalog.connect(path)
+    with catalog.snapshot(db, 'syn', '20260101', path, 'https://example.invalid/synthetic'):
+        for i, d in enumerate(rows):
+            catalog.add_medicine(db, 'syn', 'C%d' % i, d, 'generic', d.split()[0], None, 'tablet', [], {})
+    db.commit()
+    return db
+
+
+SYN = ['Synthstatin 20 mg tablet', 'Synthstatin 40 mg tablet (Synthbrand)', 'Alphamed + Betamed 5 mg/10 mg tablet',
+       'Caf\u00e9medin 100 \u00b5g tablet', 'Percent 5% cream', 'Under_score 1 mg tablet', 'Synthmed MR 665 mg modified release tablet',
+       'Synthsolve 1 g/10 mL oral liquid', 'Zetamed 10 mg capsule', 'Synthstatin 10 mg tablet']
+SYN_QUERIES = ['syn', 'Synthstatin', 'statin 40', '(synthbrand)', '(', 'alphamed + beta', 'alphamed/beta', 'caf\u00e9', '\u00b5g', '5%', '%', '_', 'under_', 'a%b',
+               'MR 665', 'mg tablet', 'mg/10', 'zz', 'ab', 'SYNTHSTATIN 20', '  synth   med ', '\\', 'tablet (', 'oral liquid', '10 mL']
+
+
+def test_indexed_search_is_identical_to_plain_scan_and_exact_check_is_indexed():
+    import sqlite3
+    from medicine_data import catalog
+    with tempfile.TemporaryDirectory() as t:
+        path = Path(t) / 'r.sqlite'
+        db = _synthetic_db(str(path), SYN)
+        plain = {q: catalog.search(db, q, 15) for q in SYN_QUERIES}
+        assert any(plain.values())
+        assert catalog.build_search_index(db) == {'display': True, 'fts': True}
+        assert catalog.build_search_index(db) == {'display': True, 'fts': True}  # idempotent
+        db.close()
+        ro = sqlite3.connect(path.as_uri() + '?mode=ro', uri=True)
+        assert catalog._fts_usable(ro)
+        for q in SYN_QUERIES:
+            assert catalog.search(ro, q, 15) == plain[q], q
+        plan = ' '.join(r[3] for r in ro.execute("EXPLAIN QUERY PLAN SELECT * FROM medicine WHERE lower(display)=?", ('x',)))
+        assert 'medicine_display_lower' in plan
+        ro.close()
+
+
+def test_stale_or_missing_fts_falls_back_to_the_plain_scan_and_import_drops_it():
+    import sqlite3
+    from medicine_data import catalog
+    with tempfile.TemporaryDirectory() as t:
+        path = Path(t) / 'r.sqlite'
+        db = _synthetic_db(str(path), SYN)
+        catalog.build_search_index(db)
+        db.execute("INSERT INTO medicine VALUES('syn','NEW','Newmed 5 mg tablet','newmed 5 mg tablet','generic',NULL,NULL,NULL,'[]','{}')")
+        db.commit(); catalog._FTS_OK.clear()
+        assert not catalog._fts_usable(db)
+        assert [r['code'] for r in catalog.search(db, 'newmed', 15)] == ['NEW']  # never hidden by a stale index
+        db.execute('DROP TABLE medicine_fts'); catalog._FTS_OK.clear()
+        assert [r['code'] for r in catalog.search(db, 'synthstatin 20', 15)] == ['C0']
+        catalog.build_search_index(db)
+        with catalog.snapshot(db, 'syn', '20260102', str(path), 'https://example.invalid/synthetic'):
+            catalog.add_medicine(db, 'syn', 'X1', 'Replacement 1 mg tablet', 'generic')
+        assert db.execute("SELECT count(*) FROM sqlite_master WHERE name='medicine_fts'").fetchone()[0] == 0
+        assert [r['code'] for r in catalog.search(db, 'replacement', 15)] == ['X1']
+        db.close()
+
+
+def test_failed_index_step_rejects_install_and_keeps_current_reference():
+    from medicine_data import catalog
+    with tempfile.TemporaryDirectory() as t:
+        target = fresh(t); build(target)
+        before = target.read_bytes()
+        new = candidate(t)
+        real = catalog.build_search_index
+        def boom(db):
+            db.execute("UPDATE medicine SET display=display||'x'")  # an index step that changes rows must be refused
+            return {'display': True, 'fts': False}
+        catalog.build_search_index = boom
+        try:
+            try: ref.install(str(new)); assert False
+            except ValueError as exc: assert 'changed medicine rows' in str(exc)
+        finally:
+            catalog.build_search_index = real
+        assert target.read_bytes() == before and ref.status()['installed']
+        assert not (Path(t) / 'medicine-reference.sqlite.incoming').exists()
+
+
 if __name__ == '__main__':
     for n, f in list(globals().items()):
         if n.startswith('test_'): f()
@@ -98,7 +176,14 @@ def test_install_validates_and_replaces_atomically():
         result = ref.install(str(new))
         assert result['installed'] and result['sources'][0]['source'] == 'amt'
         assert ref.status()['installed']
-        assert target.read_bytes() == new.read_bytes()
+        # Rows stay identical to the operator's file; only derived indexes are added to the private copy.
+        import sqlite3
+        a, b = sqlite3.connect(target), sqlite3.connect(new)
+        assert ref._content_hash(a) == ref._content_hash(b)
+        assert a.execute("SELECT count(*) FROM sqlite_master WHERE name IN ('medicine_display_lower','medicine_fts')").fetchone()[0] == 2
+        assert b.execute("SELECT count(*) FROM sqlite_master WHERE name IN ('medicine_display_lower','medicine_fts')").fetchone()[0] == 0
+        a.close(); b.close()
+        assert result['search_index'] == {'display': True, 'fts': True}
         previous = Path(t) / 'medicine-reference.previous.sqlite'
         assert previous.is_file() and previous.stat().st_size > 0
         assert ref.search('examplestatin')['results']

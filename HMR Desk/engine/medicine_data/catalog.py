@@ -65,6 +65,8 @@ def snapshot(db, source, release, path, url):
     if not release.strip() or not url.strip():
         raise ValueError('Explicit source release and provenance URL required')
     with db:
+        # Derived search index would go stale under an external-content table; drop it. Rebuilt at install.
+        db.execute('DROP TABLE IF EXISTS medicine_fts')
         db.execute('DELETE FROM medicine WHERE source=?', (source,))
         db.execute('DELETE FROM source_row WHERE source=?', (source,))
         yield
@@ -92,10 +94,58 @@ def add_raw(db, source, table, number, row):
                (source, table, number, json.dumps(row, ensure_ascii=False)))
 
 
+DISPLAY_INDEX = 'medicine_display_lower'
+FTS_TABLE = 'medicine_fts'
+_FTS_OK = {}
+
+
+def build_search_index(db):
+    """Add derived search indexes to a writable reference copy; medicine rows are never changed.
+
+    Returns {'display': bool, 'fts': bool}. A SQLite build without FTS5 trigram still gets the display index,
+    and search keeps working through the plain LIKE path.
+    """
+    db.execute(f'CREATE INDEX IF NOT EXISTS {DISPLAY_INDEX} ON medicine(lower(display))')
+    made = {'display': True, 'fts': False}
+    try:
+        exists = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (FTS_TABLE,)).fetchone()
+        db.execute(f"CREATE VIRTUAL TABLE IF NOT EXISTS {FTS_TABLE} USING fts5(search_text, content='medicine', content_rowid='rowid', tokenize='trigram')")
+        total = db.execute('SELECT count(*) FROM medicine').fetchone()[0]
+        if not exists or _fts_rows(db) != total:
+            db.execute(f"INSERT INTO {FTS_TABLE}({FTS_TABLE}) VALUES('rebuild')")
+        made['fts'] = _fts_rows(db) == total
+    except sqlite3.OperationalError:
+        db.execute(f'DROP TABLE IF EXISTS {FTS_TABLE}')
+    db.commit()
+    return made
+
+
+def _fts_rows(db):
+    return db.execute(f'SELECT count(*) FROM {FTS_TABLE}_docsize').fetchone()[0]
+
+
+def _fts_usable(db):
+    """True only when the trigram index exists and covers exactly the medicine rows (never trust a stale one)."""
+    try:
+        file = db.execute('PRAGMA database_list').fetchone()[2]
+        stat = Path(file).stat() if file else None
+        key = (file, stat.st_mtime_ns, stat.st_size) if stat else None
+        if key in _FTS_OK:
+            return _FTS_OK[key]
+        ok = _fts_rows(db) == db.execute('SELECT count(*) FROM medicine').fetchone()[0]
+        if key:
+            _FTS_OK[key] = ok
+        return ok
+    except (sqlite3.Error, OSError):
+        return False
+
+
 def search(db, text, limit=20):
     """Contains match with bound SQL and escaped LIKE wildcards, not clinical matching.
 
     Caller displays source/release and requires human selection. No fuzzy merges.
+    When the derived trigram index is present, it only narrows the candidate rows; the original LIKE
+    predicate is still applied to them, so the results are identical to the plain scan.
     """
     query = normalise(text)
     if len(query) < 2:
@@ -104,9 +154,15 @@ def search(db, text, limit=20):
         raise ValueError('limit must be 1..100')
     escaped = query.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
     db.row_factory = sqlite3.Row
-    rows = db.execute("""SELECT m.*, r.release, r.imported_at FROM medicine m
+    narrow = ''
+    args = ['%' + escaped + '%']
+    if len(query) >= 3 and not any(c in query for c in '%_\\') and _fts_usable(db):
+        narrow = f' AND m.rowid IN (SELECT rowid FROM {FTS_TABLE} WHERE search_text LIKE ?)'
+        args.append('%' + query + '%')
+    args += [escaped + '%', limit]
+    rows = db.execute(f"""SELECT m.*, r.release, r.imported_at FROM medicine m
       JOIN source_release r USING(source)
-      WHERE search_text LIKE ? ESCAPE '\\'
+      WHERE search_text LIKE ? ESCAPE '\\'{narrow}
       ORDER BY CASE WHEN search_text LIKE ? ESCAPE '\\' THEN 0 ELSE 1 END,
-               display, source, code LIMIT ?""", ('%' + escaped + '%', escaped + '%', limit))
+               display, source, code LIMIT ?""", args)
     return [dict(row) for row in rows]

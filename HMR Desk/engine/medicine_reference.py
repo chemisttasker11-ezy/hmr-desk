@@ -114,6 +114,32 @@ def suggest_many(queries):
         conn.close()
 
 
+def _content_hash(conn):
+    import hashlib
+    h = hashlib.sha256()
+    for row in conn.execute('SELECT source, code, display, search_text FROM medicine ORDER BY source, code'):
+        h.update('\x1f'.join(row).encode('utf-8', 'surrogatepass')); h.update(b'\n')
+    return h.hexdigest()
+
+
+def _add_search_indexes(path):
+    """Build derived indexes on the private incoming copy. Medicine rows must be byte-identical afterwards."""
+    conn = sqlite3.connect(path)
+    try:
+        before = _content_hash(conn)
+        made = catalog.build_search_index(conn)
+        if _content_hash(conn) != before:
+            raise ValueError('Search index step changed medicine rows; install rejected, current reference unchanged')
+        if conn.execute('PRAGMA quick_check').fetchone()[0] != 'ok':
+            raise ValueError('The medicine reference failed its integrity check after indexing; current reference unchanged')
+        conn.execute('PRAGMA journal_mode=DELETE')
+        return made
+    except sqlite3.Error as exc:
+        raise ValueError('Search index step failed; current reference unchanged') from exc
+    finally:
+        conn.close()
+
+
 MAX_REFERENCE_BYTES = 4 * 1024 * 1024 * 1024
 REQUIRED_TABLES = {'source_release', 'medicine', 'source_row'}
 
@@ -153,7 +179,9 @@ def install(source_path):
     The candidate is fully validated read-only before anything is replaced; a rejected
     candidate leaves the current working reference untouched. On a successful install
     the previous reference is kept as medicine-reference.previous.sqlite for rollback.
-    The file is licensed operator data: copied verbatim, never modified or bundled.
+    The file is licensed operator data, never bundled. The copy is made verbatim; then only derived search
+    indexes are added to the private copy (a display index and a trigram index). The medicine rows are hashed
+    before and after, and a failed index step rejects the install and leaves the current reference untouched.
     """
     source = Path(source_path)
     if (not source.is_absolute() or source.is_symlink() or not source.is_file()
@@ -169,6 +197,9 @@ def install(source_path):
     data_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     if data_dir.is_symlink():
         raise ValueError('Unsafe data folder')
+    need = int(source.stat().st_size * 2.5)  # incoming copy + indexes + the retained previous reference
+    if shutil.disk_usage(data_dir).free < need:
+        raise ValueError('Not enough free disk space to install the medicine reference; current reference unchanged')
     temp = data_dir / (FILE_NAME + '.incoming')
     try:
         with open(source, 'rb') as src, open(temp, 'wb') as dst:
@@ -177,6 +208,7 @@ def install(source_path):
             os.fsync(dst.fileno())
         if temp.stat().st_size != source.stat().st_size:
             raise ValueError('The reference copy did not complete; current reference unchanged')
+        indexed = _add_search_indexes(temp)
         previous = data_dir / 'medicine-reference.previous.sqlite'
         if previous.is_symlink() or target.is_symlink():
             raise ValueError('Unsafe reference files')
@@ -195,4 +227,4 @@ def install(source_path):
         else:
             target.unlink(missing_ok=True)
         raise ValueError('Installed reference failed verification; previous reference restored')
-    return {'installed': True, 'sources': installed['sources'], 'previous_retained': had_previous}
+    return {'installed': True, 'sources': installed['sources'], 'previous_retained': had_previous, 'search_index': indexed}

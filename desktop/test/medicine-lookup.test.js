@@ -62,3 +62,22 @@ test('a late lookup cannot attach results to another patient, row or changed med
   resolve({installed: true, results: [{source: 'amt', code: '1', display: 'Old match', release: '20260101'}]});
   await pending; assert.equal(appended.length, 0); assert.equal(record.details.meds[0].reference, undefined);
 });
+
+test('lookup query encoding passes the main-process API route guard for brackets and other unreserved punctuation', () => {
+  const fn = new Function(lookup.slice(lookup.indexOf('const medicineQuery'), lookup.indexOf('async function medicineLookupClick')) + '; return medicineQuery;')();
+  const guard = /^\/api\/[a-zA-Z0-9_/?=&%.-]*$/;
+  const { isCanonicalApiRoute } = require('../src/api-route');
+  for (const name of ['Suvorexant 20 mg tablet (Belsomra)', "O'Brien! ~tilde* star", 'caf\u00e9 \u00b5g 5% a&b=c', 'a/b + c', 'x.y-z_w']) {
+    const route = '/api/medicines/search?q=' + fn(name);
+    assert.ok(guard.test(route) && isCanonicalApiRoute(route), route);
+    assert.equal(decodeURIComponent(fn(name)), name);
+  }
+  const plain = '/api/medicines/search?q=' + encodeURIComponent('Suvorexant 20 mg tablet (Belsomra)');
+  assert.ok(!guard.test(plain), 'plain encodeURIComponent would be rejected');
+});
+
+test('a failed suggestion request is shown, never swallowed', () => {
+  const body = lookup.slice(lookup.indexOf('async function medicinePrefillSuggestions'));
+  assert.doesNotMatch(body, /catch\s*\{/);
+  assert.match(body, /Suggestions unavailable/);
+});

@@ -25,6 +25,9 @@ function medicineNameEdited(key, i, element) {
     results.append(note);
   }
 }
+// The main-process API guard only allows [A-Za-z0-9_/?=&%.-]; encodeURIComponent also leaves ! ~ * ' ( ) raw,
+// so a name such as "Suvorexant 20 mg tablet (Belsomra)" was rejected before it reached the engine.
+const medicineQuery = (text) => encodeURIComponent(text).replace(/[!~*'()]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase());
 async function medicineLookupClick(b) {
   if (b.dataset.medSuggestion !== undefined) {
     const key=b.dataset.medSuggestion, i=Number(b.dataset.row), meta=interviewRecord.details[key]?.[i];
@@ -49,7 +52,7 @@ async function medicineLookupClick(b) {
   const say = (t) => { const p = document.createElement('p'); p.textContent = t; out.append(p); };
   if (text.length < 2) { say('Type at least two letters of the medicine name, then look up.'); return true; }
   try {
-    const found = await hmr.api('GET', '/api/medicines/search?q=' + encodeURIComponent(text));
+    const found = await hmr.api('GET', '/api/medicines/search?q=' + medicineQuery(text));
     if (page !== 'interview' || interviewId !== patientId || interviewRecord !== record || record[key][i] !== medicine || medicine[0].trim() !== text || !out.isConnected) return true;
     if (!found.installed) { say('No medicine reference data is installed on this PC. Keep typing the name by hand; nothing is lost.'); return true; }
     if (!found.results.length) { say('No match in the reference data. Keep your typed name, or try another spelling.'); return true; }
@@ -96,7 +99,12 @@ async function medicinePrefillSuggestions() {
       const block=document.querySelector(`[data-med-results="meds-${i}"]`)?.closest('.med-lookup');
       if (block) block.outerHTML=interviewLookupControls('meds',meta,i);
     });
-  } catch {
-    // Suggestions never block the saved interview or silently set a reference.
+  } catch (error) {
+    // Suggestions never block the saved interview or silently set a reference, but a failure is shown, not swallowed.
+    if (page !== 'interview' || interviewId !== patient || interviewRecord !== record) return;
+    rows.forEach(({i}) => {
+      const out=document.querySelector(`[data-med-results="meds-${i}"]`);
+      if (out && !out.childElementCount) { const p=document.createElement('p'); p.textContent='Suggestions unavailable ('+errorText(error)+'). Use Look up medicine or type the name by hand.'; out.append(p); }
+    });
   }
     }
