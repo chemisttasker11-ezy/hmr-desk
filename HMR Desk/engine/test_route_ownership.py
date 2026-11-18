@@ -14,7 +14,7 @@ import db
 
 HERE = Path(__file__).resolve().parent
 # api.py may only shrink. When code moves out, lower this number in the same change.
-API_LINE_CEILING = 504
+API_LINE_CEILING = 438
 
 
 def _tree(name):
@@ -31,7 +31,7 @@ def test_api_module_does_not_grow():
 
 
 def test_route_modules_do_not_import_the_facade():
-    for name in ('routes_system.py', 'routes_work.py', 'routes_schedule.py', 'routes_pathology.py', 'routes_report.py', 'routes_clinical_records.py', 'patient_actions.py', 'followup_schedule.py'):
+    for name in ('routes_system.py', 'routes_work.py', 'routes_schedule.py', 'routes_pathology.py', 'routes_report.py', 'routes_clinical_records.py', 'routes_messages.py', 'routes_reference.py', 'patient_actions.py', 'followup_schedule.py'):
         for node in ast.walk(_tree(name)):
             modules = [a.name for a in node.names] if isinstance(node, ast.Import) else [node.module or ''] if isinstance(node, ast.ImportFrom) else []
             assert 'api' not in [m.split('.')[0] for m in modules], f'{name} imports api: that would be a cycle'
@@ -112,7 +112,7 @@ def test_work_routes_keep_their_success_shapes(conn):
 
 def test_moved_functions_are_defined_once_in_their_owner():
     api_defs = {n.name for n in _tree('api.py').body if isinstance(n, ast.FunctionDef)}
-    for module in ('patient_actions.py', 'followup_schedule.py', 'routes_work.py', 'routes_schedule.py', 'routes_pathology.py', 'routes_report.py', 'routes_clinical_records.py'):
+    for module in ('patient_actions.py', 'followup_schedule.py', 'routes_work.py', 'routes_schedule.py', 'routes_pathology.py', 'routes_report.py', 'routes_clinical_records.py', 'routes_messages.py', 'routes_reference.py'):
         owned = {n.name for n in _tree(module).body if isinstance(n, ast.FunctionDef)} - {'handle'}
         assert not (owned & api_defs), f'{module} and api.py both define {sorted(owned & api_defs)}'
 
@@ -176,3 +176,25 @@ def test_report_and_record_routes_keep_their_literal_behaviour(conn, tmp_path):
     assert h(conn, 'POST', '/api/patients/1/consent/preview', {}, {}) == (404, {'error': 'not found'})
     s, r = h(conn, 'GET', '/api/patients/1/reconciliation', {}, None)
     assert s == 200 and (r['flag_count'], r['medicines'], r['reviewed']) == (0, [], False)
+
+
+def test_message_and_reference_routes_have_one_owner():
+    def literals(tree):
+        return {n.value for n in ast.walk(tree) if isinstance(n, ast.Constant) and isinstance(n.value, str) and n.value.startswith('/api/')}
+    messages, reference = literals(_tree('routes_messages.py')), literals(_tree('routes_reference.py'))
+    assert {'/api/messages/board', r"/api/patients/(\d+)/messages", r"/api/messages/([^/]+)/(approve|discard|resolve)"} <= messages
+    assert {'/api/reference/local', '/api/reference/search', '/api/reference/open', '/api/library', r"/api/patients/(\d+)/reference-matches", r"/api/patients/(\d+)/candidate-checks", r"/api/patients/(\d+)/suggestions(?:/context)?"} <= reference
+    others = literals(_tree('api.py')) | literals(_tree('routes_system.py')) | literals(_tree('routes_work.py')) | literals(_tree('routes_report.py'))
+    assert not ((messages | reference) & others) and not (messages & reference)
+
+
+def test_message_and_reference_routes_keep_their_literal_behaviour(conn, tmp_path):
+    conn.execute("INSERT INTO patients(key,name,state,is_test,folder) VALUES ('ann','Ann Alpha','confirmed',0,?)", (str(tmp_path),)); conn.commit()
+    h = api.handle
+    assert h(conn, 'POST', '/api/patients/999/messages', {}, {}) == (404, {'error': 'patient not found'})
+    assert h(conn, 'POST', '/api/messages/nope/approve', {}, {}) == (404, {'error': 'message not found'})
+    assert h(conn, 'POST', '/api/messages/nope/resolve', {}, {}) == (404, {'error': 'message not found'})
+    assert h(conn, 'POST', '/api/reference/open', {}, {}) == (400, {'error': 'Invalid local reference request'})
+    assert h(conn, 'GET', '/api/patients/999/reference-matches', {}, None) == (404, {'error': 'patient not found'})
+    assert h(conn, 'GET', '/api/patients/999/candidate-checks', {}, None) == (404, {'error': 'patient not found'})
+    assert h(conn, 'GET', '/api/patients/999/suggestions', {}, None) == (404, {'error': 'patient not found'})
