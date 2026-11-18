@@ -43,7 +43,10 @@ def test_legacy_script_passes(script, tmp_path):
            'HOME': str(tmp_path), 'HMR_DB': str(tmp_path / 'isolated.db')}
     done = subprocess.run([sys.executable, '-c', BOOT, str(HERE / script)], cwd=str(HERE), env=env,
                           capture_output=True, text=True, timeout=120)
-    assert done.returncode == 0, (done.stdout + done.stderr)[-2000:]
+    out = done.stdout + done.stderr
+    # Keep the start of the output (the first traceback, usually the real assertion) and the end (teardown noise).
+    shown = out if len(out) <= 6000 else out[:3500] + '\n...[%d characters omitted]...\n' % (len(out) - 5500) + out[-2000:]
+    assert done.returncode == 0, shown
 
 
 def test_script_runner_propagates_a_failure(tmp_path):
