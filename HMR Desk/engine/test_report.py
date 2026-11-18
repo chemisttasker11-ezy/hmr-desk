@@ -360,7 +360,7 @@ def test_pdf_cleanup_retries_then_reports_without_hiding(tmp_path, monkeypatch):
 
 def test_extended_path_and_short_profile_root(tmp_path, monkeypatch):
     import pdf_export, docx, subprocess
-    assert pdf_export.extended('/tmp/x', nt=True) == '\\\\?\\' + __import__('os').path.abspath('/tmp/x') and pdf_export.extended('/tmp/x', nt=False) == '/tmp/x'
+    assert pdf_export.extended('/tmp/x', nt=True) == '\\\\?\\' + __import__('os').path.abspath('/tmp/x') and pdf_export.extended('/tmp/x', nt=False) == __import__('os').path.abspath('/tmp/x')
     short = tmp_path / 'short'; short.mkdir()
     monkeypatch.setenv('HMR_PDF_PROFILE_ROOT', str(short))
     source = tmp_path / 'deep' / 'r.docx'; source.parent.mkdir(); docx.Document().save(source)
