@@ -14,7 +14,7 @@ import db
 
 HERE = Path(__file__).resolve().parent
 # api.py may only shrink. When code moves out, lower this number in the same change.
-API_LINE_CEILING = 725
+API_LINE_CEILING = 613
 
 
 def _tree(name):
@@ -31,7 +31,7 @@ def test_api_module_does_not_grow():
 
 
 def test_route_modules_do_not_import_the_facade():
-    for name in ('routes_system.py', 'routes_work.py', 'patient_actions.py', 'followup_schedule.py'):
+    for name in ('routes_system.py', 'routes_work.py', 'routes_schedule.py', 'routes_pathology.py', 'patient_actions.py', 'followup_schedule.py'):
         for node in ast.walk(_tree(name)):
             modules = [a.name for a in node.names] if isinstance(node, ast.Import) else [node.module or ''] if isinstance(node, ast.ImportFrom) else []
             assert 'api' not in [m.split('.')[0] for m in modules], f'{name} imports api: that would be a cycle'
@@ -112,6 +112,42 @@ def test_work_routes_keep_their_success_shapes(conn):
 
 def test_moved_functions_are_defined_once_in_their_owner():
     api_defs = {n.name for n in _tree('api.py').body if isinstance(n, ast.FunctionDef)}
-    for module in ('patient_actions.py', 'followup_schedule.py', 'routes_work.py'):
+    for module in ('patient_actions.py', 'followup_schedule.py', 'routes_work.py', 'routes_schedule.py', 'routes_pathology.py'):
         owned = {n.name for n in _tree(module).body if isinstance(n, ast.FunctionDef)} - {'handle'}
         assert not (owned & api_defs), f'{module} and api.py both define {sorted(owned & api_defs)}'
+
+
+def test_schedule_and_pathology_routes_have_one_owner():
+    schedule, pathology = _route_literals(_tree('routes_schedule.py')), _route_literals(_tree('routes_pathology.py'))
+    assert {'/api/appointments', '/api/summary', '/api/days', '/api/attention', '/api/today'} <= schedule
+    assert {'/api/pathology/queue', '/api/pathology/result'} <= pathology
+    others = _route_literals(_tree('api.py')) | _route_literals(_tree('routes_system.py')) | _route_literals(_tree('routes_work.py'))
+    assert not ((schedule | pathology) & others) and not (schedule & pathology)
+
+
+def test_schedule_and_pathology_routes_keep_their_literal_behaviour(conn):
+    import datetime as dt
+    appt = {'date': '2026-11-20', 'start': '09:00', 'end': '10:00', 'title': ' Visit ', 'place': 'X', 'note': 'n'}
+    s, r = api.handle(conn, 'POST', '/api/appointments', {}, appt)
+    assert s == 200 and (r['id'], r['title'], r['date']) == (1, 'Visit', '2026-11-20')
+    assert api.handle(conn, 'POST', '/api/appointments', {}, {**appt, 'end': '08:00'}) == (400, {'error': 'end must be after start'})
+    assert api.handle(conn, 'POST', '/api/appointments', {}, {**appt, 'id': 99}) == (404, {'error': 'appointment not found'})
+    assert api.handle(conn, 'GET', '/api/appointments', {'from': ['2026-11-30'], 'to': ['2026-11-01']}, None) == (400, {'error': 'invalid date range'})
+    s, r = api.handle(conn, 'GET', '/api/appointments', {'from': ['2026-11-01'], 'to': ['2026-11-30']}, None)
+    assert s == 200 and [a['title'] for a in r['appointments']] == ['Visit']
+    assert api.handle(conn, 'POST', '/api/appointments/1/delete', {}, {}) == (200, {'ok': True})
+    assert api.handle(conn, 'POST', '/api/appointments/1/delete', {}, {}) == (404, {'error': 'appointment not found'})
+    assert api.handle(conn, 'GET', '/api/days/bad/plan', {}, None) == (400, {'error': 'invalid date'})
+    assert api.handle(conn, 'GET', '/api/days', {'from': ['2026-01-01'], 'to': ['2026-12-30']}, None) == (400, {'error': 'invalid date range'})
+    assert api.handle(conn, 'GET', '/api/today', {}, None) == (200, {'alerts': [], 'visits': []})
+    today = dt.date.today()
+    conn.execute("INSERT INTO patients(key,name,state,is_test,folder,visit_date,visit_time,has_pathology,has_sheet) VALUES ('ann','Ann Alpha','confirmed',0,'/x/Ann_Alpha',?, '09:00',0,0)", (str(today),)); conn.commit()
+    s, r = api.handle(conn, 'GET', '/api/today', {}, None)
+    assert [v['name'] for v in r['visits']] == ['Ann Alpha'] and [a['type'] for a in r['alerts']] == ['missing pathology', 'missing interview sheet']
+    s, r = api.handle(conn, 'GET', '/api/pathology/queue', {}, None)
+    assert s == 200 and [(x['id'], x['folder'], x['last']) for x in r['patients']] == [(1, 'Ann_Alpha', 'Alpha')]
+    assert api.handle(conn, 'POST', '/api/pathology/result', {}, {'id': '1'}) == (400, {'error': 'invalid id'})
+    assert api.handle(conn, 'POST', '/api/pathology/result', {}, {'id': 7, 'saved': [], 'status': 'x'}) == (404, {'error': 'patient not found'})
+    assert api.handle(conn, 'POST', '/api/pathology/result', {}, {'id': 1, 'saved': ['a'], 'status': 'ok', 'irn': '2'}) == (200, {'ok': True})
+    assert api.handle(conn, 'GET', '/api/pathology/queue', {}, None) == (200, {'patients': []})
+    assert conn.execute('SELECT state,has_pathology,irn FROM patients WHERE id=1').fetchone()[:] == ('pathology_ready', 1, '2')

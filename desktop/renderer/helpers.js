@@ -209,7 +209,7 @@ const H = (() => {
         title: 'Visit & interview',
         completed: isVisited,
         current: !isVisited && (stage === 'ready' || (stage === 'booking' && p.visit_date && p.visit_date <= localDate())),
-        detail: isVisited ? 'Visit recorded' : (stage === 'ready' ? 'Ready for visit' : 'Awaiting booking'),
+        detail: isVisited ? 'Visit recorded' : (stage === 'ready' ? 'Ready for visit' : (p.visit_date ? (p.visit_date <= localDate() ? 'Visit due' : 'Booked, awaiting visit day') : 'Awaiting booking')),
       },
       {
         id: 'report',
