@@ -58,6 +58,15 @@ jobs:
       - name: Real Windows DPAPI protected synthetic draft crash/restart
         shell: pwsh
         run: ./scripts/smoke-dpapi.ps1
+      - name: Bundle reviewed Brainstorm tables into frozen engine assets
+        shell: pwsh
+        run: |
+          $assets = 'HMR Desk/engine/assets'
+          New-Item -ItemType Directory -Force -Path $assets | Out-Null
+          $dest = Join-Path $assets 'brainstorm-mmr-v2.0-tables.json'
+          Copy-Item 'references/brainstorm-mmr-v2.0-tables.json' $dest
+          $hash = (Get-FileHash $dest -Algorithm SHA256).Hash.ToLowerInvariant()
+          @{ file = 'brainstorm-mmr-v2.0-tables.json'; sha256 = $hash } | ConvertTo-Json | Set-Content -Encoding ascii (Join-Path $assets 'brainstorm-tables-manifest.json')
       - name: Build Windows x64 frozen Python engine
         working-directory: HMR Desk/engine
         run: python -m PyInstaller --clean --noconfirm hmr-engine.spec
