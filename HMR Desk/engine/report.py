@@ -255,18 +255,25 @@ def _derived(conn, patient):
     ))
     return record, dict(conditions=record['conditions'], allergies=record['allergies'], obs=observations(record), meds=[[r[0], actual(r, m), referral_note(r, m), ''] for r, m in zip(referral_rows, referral_meta) if any(r) and m.get('use_status') != 'not_using'] + [[r[0], other_actual(r, m), ' | '.join(filter(None, r[2:])), ''] for r, m in zip(other_rows, other_meta) if any(r) and m.get('use_status') != 'not_using' and m.get('kind') not in ('otc', 'complementary')], otc=[[r[0], other_actual(r, m), ' | '.join(filter(None, r[2:]))] for r, m in zip(other_rows, other_meta) if any(r) and m.get('use_status') != 'not_using' and m.get('kind') in ('otc', 'complementary')], ceased=[[r[0], r[1], ' | '.join(filter(None, ['Referral medicine', r[2], '\n'.join(filter(None, (referral_note(r, m), interview.use_text(m))))]))] for r, m in zip(referral_rows, referral_meta) if any(r) and m.get('use_status') == 'not_using'] + [[r[0], r[1], ' | '.join(filter(None, ['Found during interview', other_note(r, m)]))] for r, m in zip(other_rows, other_meta) if any(r) and m.get('use_status') == 'not_using'], path=pathology_table), ', '.join(dates)
 
+def _demographics(conn, patient, record):
+    """Patient, GP and date blocks, built the same way at start and at refresh."""
+    p = dict(patient); h = record['header']
+    name = p['name']; gp = p.get('gp') or h['gp'] or ''
+    address = ', '.join(filter(None, (p.get('address'), p.get('suburb'))))
+    patient_lines = [name, 'DOB: ' + (p.get('dob') or h['dob']), 'Medicare No: ' + (p.get('medicare') or ''), 'Address: ' + address, 'Phone: ' + (p.get('phone') or '')]
+    doctor_lines = [gp, p.get('clinic') or '', 'Request date: ' + (p.get('referral_date') or '')]
+    import steps
+    visit = steps.event_date(conn, patient, 'visited') or p.get('visit_date') or h['visit'].split(' ')[0]
+    return dict(name=name, assess_date=visit, patient='\n'.join(patient_lines), doctor='\n'.join(filter(None, doctor_lines)), dear='Dear ' + gp + ',')
+
 def start(conn, patient):
     folder = jobs.patient_folder(patient)
     if records.exists(conn, patient['id'], 'report_spec.json'): raise FileExistsError('report spec already exists')
     record, derived, dates = _derived(conn, patient); p = dict(patient); h = record['header']
     name = p['name']; gp = p.get('gp') or h['gp'] or ''
     data = manual_defaults.initial_text(name, gp)
-    address = ', '.join(filter(None, (p.get('address'), p.get('suburb'))))
-    patient_lines = [name, 'DOB: ' + (p.get('dob') or h['dob']), 'Medicare No: ' + (p.get('medicare') or ''), 'Address: ' + address, 'Phone: ' + (p.get('phone') or '')]
-    doctor_lines = [gp, p.get('clinic') or '', 'Request date: ' + (p.get('referral_date') or '')]
-    import steps
-    visit = steps.event_date(conn, patient, 'visited') or p.get('visit_date') or h['visit'].split(' ')[0]
-    data.update(out=str(folder / ('HMR ' + re.sub(r'[<>:"/\\|?*]', '', name).rstrip(' .') + '.docx')), name=name, assess_date=visit, report_date=dt.date.today().strftime('%d/%m/%Y'), patient='\n'.join(patient_lines), doctor='\n'.join(filter(None, doctor_lines)), dear='Dear ' + gp + ',', path_date=dates, issues=[], needs_review=REVIEW.copy())
+    demo = _demographics(conn, patient, record); name = demo['name']; visit = demo['assess_date']
+    data.update(out=str(folder / ('HMR ' + re.sub(r'[<>:"/\\|?*]', '', name).rstrip(' .') + '.docx')), report_date=dt.date.today().strftime('%d/%m/%Y'), path_date=dates, **demo, issues=[], needs_review=REVIEW.copy())
     data.update(derived, medicine_snapshot=medicine_snapshot.snapshot(record), medicine_snapshot_sha256=medicine_snapshot.digest(medicine_snapshot.snapshot(record)), interview_revision=record['revision'], interview_reason=record['details']['reason'], pathology_revision=__import__('pathology_records').revision(conn, patient))
     intro = intro_text(record, name, visit)
     if intro: data['intro'] = intro
@@ -289,6 +296,7 @@ def _refresh(conn, patient):
     validate(data)
     record, derived, _ = _derived(conn, patient)
     import pathology_records
+    data.update(_demographics(conn, patient, record))  # a corrected DOB, GP or visit date must reach the report, not only the tables
     folder = jobs.patient_folder(patient)
     stored = Path(str(data.get('out') or ''))
     if stored.name and (not stored.is_absolute() or stored.parent.resolve() != folder):

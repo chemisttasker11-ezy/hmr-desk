@@ -93,3 +93,15 @@ def test_save_and_refresh_return_the_revision_so_the_next_conditional_save_succe
         refreshed = report.refresh(conn, patient)
         assert refreshed['revision'] == records.revision(conn, patient['id'], 'report_spec.json')
         report.save(conn, patient, dict(refreshed, reason='Four', expected_revision=refreshed['revision']))
+
+
+def test_refresh_rebuilds_demographics_from_the_current_patient_record(tmp_path, monkeypatch):
+    connection = _setup(tmp_path, monkeypatch)
+    with connection() as conn:
+        patient, loaded = _saved_report(conn)
+        assert 'DOB: ' in loaded['patient']
+        conn.execute("UPDATE patients SET dob=?, gp=? WHERE id=?", ('01-Feb-1950', 'Dr Synthetic Corrected', patient['id']))
+        conn.commit()
+        refreshed = report.refresh(conn, dict(conn.execute('SELECT * FROM patients WHERE id=?', (patient['id'],)).fetchone()))
+        assert 'DOB: 01-Feb-1950' in refreshed['patient']
+        assert 'Dr Synthetic Corrected' in refreshed['doctor'] and refreshed['dear'] == 'Dear Dr Synthetic Corrected,'

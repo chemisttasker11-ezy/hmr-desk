@@ -269,6 +269,15 @@ def report_build(patient_id, pdf=False):
         if not data['issues']: raise ValueError('add at least one finding')
         pending = report.placeholders(data)
         if pending: raise ValueError('Review placeholder fields: ' + ', '.join(pending))
+        import report_auth
+        # One snapshot, taken before rendering: build evidence records the sources the document is built from,
+        # so a source saved during rendering or PDF conversion leaves evidence that sign-off refuses.
+        snapshot = {
+            'interview_revision': interview.revision(conn, p),
+            'pathology_revision': pathology_records.revision(conn, p),
+            'source_files_sha256': report_auth.source_snapshot(conn, p),
+            'clinical_snapshot_sha256': report_auth.clinical_snapshot_hash(conn, p),
+        }
         target = Path(data['out'])
         if not target.is_absolute(): target = folder / target
         target = target.resolve()
@@ -318,19 +327,18 @@ def report_build(patient_id, pdf=False):
         if p['state'] == 'visited' and db.can_move(p['state'], 'report_drafted'):
             db.set_state(conn, patient_id, 'report_drafted', source='job')
         import hashlib
-        import report_auth
         evidence = {
             'file': target.name,
             'sha256': hashlib.sha256(target.read_bytes()).hexdigest(),
             'pdf_sha256': hashlib.sha256(pdf_target.read_bytes()).hexdigest() if pdf else '',
             'report_spec_sha256': hashlib.sha256(spec_bytes).hexdigest(),
-            'interview_revision': interview.revision(conn, p),
-            'pathology_revision': pathology_records.revision(conn, p),
+            'interview_revision': snapshot['interview_revision'],
+            'pathology_revision': snapshot['pathology_revision'],
             'template_version': approved[1]['version'] if approved else '',
             'template_sha256': approved[1]['sha256'] if approved else '',
             'template_approved': bool(approved),
-            'source_files_sha256': report_auth.source_snapshot(conn, p),
-            'clinical_snapshot_sha256': report_auth.clinical_snapshot_hash(conn, p),
+            'source_files_sha256': snapshot['source_files_sha256'],
+            'clinical_snapshot_sha256': snapshot['clinical_snapshot_sha256'],
         }
         db.log(conn, patient_id, 'report_build', evidence, 'job')
         return output
