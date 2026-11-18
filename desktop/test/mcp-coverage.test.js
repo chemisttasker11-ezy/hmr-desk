@@ -92,3 +92,16 @@ test('patient workspace options are only accepted for patient view', async () =>
   await assert.rejects(call('app_patient_focus',{id:7,view:'report',tab:'Files'},f.fetch,read),/Invalid arguments/);
   await assert.rejects(call('app_patient_focus',{id:7,view:'patient',layout:'bad'},f.fetch,read),/Invalid arguments/);
 });
+
+test('report refresh and demographic decisions use enumerated routes and bodies', async () => {
+  assert.ok(tools.some(t => t.name === 'hmr_report_refresh') && tools.some(t => t.name === 'hmr_report_demographics'));
+  let f = fake(); await call('hmr_report_refresh',{id:4},f.fetch,read);
+  assert.match(f.calls[0].url,/\/api\/patients\/4\/report\/refresh$/); assert.equal(f.calls[0].opts.method,'POST'); assert.deepEqual(JSON.parse(f.calls[0].opts.body),{});
+  f = fake(); await call('hmr_report_refresh',{id:4,replace_demographics:['patient','dear']},f.fetch,read);
+  assert.deepEqual(JSON.parse(f.calls[0].opts.body),{replace_demographics:['patient','dear']});
+  f = fake(); await call('hmr_report_demographics',{id:4,action:'keep',keys:['name']},f.fetch,read);
+  assert.match(f.calls[0].url,/\/api\/patients\/4\/report\/demographics$/); assert.deepEqual(JSON.parse(f.calls[0].opts.body),{action:'keep',keys:['name']});
+  for (const [n,a] of [['hmr_report_refresh',{id:4,replace_demographics:['bogus']}],['hmr_report_refresh',{id:4,replace_demographics:['name','name']}],['hmr_report_refresh',{id:4,extra:1}],
+    ['hmr_report_demographics',{id:4,action:'delete',keys:['name']}],['hmr_report_demographics',{id:4,action:'keep',keys:[]}],['hmr_report_demographics',{id:4,action:'keep',keys:['x']}],['hmr_report_demographics',{id:4,action:'keep'}],['hmr_report_demographics',{id:4,action:'keep',keys:['name'],confirm:true}]])
+    await assert.rejects(call(n,a,f.fetch,read),/Invalid arguments/);
+});
