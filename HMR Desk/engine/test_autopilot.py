@@ -66,6 +66,12 @@ with tempfile.TemporaryDirectory() as tmp:
     conn.execute("INSERT OR REPLACE INTO meta VALUES ('outbox_mode','live')")
     messaging.autopilot(conn, now)
     assert messages(held, 'confirmation')[0]['state'] == 'draft'
+    # A confirmed patient with no postcode is skipped for reminders: no draft, no exception, one audit event.
+    nopc = patient('nopostcode', 'confirmed', postcode='', visit='2026-11-12')
+    with patch('logging.exception') as logged:
+        messaging.autopilot(conn, now + dt.timedelta(hours=1)); messaging.autopilot(conn, now + dt.timedelta(hours=1))
+    assert not logged.called and not messages(nopc, 'reminder')
+    assert conn.execute("SELECT COUNT(*) FROM events WHERE patient_id=? AND type='autopilot_skipped_no_postcode'", (nopc['id'],)).fetchone()[0] == 1
     # A reply after an offer stops follow-up, including a call-list escalation.
     reply = patient('reply', 'offered'); msg(reply, 'oldoffer', 'out', 'offer', '2026-11-09T12:00:00+10:00')
     msg(reply, 'replyin', 'in', 'OTHER', '2026-11-10T12:00:00+10:00')

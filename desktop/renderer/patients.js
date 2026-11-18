@@ -526,6 +526,7 @@ function openForm(action, patient) {
     const saveButton = event.target.querySelector?.('button.primary') || event.submitter || $('action-form')?.querySelector?.('button.primary');
     if (saveButton) saveButton.disabled = true;
     const fields = Object.fromEntries(new FormData(event.target));
+    const staleError = $('action-error'); if (staleError) staleError.textContent = '';
     try {
       await hmr.api(
         'POST',
@@ -544,10 +545,12 @@ function openForm(action, patient) {
     formOpen = false;
     try {
       await refresh();
-      if (action === 'visited' && page === 'patients' && selected === String(patient.id) && !formOpen) {
-        detailTab = 'Overview';
+      // refresh() leaves the open patient alone while a field has focus, so a saved action must redraw the patient
+      // itself; otherwise the old form, its old error and its disabled Save button stay on screen after the save.
+      if (typeof page !== 'undefined' && page === 'patients' && selected === String(patient.id) && !formOpen) {
+        if (action === 'visited') detailTab = 'Overview';
         if (!await showPatient(patient.id)) throw Error('patient view unavailable');
-        setPatientLayout('patient');
+        if (action === 'visited') setPatientLayout('patient');
       }
     } catch (error) {
       alert(action === 'visited' ? `Visit recorded, but the patient view could not be refreshed: ${errorText(error)}` : `Saved, but the view could not be refreshed: ${errorText(error)}`);

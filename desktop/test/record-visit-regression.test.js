@@ -133,3 +133,28 @@ test('real navigation refresh targets the interview patient even with a missing 
   assert.match(after.nodes['action-area'].innerHTML, /name="date"/);
   assert.equal(after.nodes.screen.innerHTML.includes('class="error"'), false);
 });
+
+test('a saved booking redraws the patient even when refresh skips a focused form, and clears the old error', async () => {
+  let submit, shown = 0, posts = 0, failFirst = true;
+  const button = {}, error = { textContent: '' };
+  const nodes = { detail: {}, 'action-area': {}, 'action-error': error,
+    'action-form': { scrollIntoView() {}, querySelector: selector => selector === 'input, select' ? { focus() {} } : button, addEventListener: (_, fn) => { submit = fn; } } };
+  const c = vm.createContext({ H: helpers, esc: helpers.esc, date: helpers.date, localDate: () => '2026-11-18',
+    $: id => nodes[id], page: 'patients', selected: '7', formOpen: false, detailTab: 'Overview',
+    patients: [], actionFields: { book_phone: ['date', 'time', 'end'] }, actionLabels: { book_phone: 'Book by phone' },
+    FormData: class { constructor() { return [['date', '2026-11-18'], ['time', '09:00'], ['end', '10:00']]; } },
+    hmr: { api: async method => { if (method === 'POST') { posts++; if (failFirst) { failFirst = false; throw Error('invalid time'); } } return {}; } },
+    refresh: async () => {}, alert() {}, errorText: e => e.message,
+  });
+  vm.runInContext(fs.readFileSync(require.resolve('../renderer/patients.js'), 'utf8'), c);
+  c.showPatient = async () => { shown++; return true; };
+  c.openForm('book_phone', { id: 7 });
+  await submit({ preventDefault() {}, target: { querySelector: () => button } });
+  assert.equal(error.textContent, 'invalid time');
+  assert.equal(button.disabled, false);
+  assert.equal(shown, 0);
+  await submit({ preventDefault() {}, target: { querySelector: () => button } });
+  assert.equal(posts, 2);
+  assert.equal(error.textContent, '');
+  assert.equal(shown, 1);
+});

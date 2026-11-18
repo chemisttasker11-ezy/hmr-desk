@@ -313,6 +313,12 @@ def _autopilot(conn, now=None, runner=None, patient_id=None, simulated=False):
             elif patient['state'] in ('confirmed', 'pathology_ready', 'sheet_ready'):
                 if latest_reply and latest_reply['kind'] == 'YES' and not any(r['kind'] == 'confirmation' and stamp(r) >= stamp(latest_reply) for r in outgoing):
                     create(patient, 'confirmation')
+                if not (patient['postcode'] or '').strip():
+                    # Reminder timing needs the patient's postcode; without it nothing is drafted and nothing is guessed.
+                    if patient['visit_date'] and not conn.execute("SELECT 1 FROM events WHERE patient_id=? AND type='autopilot_skipped_no_postcode'", (patient['id'],)).fetchone():
+                        db.log(conn, patient['id'], 'autopilot_skipped_no_postcode', {})
+                        conn.commit()
+                    continue
                 local = now.replace(tzinfo=None) + dt.timedelta(hours=db.utc_offset_hours(patient['postcode'], now) - 10)
                 if patient['visit_date'] and visit_time(patient).date() == local.date() + dt.timedelta(days=1) and local.hour >= settings.get(conn, 'reminder_from_hour') and db.in_sending_window(patient['postcode'], now.replace(tzinfo=None)):
                     if not any(r['kind'] == 'reminder' and r['visit_date'] == patient['visit_date'] for r in outgoing):
