@@ -12,7 +12,9 @@ import jobs
 import pathology_records
 import records
 import report_auth
+import reconciliation
 
+READY_NOTE = 'Checklist of recorded state only. It is not clinical sign-off and does not approve the report.'
 NOTE = 'Display status only. Pharmacist sign-off and sending are still checked separately.'
 
 
@@ -55,12 +57,45 @@ def _reasons(conn, patient, detail):
     return reasons
 
 
+def _item(key, label, state):
+    return {'key': key, 'label': label, 'state': state}
+
+
+def _safe(key, label, check):
+    try:
+        return _item(key, label, check())
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+        return _item(key, label, 'unknown')
+
+
+def readiness(conn, patient):
+    """Existing validated state shown as met / not_met / unknown. Never a pass, never approval."""
+    def consent():
+        return 'met' if interview.load(conn, patient)['consent']['signed'] is True else 'not_met'
+
+    def meds():
+        saved = records.get_json(conn, patient['id'], 'reconciliation_review.json') or {}
+        return 'met' if reconciliation.review_status(interview.load(conn, patient), saved)['reviewed'] else 'not_met'
+
+    def demographics():
+        spec_bytes = records.get(conn, patient['id'], 'report_spec.json')
+        if spec_bytes is None:
+            return 'unknown'
+        import report
+        return 'not_met' if report.unresolved_demographics(conn, patient, json.loads(spec_bytes.decode('utf-8-sig'))) else 'met'
+
+    return {'items': [_safe('consent_recorded', 'Patient consent recorded', consent),
+                      _safe('medicines_reconciled', 'Medicine reconciliation reviewed for the current interview', meds),
+                      _safe('demographics_match', 'Report patient, GP and date match the record', demographics)],
+            'clinically_ready': None, 'note': READY_NOTE}
+
+
 def report_status(conn, patient):
     detail = _latest_build(conn, patient)
     signed = conn.execute(
         "SELECT 1 FROM events WHERE patient_id=? AND type='signed_off' LIMIT 1", (patient['id'],)).fetchone()
     out = {'status': 'not_generated', 'reasons': [], 'file': '', 'signed_off': bool(signed),
-           'signed_version_intact': None, 'note': NOTE}
+           'signed_version_intact': None, 'note': NOTE, 'readiness': readiness(conn, patient)}
     if detail:
         reasons = _reasons(conn, patient, detail)
         out.update(status='outdated' if reasons else 'current', reasons=reasons, file=str(detail.get('file', '')))

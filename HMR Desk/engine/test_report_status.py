@@ -61,3 +61,28 @@ def test_signed_state_follows_the_signed_version_and_never_authorises(tmp_path, 
     assert s['signed_off'] is True and s['signed_version_intact'] is False
     assert 'authoris' in s['note'].lower() or 'sign-off' in s['note'].lower()
     conn.close()
+
+
+def items(status):
+    return {i['key']: i['state'] for i in status['readiness']['items']}
+
+
+def test_readiness_reuses_recorded_state_and_keeps_unknown_visible(tmp_path, monkeypatch):
+    conn, patient, folder, body = case(tmp_path, monkeypatch)
+    s = report_status.report_status(conn, patient)
+    got = items(s)
+    assert got['medicines_reconciled'] == 'met' and got['demographics_match'] == 'met'
+    assert got['consent_recorded'] == 'unknown'  # the synthetic record carries no consent block
+    assert s['readiness']['clinically_ready'] is None and 'not clinical sign-off' in s['readiness']['note'].lower()
+    record = report_status.interview.load(conn, patient)
+    record['consent'] = {'signed': False, 'date': '', 'by': 'patient', 'relationship': 0, 'authorised_name': ''}
+    monkeypatch.setattr(report_status.interview, 'load', lambda c, p: record)
+    assert items(report_status.report_status(conn, patient))['consent_recorded'] == 'not_met'
+    record['consent'] = {'signed': True, 'date': '2026-11-12', 'by': 'patient', 'relationship': 0, 'authorised_name': ''}
+    monkeypatch.setattr(report_status.interview, 'load', lambda c, p: record)
+    assert items(report_status.report_status(conn, patient))['consent_recorded'] == 'met'
+    record['meds'] = [['Synthetic', 'a', 'b']]
+    assert items(report_status.report_status(conn, patient))['medicines_reconciled'] == 'not_met'
+    monkeypatch.setattr(report_status.interview, 'load', lambda c, p: (_ for _ in ()).throw(ValueError('x')))
+    assert set(items(report_status.report_status(conn, patient)).values()) == {'unknown'}
+    conn.close()
