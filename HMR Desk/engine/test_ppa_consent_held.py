@@ -89,3 +89,38 @@ def test_removing_the_signed_file_withdraws_consent(tmp_path, monkeypatch):
     assert api.consent_held(c, p) is True
     (folder / SIGNED).unlink()
     assert api.consent_held(c, p) is False
+
+
+def _synthetic_consent_template(base):
+    """A synthetic two-page PDF carrying the form fields consent_sign fills and signs."""
+    (base / 'TEMPLATES').mkdir(exist_ok=True)
+    doc = fitz.open(); doc.new_page(); page = doc.new_page()
+    def widget(pg, name, rect, kind=fitz.PDF_WIDGET_TYPE_TEXT):
+        w = fitz.Widget(); w.field_name = name; w.field_type = kind; w.rect = fitz.Rect(*rect)
+        w.text_fontsize = 10; pg.add_widget(w)
+    for i, name in enumerate(['Patient Name Given name and family name', 'Name of Pharmacist Providing Service', 'Date of Service', 'Date of Consent', 'Date of Consent_2', 'Authorised Person Name']):
+        widget(doc[0], name, (40, 40 + 30 * i, 300, 60 + 30 * i))
+    widget(page, 'Patient signature', (50, 100, 250, 160))
+    widget(page, 'Authorised Person Signature', (50, 200, 250, 260))
+    doc.save(base / 'TEMPLATES' / 'PPA Consent.pdf'); doc.close()
+
+
+def test_artifact_from_the_real_consent_sign_path_counts_as_held(tmp_path, monkeypatch):
+    import base64
+    import consent_sign
+    import interview
+    monkeypatch.setenv('HMR_DB', str(tmp_path / 'test.db'))
+    monkeypatch.setattr(db, 'BASE', str(tmp_path))
+    c = db.connect()
+    folder = tmp_path / 'Visited' / 'Synthetic Two'
+    folder.mkdir(parents=True)
+    c.execute("INSERT INTO patients (key,name,state,folder,visit_date) VALUES ('1','Synthetic Two','sent',?,'2026-11-18')", (str(folder.relative_to(tmp_path)),))
+    p = c.execute('SELECT * FROM patients WHERE id=1').fetchone()
+    _synthetic_consent_template(tmp_path)
+    assert api.consent_held(c, p) is False              # nothing signed yet
+    record = interview.load(c, p)
+    result = consent_sign.sign(c, p, base64.b64encode(_png()).decode('ascii'), record['revision'])
+    assert result['file'] == SIGNED.replace('One', 'Two')
+    assert api.consent_held(c, p) is True               # the app's own signed artifact is accepted
+    (folder / result['file']).unlink()
+    assert api.consent_held(c, p) is False
