@@ -11,11 +11,13 @@ reference, **edition V2.0, November 2025**.
 - Source PDF: 207 pages, 5,191,503 bytes,
   SHA256 `a09b0592bf3c994070b3bd5ffd3d196b86a38fa8b028374cc04025b3dff93b62`.
   The PDF itself is **not** included in this repository.
-- Included here on Es Abas's confirmation (2026-11-17) that the credited
-  author gave permission for its use and that the tables carry no
-  restrictions. Underlying third-party sources cited inside the document
-  (it references eTG and AMH) keep their own terms; this file does not
-  grant any further rights over them.
+- Included here on Es Abas's instruction (2026-11-17) that the tables are
+  general information he collected from different sources and carry no
+  restrictions. The credited author's permission has not been confirmed
+  in this repository's records. Underlying third-party sources cited
+  inside the document (it references eTG and AMH) keep their own terms;
+  reuse rights for that derived content have not been verified, and this
+  file does not grant any further rights over it.
 
 ## Clinical status - read before use
 
