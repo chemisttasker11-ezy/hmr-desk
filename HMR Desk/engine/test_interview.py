@@ -127,7 +127,7 @@ with tempfile.TemporaryDirectory() as tmp:
     roundtrip = Document(first); assert 'Medicine management: Someone else' in '\n'.join(x.text for x in roundtrip.paragraphs)
     med_export = next(t for t in roundtrip.tables if t.rows[0].cells[0].text == 'Medicine'); assert 'Actual use and clinical note' in med_export.rows[1].cells[2].text and 'Annotation' in med_export.rows[1].cells[4].text and 'DAA: unknown' in med_export.rows[1].cells[4].text
     headings = [x.text for x in roundtrip.paragraphs]; assert headings.index('Interview notes') < headings.index('Allergies / adverse reactions') < headings.index('Medicines on referral')
-    with patch('interview.subprocess.run', side_effect=OSError('Word unavailable')):
+    with patch('pdf_export.resolve_converter', return_value=str(Path(tmp) / 'converter-stub')), patch('interview.subprocess.run', side_effect=OSError('Word unavailable')):
         try: interview.export(conn,p,'pdf'); raise AssertionError('conversion should fail')
         except RuntimeError as exc: assert 'Cannot launch bundled PDF converter' in str(exc) and list(folder.glob('*.docx'))  # the message no longer says "DOCX kept"; the DOCX is still there
     synthetic_pdf = b'%PDF synthetic ' + b'x' * 120  # the converter rejects results under 100 bytes
@@ -135,7 +135,7 @@ with tempfile.TemporaryDirectory() as tmp:
         # The bundled converter writes report.pdf into its --outdir and reports through a completed-process object.
         (Path(args[args.index('--outdir') + 1]) / 'report.pdf').write_bytes(synthetic_pdf)
         return SimpleNamespace(returncode=0, stdout=b'', stderr=b'')
-    with patch('interview.subprocess.run', side_effect=convert):
+    with patch('pdf_export.resolve_converter', return_value=str(Path(tmp) / 'converter-stub')), patch('interview.subprocess.run', side_effect=convert):
         output = Path(interview.export(conn,p,'both')); assert output.with_suffix('.pdf').read_bytes() == synthetic_pdf
     assert 'PPA consent form not added' in interview.pack(conn,p)
     templates = root / 'TEMPLATES'; templates.mkdir(); (templates / 'PPA Consent.pdf').write_bytes(b'consent')
