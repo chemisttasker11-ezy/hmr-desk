@@ -195,7 +195,9 @@ def _fts_usable(db):
     try:
         file = db.execute('PRAGMA database_list').fetchone()[2]
         stat = Path(file).stat() if file else None
-        key = (file, stat.st_mtime_ns, stat.st_size, _header_counter(file)) if stat else None
+        # Identity: path, mtime, size, inode+device (changes on atomic replacement where the OS reports them) and the SQLite file change counter.
+        # Limit: a deliberate same-size, same-mtime, counter-preserving edit in place is not detected; this is a staleness guard, not tamper-proofing.
+        key = (file, stat.st_mtime_ns, stat.st_size, getattr(stat, "st_ino", 0), getattr(stat, "st_dev", 0), _header_counter(file)) if stat else None
         if key is not None and key in _TRUST:
             return _TRUST[key]
         meta = dict(db.execute(f'SELECT key, value FROM {META_TABLE}').fetchall())
