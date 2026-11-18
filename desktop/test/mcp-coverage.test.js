@@ -105,3 +105,11 @@ test('report refresh and demographic decisions use enumerated routes and bodies'
     ['hmr_report_demographics',{id:4,action:'delete',keys:['name']}],['hmr_report_demographics',{id:4,action:'keep',keys:[]}],['hmr_report_demographics',{id:4,action:'keep',keys:['x']}],['hmr_report_demographics',{id:4,action:'keep'}],['hmr_report_demographics',{id:4,action:'keep',keys:['name'],confirm:true}]])
     await assert.rejects(call(n,a,f.fetch,read),/Invalid arguments/);
 });
+
+test('medicine save forwards the reviewed snapshot digest and rejects a malformed one', async () => {
+  const digest = 'a'.repeat(64);
+  let f = fake(); await call('hmr_medicines_save',{id:5,meds:[['Synthetic A','Brand A']],allergies:[],medicine_snapshot_sha256:digest},f.fetch,read);
+  assert.match(f.calls[0].url,/\/api\/patients\/5\/meds$/);
+  assert.deepEqual(JSON.parse(f.calls[0].opts.body),{meds:[['Synthetic A','Brand A']],allergies:[],medicine_snapshot_sha256:digest});
+  await assert.rejects(call('hmr_medicines_save',{id:5,meds:[],allergies:[],medicine_snapshot_sha256:'xyz'},f.fetch,read),/Invalid arguments/);
+});
