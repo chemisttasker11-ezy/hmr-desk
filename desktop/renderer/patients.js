@@ -109,7 +109,7 @@ function renderPatients() {
       const t = (typeof runTasks !== 'undefined' ? runTasks : []).find((x) => Number(x.patient_id) === Number(p.id));
       return t ? ` <span class="task-chip state-${esc(t.state)}"><button data-patient-activity="${esc(p.id)}">${esc(H.stepLabel(t.step))}: ${esc(t.state)}</button></span>` : '';
     })()}</td>`}
-    <td>${H.hasNextStep(p) ? `<button data-patient="${esc(p.id)}">${esc(H.stepLabel(p.next_step))}</button>` : ''}</td></tr>`,
+    <td>${H.hasNextStep(p) ? `<button data-patient="${esc(p.id)}">${esc(H.stepLabel(p.next_step))}</button>` : '<span class="muted">No action needed</span>'}</td></tr>`,
       )
       .join('')}</tbody></table>${rows.length ? '' : '<p class="empty">No patients match these filters.</p>'}`;
 }
