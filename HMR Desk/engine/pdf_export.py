@@ -4,6 +4,7 @@ Does not use Microsoft Word, the shell or a developer-profile PowerShell skill.
 No report text or patient identifiers are included in error messages/logs.
 """
 import os
+import app_paths
 from pathlib import Path
 import shutil
 import subprocess
@@ -89,13 +90,28 @@ def failure_text(exc):
     return str(exc) if isinstance(exc, (RuntimeError, ValueError)) else type(exc).__name__
 
 
-def available():
+def bundled_converter():
+    """The portable converter that scripts/bundle-libreoffice.ps1 extracts (pinned, checksum-verified) into the
+    source checkout. Only a source run uses it; the packaged app is given its own copy through HMR_PDF_CONVERTER."""
+    if getattr(sys, 'frozen', False):
+        return None
+    candidate = app_paths.resource_root() / 'vendor' / 'libreoffice' / 'program' / 'soffice.exe'
+    return str(candidate) if candidate.is_file() else None
+
+
+def resolve_converter():
+    """Converter order: the configured path, then (source runs only) the bundled portable copy, then a PATH install.
+    A packaged run never looks further than its configured, bundled path."""
     selected = os.environ.get('HMR_PDF_CONVERTER')
     if selected:
-        return Path(selected).is_file()
+        return selected if Path(selected).is_file() else None
     if getattr(sys, 'frozen', False):
-        return False  # never resolve a host-installed LibreOffice in production
-    return bool(shutil.which('soffice'))
+        return None  # never resolve a host-installed LibreOffice in production
+    return bundled_converter() or shutil.which('soffice')
+
+
+def available():
+    return bool(resolve_converter())
 
 
 def convert(docx, pdf, timeout=120):
@@ -106,13 +122,11 @@ def convert(docx, pdf, timeout=120):
         raise ValueError('PDF output must be beside the local Word report')
     if target.exists():
         raise FileExistsError('A PDF already exists for this report revision')
-    engine = os.environ.get('HMR_PDF_CONVERTER')
+    engine = resolve_converter()
     if not engine:
         if getattr(sys, 'frozen', False):
             raise RuntimeError('Bundled PDF converter missing; reinstall complete application')
-        engine = shutil.which('soffice')
-    if not engine or not Path(engine).is_file():
-        raise RuntimeError('Bundled PDF converter unavailable')
+        raise RuntimeError('Bundled PDF converter unavailable: run scripts/bundle-libreoffice.ps1 or set HMR_PDF_CONVERTER')
     directory = tempfile.mkdtemp(prefix='.hmr-pdf-', dir=target.parent)
     # LibreOffice's profile nests about 180 characters deep. Keep it under a short root (the system temp
     # folder) so no path passes the Windows 260 character limit, whatever the patient folder depth.
