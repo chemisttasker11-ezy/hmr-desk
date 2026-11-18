@@ -99,8 +99,8 @@ def render(conn, patient, kind, when=None):
 
 
 def expired_warning(conn, patient, today=None):
-    import api
-    expiry = api.referral_expiry(conn, patient['referral_date'])
+    import patient_actions
+    expiry = patient_actions.referral_expiry(conn, patient['referral_date'])
     return 'Referral expired on ' + expiry.strftime('%d/%m/%Y') if expiry and expiry < (today or dt.date.today()) else ''
 
 def draft(conn, patient, data, commit=True):

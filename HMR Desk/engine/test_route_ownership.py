@@ -202,7 +202,7 @@ def test_message_and_reference_routes_keep_their_literal_behaviour(conn, tmp_pat
 
 def test_domain_modules_do_not_import_the_api_facade():
     # steps, report and suggestion_context used to reach medicine confirmation through api; they own a domain module now.
-    for name in ('steps.py', 'report.py', 'suggestion_context.py'):
+    for name in ('steps.py', 'report.py', 'suggestion_context.py', 'lifecycle.py', 'timeline.py', 'messaging.py', 'dev_seed.py'):
         for node in ast.walk(_tree(name)):
             modules = [a.name for a in node.names] if isinstance(node, ast.Import) else [node.module or ''] if isinstance(node, ast.ImportFrom) else []
             assert 'api' not in [m.split('.')[0] for m in modules], f'{name} imports api'

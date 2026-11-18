@@ -115,17 +115,8 @@ from followup_schedule import (LEGACY_FIRST_DAYS, LEGACY_END_DAYS, RULE_SOURCE, 
 
 
 def _next_step(p, conn=None):
-    state = p['state']
-    if state in ('confirmed', 'pathology_ready', 'sheet_ready'):
-        name = 'pathology' if not steps.done('pathology', conn, p) else 'interview_sheet' if not steps.done('interview_sheet', None, p) else None
-        return steps.BY_NAME[name].label if name else 'visit'
-    if state == 'visited':
-        if not confirmed_medicines_current(conn, p): return 'confirm medicines'
-        if report_data(conn, p) is not None: return 'build report' if report_data(conn, p).get('issues') else 'add findings'
-        if not steps.interactions_done(conn, p): return 'check interactions'
-        return 'start report'
-    if state == 'sent': return steps.BY_NAME['claim'].label
-    return {'new': steps.BY_NAME['intake_dry'].label, 'pooled': 'offer a time', 'offered': 'wait for reply', 'report_drafted': 'sign off', 'signed_off': 'send report'}.get(state, '')
+    import lifecycle
+    return lifecycle.workflow_step(p, conn)
 
 
 def next_step(p, conn=None):

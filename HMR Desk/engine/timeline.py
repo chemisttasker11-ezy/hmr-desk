@@ -1,7 +1,8 @@
 """Patient activity and milestones assembled from the audit trail and records."""
 import datetime as dt
 import json
-import api
+import followup_schedule
+import patient_actions
 import steps
 
 def build(conn, patient):
@@ -77,16 +78,16 @@ def build(conn, patient):
         for field, label in [('visit_date', prefix + ' done' if prefix else 'Visited'), ('report_sent','Report sent'), ('claimed', prefix + ' claimed' if prefix else 'Claimed')]:
             if v[field]: add(v[field], label, v['note'] or '', 'visit', date_only=True)
     def day(value):
-        try: return local_time(value).date().isoformat() if local_time(value) else api.anydate(value).isoformat() if value else None
+        try: return local_time(value).date().isoformat() if local_time(value) else patient_actions.anydate(value).isoformat() if value else None
         except (ValueError, TypeError): return None
     def latest(values): return max((day(x) for x in values if day(x)), default=None)
     def earliest(values): return min((day(x) for x in values if day(x)), default=None)
     outgoing = [m for m in messages if m['direction'] == 'out' and m['state'].lower() in ('sent','delivered')]
     incoming = [m for m in messages if m['direction'] == 'in']
-    follow = api.patient_followups(conn, pid)
+    follow = followup_schedule.patient_followups(conn, pid)
     first = follow['followup1'] if follow else None
-    due2 = api.second_followup_due(conn, first)
-    expiry = api.referral_expiry(conn, patient['referral_date'])
+    due2 = followup_schedule.second_followup_due(conn, first)
+    expiry = patient_actions.referral_expiry(conn, patient['referral_date'])
     milestones = dict(referral_date=day(patient['referral_date']), referral_expiry=expiry.isoformat() if expiry else None,
         first_contact=earliest([m['sent_at'] or m['created_at'] for m in outgoing] + event_dates.get('call', [])),
         last_message=latest([m['sent_at'] or m['created_at'] for m in outgoing]), last_reply=latest([m['created_at'] for m in incoming]),
