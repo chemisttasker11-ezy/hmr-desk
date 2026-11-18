@@ -71,5 +71,6 @@ with tempfile.TemporaryDirectory() as tmp:
     assert call('GET','/api/patients/1')[1]['note'] == 'hello'
     assert act('visited', date='2026-01-01')[0] == 200
 
+    conn.close()  # the full script closes it at its end; Windows cannot delete the temp folder while the database file is open
 
 print('api pre-sign-off checks passed')
