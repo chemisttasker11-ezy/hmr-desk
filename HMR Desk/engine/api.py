@@ -194,6 +194,16 @@ def mims_lists(conn):
 
 
 
+def consent_held(conn, p):
+    """True only when the interview records the consent as signed AND a signed consent file exists."""
+    try:
+        data = records.get_json(conn, p['id'], 'interview.json') or {}
+        import interview
+        return data.get('consent', {}).get('signed') is True and bool(interview.signed_file(jobs.patient_folder(p)))
+    except (OSError, ValueError, TypeError, AttributeError, KeyError):
+        return False
+
+
 def claim_list(conn):
     if claims_helper is None or record is None: return []  # PPA integration unavailable
     result = []
@@ -210,7 +220,7 @@ def claim_list(conn):
             'referral': claims_helper.iso(p['referral_date']), 'gpProvider': provider.group(1).strip() if provider else '',
             'gpGiven': gp_given, 'gpFamily': gp_family, 'suburb': match.group(2) if match else suburb,
             'postcode': p['postcode'] or (match.group(1) if match else ''),
-            'reasons': record.reasons(spec) if spec.get('reason') else [], 'reasonOther': '', 'outcomes': outcomes, 'outcomeOther': other})
+            'reasons': record.reasons(spec) if spec.get('reason') else [], 'consentHeld': consent_held(conn, p), 'reasonOther': '', 'outcomes': outcomes, 'outcomeOther': other})
     return result
 
 def meta(conn, key, default):

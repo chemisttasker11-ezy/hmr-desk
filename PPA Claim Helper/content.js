@@ -13,7 +13,9 @@ function setText(id, value) {
 function tick(id, on) { const e = document.getElementById(id); if (e && e.checked !== !!on) e.click(); }
 
 function fill(c) {
-  tick('writtenPatientConsentHeld_0', true);
+  // Only tick the declaration when HMR Desk holds signed consent for this patient.
+  const consentRecorded = c.consentHeld === true;
+  if (consentRecorded) tick('writtenPatientConsentHeld_0', true);
   const map = {
     patientMedicareDVANumber: c.medicare, patientGivenNames: c.given, patientFamilyName: c.family,
     patientDateOfBirth: c.dob, mrnOrSHPAAccreditationNumber: PHARMACIST.mmr,
@@ -29,6 +31,7 @@ function fill(c) {
     ['changeOfMedicinesToDifferentMedicine', 'change'], ['cessationOfOneOrMoreMedicines', 'cessation'], ['otherRecommendation', 'other']])
     tick(id, c.outcomes.includes(key));
   if (c.outcomes.includes('other')) setText('otherRecommendationsToGP', c.outcomeOther);
+  if (!consentRecorded) missing.push('written consent held (no signed consent recorded in HMR Desk; leave unticked until verified)');
   if (!c.reasons.length) missing.push('reason for referral');
   if (!c.outcomes.length) missing.push('outcomes');
   // Mark the fields that still need a value so they are easy to see.
