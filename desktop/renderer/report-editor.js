@@ -37,6 +37,7 @@ const reportSaver = H.autosaver({
   status: (message) => {
     reportSaveStatus = message.startsWith('Saved ') ? 'All changes saved' : message === 'Not saved' ? 'Unsaved changes' : message;
     if ($('report-status')) $('report-status').textContent = reportSaveStatus;
+    if (message.startsWith('Saved ') && page === 'report_editor' && $('report-currency-status')) loadReportStatus();
   },
   errorText: (...args) => errorText(...args), // defined in renderer.js, which loads after this file
 });
@@ -106,6 +107,18 @@ async function reportScreen() {
   reportSaver.reset(record);
   renderReport();
   loadSuggestions();
+}
+let reportStatusRun = 0;
+async function loadReportStatus() {
+  const id = reportId, run = ++reportStatusRun;
+  try {
+    const status = await hmr.api('GET', `/api/patients/${encodeURIComponent(id)}/report-status`);
+    if (id !== reportId || page !== 'report_editor' || run !== reportStatusRun || !$('report-currency-status')) return;
+    $('report-currency-status').innerHTML = H.reportStatusHtml(status);
+  } catch (error) {
+    if (id !== reportId || page !== 'report_editor' || run !== reportStatusRun || !$('report-currency-status')) return;
+    $('report-currency-status').innerHTML = '<p class="muted">Report status could not be checked.</p>';
+  }
 }
 async function loadSuggestions() {
   const id = reportId, run = ++reportSuggestionRun;
@@ -208,9 +221,10 @@ function renderReport() {
     .split(/[\\/]/)
     .pop();
   $('screen').innerHTML =
-    `<div class="report-top"><button data-page="reports">Back to reports</button><div><strong>${esc(reportDetail.name || reportRecord.name)}</strong><span class="muted"> &middot; ${esc(reportDetail.gp || String(reportRecord.doctor || '').split('\n')[0] || 'GP not set')}</span><br><small class="muted">${esc(outputName)}</small></div><div class="report-dates">${reportField('assess_date', 'Assessment date (DD/MM/YYYY)', false)}${reportField('report_date', 'Report date (DD/MM/YYYY)', false)}</div><span id="report-status" role="status">${esc(reportSaveStatus)}</span><span id="report-build-status" role="status" aria-live="polite">${esc(reportBuildStatus)}</span><div class="actions"><button data-report-save>Save</button><button data-report-build="word" ${!reportRecord.issues.length ? 'disabled' : ''}>Build Word</button><button class="primary" data-report-build="pdf" ${!reportRecord.issues.length ? 'disabled' : ''}>Build Word + PDF</button></div></div>${demographicsHtml()}${H.showInterviewRefresh(reportRecord, reportDetail) || reportRecord.pathology_newer ? `<div class="report-refresh" role="status"><span>${esc(reportRecord.pathology_newer ? 'Verified pathology has changed since this report was prepared. Refresh and re-review the report before building.' : 'The interview was changed after this report was started.')}</span><button data-report-refresh>Refresh report from current interview and pathology</button></div>` : ''}<div class="report-layout"><div class="report-main"><section class="report-findings"><h2>Findings</h2><p class="muted">${reportRecord.issues.length} findings &middot; about 4-8</p>${findings}<div class="actions"><button data-finding-add>Add finding</button>${reportUndo ? '<button data-finding-undo>Undo deletion</button>' : ''}</div></section><details class="interview-section report-disclosure" id="report-letter" ${reportLetterOpen ? 'open' : ''}><summary>Letter wording</summary><div class="report-fields">${letter}</div></details><details class="interview-section report-disclosure" id="report-details" ${reportDetailsOpen ? 'open' : ''}><summary>Patient details in the report</summary><div class="report-fields">${details}</div></details></div><aside class="report-sidebar">${typeof evidenceReferencePanel==='function' ? evidenceReferencePanel() : ''}${localReferencePanel()}<section><div class="helper-heading"><h2>Suggestions for this patient</h2><button data-suggestions-reload>Reload</button></div><div id="suggestions" role="status">${suggestionsHtml()}</div></section><section><h2>Find in library</h2><label>Search<input id="library-search" type="search" value="${esc(reportQuery)}"></label><div id="library-results" role="status">${libraryResultsHtml()}</div></section>${reportAi ? `<section><h2>AI assist (optional)</h2><p>${esc(reportAgent)}</p><button data-report-assist>Draft with AI</button>${reportDraft ? '<div class="actions"><button data-report-load="all">Load AI draft</button><button data-report-load="findings">Take findings only</button></div>' : ''}${file ? `<p>${esc(file)} <button data-open-interactions="${esc(file)}">Open</button></p>` : ''}<pre id="report-output" role="status">${esc(reportOutput)}</pre></section>` : ''}</aside></div>`;
+    `<div class="report-top"><button data-page="reports">Back to reports</button><div><strong>${esc(reportDetail.name || reportRecord.name)}</strong><span class="muted"> &middot; ${esc(reportDetail.gp || String(reportRecord.doctor || '').split('\n')[0] || 'GP not set')}</span><br><small class="muted">${esc(outputName)}</small></div><div class="report-dates">${reportField('assess_date', 'Assessment date (DD/MM/YYYY)', false)}${reportField('report_date', 'Report date (DD/MM/YYYY)', false)}</div><span id="report-status" role="status">${esc(reportSaveStatus)}</span><span id="report-build-status" role="status" aria-live="polite">${esc(reportBuildStatus)}</span><div class="actions"><button data-report-save>Save</button><button data-report-build="word" ${!reportRecord.issues.length ? 'disabled' : ''}>Build Word</button><button class="primary" data-report-build="pdf" ${!reportRecord.issues.length ? 'disabled' : ''}>Build Word + PDF</button></div></div>${demographicsHtml()}${H.showInterviewRefresh(reportRecord, reportDetail) || reportRecord.pathology_newer ? `<div class="report-refresh" role="status"><span>${esc(reportRecord.pathology_newer ? 'Verified pathology has changed since this report was prepared. Refresh and re-review the report before building.' : 'The interview was changed after this report was started.')}</span><button data-report-refresh>Refresh report from current interview and pathology</button></div>` : ''}<div id="report-currency-status" role="status"></div><div class="report-layout"><div class="report-main"><section class="report-findings"><h2>Findings</h2><p class="muted">${reportRecord.issues.length} findings &middot; about 4-8</p>${findings}<div class="actions"><button data-finding-add>Add finding</button>${reportUndo ? '<button data-finding-undo>Undo deletion</button>' : ''}</div></section><details class="interview-section report-disclosure" id="report-letter" ${reportLetterOpen ? 'open' : ''}><summary>Letter wording</summary><div class="report-fields">${letter}</div></details><details class="interview-section report-disclosure" id="report-details" ${reportDetailsOpen ? 'open' : ''}><summary>Patient details in the report</summary><div class="report-fields">${details}</div></details></div><aside class="report-sidebar">${typeof evidenceReferencePanel==='function' ? evidenceReferencePanel() : ''}${localReferencePanel()}<section><div class="helper-heading"><h2>Suggestions for this patient</h2><button data-suggestions-reload>Reload</button></div><div id="suggestions" role="status">${suggestionsHtml()}</div></section><section><h2>Find in library</h2><label>Search<input id="library-search" type="search" value="${esc(reportQuery)}"></label><div id="library-results" role="status">${libraryResultsHtml()}</div></section>${reportAi ? `<section><h2>AI assist (optional)</h2><p>${esc(reportAgent)}</p><button data-report-assist>Draft with AI</button>${reportDraft ? '<div class="actions"><button data-report-load="all">Load AI draft</button><button data-report-load="findings">Take findings only</button></div>' : ''}${file ? `<p>${esc(file)} <button data-open-interactions="${esc(file)}">Open</button></p>` : ''}<pre id="report-output" role="status">${esc(reportOutput)}</pre></section>` : ''}</aside></div>`;
   document.querySelectorAll('.report-layout textarea').forEach(H.growTextarea);
   refreshLocalReferenceStatus();
+  loadReportStatus();
   if(typeof refreshEvidenceReferences==='function')refreshEvidenceReferences();
   $('report-letter').addEventListener('toggle', (event) => {
     reportLetterOpen = event.target.open;
@@ -353,6 +367,7 @@ async function runBuild(pdf) {
   setStatus(pdf ? 'Building Word and PDF. This can take up to a minute...' : 'Building Word...');
   let ok = false;
   try { ok = await reportJob('report_build', { pdf }); } finally { buttons().forEach((b) => { b.disabled = false; }); }
+  loadReportStatus();
   setStatus(ok ? H.buildOutcomeText(lastBuildResult, pdf) : H.buildOutcomeText(lastBuildResult || { state: 'failed', output: reportOutput }, pdf));
 }
 async function reportEditorClick(b) {

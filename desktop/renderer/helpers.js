@@ -187,6 +187,30 @@ const H = (() => {
     'report_build',
     'claim',
   ];
+  // Freshness and recorded-state checklist from GET /api/patients/<id>/report-status. Display only: it never
+  // says approved or ready, and unknown or unverifiable stays visibly uncertain.
+  function reportStatusHtml(status) {
+    if (!status || typeof status !== 'object') return '';
+    const reasonText = {
+      document_changed: 'the Word file changed', pdf_changed: 'the PDF changed or is missing', report_content_changed: 'the report content changed since it was built',
+      interview_changed: 'the interview changed', pathology_changed: 'the pathology changed', source_files_changed: 'the original referral or pathology files changed',
+      clinical_record_changed: 'the clinical record changed', cannot_verify: 'the report could not be checked',
+    };
+    const reasons = (Array.isArray(status.reasons) ? status.reasons : []).map((r) => reasonText[r] || 'a change was detected');
+    let line;
+    if (status.status === 'current') line = 'Matches the saved interview and pathology.';
+    else if (status.status === 'outdated') line = `Outdated: ${reasons.join('; ') || 'a change was detected'}. Rebuild before sign-off.`;
+    else if (status.status === 'not_generated') line = 'No report has been built yet.';
+    else line = 'Report status could not be checked.';
+    if (status.reasons && status.reasons.includes('cannot_verify')) line += ' Treat it as unverified.';
+    const head = status.status === 'outdated' ? 'Outdated' : status.status === 'current' ? 'Built report' : 'Report';
+    let sign = status.signed_off ? 'A signed version exists.' : 'Not signed off.';
+    if (status.signed_off && status.signed_version_intact === false) sign = 'A signed version exists, but the signed version has changed or is no longer intact.';
+    const words = { met: 'Done', not_met: 'Not done', unknown: 'Unknown' };
+    const items = (status.readiness && Array.isArray(status.readiness.items) ? status.readiness.items : [])
+      .map((i) => `<li>${esc(String(i.label || ''))}: <strong>${esc(words[i.state] || 'Unknown')}</strong></li>`).join('');
+    return `<div class="report-status"><p><strong>${esc(head)}.</strong> ${esc(line)} ${esc(sign)}</p>${items ? `<ul>${items}</ul>` : ''}<p class="muted">Recorded state only. This is not clinical sign-off.</p></div>`;
+  }
   // The submission note "N task(s) queued (...)" is written once. Shown later it would still say
   // queued after the tasks finished, so describe the current state of the task list instead.
   function runStatusText(message, tasks) {
@@ -743,6 +767,7 @@ const H = (() => {
     patientPathway,
     buildOutcomeText,
     runStatusText,
+    reportStatusHtml,
     commonStep,
     suburb,
     displayAddress,
