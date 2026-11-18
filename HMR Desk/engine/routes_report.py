@@ -58,4 +58,10 @@ def handle(conn, method, path, query, body):
         p = conn.execute('SELECT * FROM patients WHERE id=?', (int(match[1]),)).fetchone()
         if not p: return 404, {'error': 'patient not found'}
         return 200, {'versions': report_auth.generated_versions(conn, p)}
+    match = re.fullmatch(r'/api/patients/(\d+)/report-status', path)
+    if match and method == 'GET':
+        import report_status
+        p = conn.execute('SELECT * FROM patients WHERE id=?', (int(match[1]),)).fetchone()
+        if not p: return 404, {'error': 'patient not found'}
+        return 200, report_status.report_status(conn, p)
     return None
