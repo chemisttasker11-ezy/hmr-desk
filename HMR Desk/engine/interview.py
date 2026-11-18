@@ -225,6 +225,15 @@ def blank(conn, patient):
                 origin = clinical_review.origin(reviewed, 'medicines')
                 record['clarify'].append('Confirmed prescribed referral list from ' + origin +
                                          ' (actual use still to reconcile): ' + reviewed['medicines'][:9000])
+                # Reuse the pharmacist's confirmed list so it is not typed twice. Only when the referral text gave no
+                # medicine rows. Each non-empty line becomes one row exactly as entered: no name or directions are
+                # split out, use is left unconfirmed (so nothing counts as Taking until the pharmacist says so).
+                lines = [line.strip() for line in str(reviewed['medicines']).splitlines() if line.strip()]
+                if not record['meds'] and 0 < len(lines) <= 60 and all(len(line) <= 400 for line in lines):
+                    for line in lines:
+                        record['meds'].append([line, '', '', '', ''])
+                        record['details']['meds'].append({'packed': '', 'as_instructed': False})
+                    record['sources'].append('Medicine rows made from the confirmed intake list (' + origin + '); text exactly as entered, edit name and directions; use not confirmed - check')
             if reviewed.get('observations'):
                 origin = clinical_review.origin(reviewed, 'observations')
                 record['obs'].append(['Referral observation', reviewed['observations'], origin])
