@@ -105,3 +105,46 @@ def test_refresh_rebuilds_demographics_from_the_current_patient_record(tmp_path,
         refreshed = report.refresh(conn, dict(conn.execute('SELECT * FROM patients WHERE id=?', (patient['id'],)).fetchone()))
         assert 'DOB: 01-Feb-1950' in refreshed['patient']
         assert 'Dr Synthetic Corrected' in refreshed['doctor'] and refreshed['dear'] == 'Dear Dr Synthetic Corrected,'
+
+
+def _patient_row(conn, pid):
+    return dict(conn.execute('SELECT * FROM patients WHERE id=?', (pid,)).fetchone())
+
+
+def test_refresh_keeps_a_pharmacist_edited_block_and_offers_a_choice(tmp_path, monkeypatch):
+    connection = _setup(tmp_path, monkeypatch)
+    with connection() as conn:
+        patient, loaded = _saved_report(conn)
+        authored = loaded['doctor'] + '\nPractice manager: Synthetic Person'
+        edited = dict(loaded, doctor=authored, expected_revision=loaded['revision'])
+        report.save(conn, patient, edited)
+        conn.execute("UPDATE patients SET dob=?, gp=? WHERE id=?", ('01-Feb-1950', 'Dr Synthetic Corrected', patient['id']))
+        conn.commit()
+        refreshed = report.refresh(conn, _patient_row(conn, patient['id']))
+        assert refreshed['doctor'] == authored                      # authored edit survives
+        assert 'DOB: 01-Feb-1950' in refreshed['patient']           # untouched block still follows the record
+        assert [c['key'] for c in refreshed['demographic_conflicts']] == ['doctor']
+        assert refreshed['dear'] == 'Dear Dr Synthetic Corrected,'
+        assert all(c['report'] and c['record'] for c in refreshed['demographic_conflicts'])
+        assert 'demographic_conflicts' not in report.load(conn, patient)
+        # still a conflict next time (not silently resolved), and findings are intact
+        again = report.refresh(conn, _patient_row(conn, patient['id']))
+        assert any(c['key'] == 'doctor' for c in again['demographic_conflicts'])
+        assert again['issues'] == loaded['issues']
+        # an explicit choice replaces only the chosen block
+        chosen = report.refresh(conn, _patient_row(conn, patient['id']), ['doctor'])
+        assert 'Dr Synthetic Corrected' in chosen['doctor'] and not any(c['key'] == 'doctor' for c in chosen['demographic_conflicts'])
+        with pytest.raises(ValueError):
+            report.refresh(conn, _patient_row(conn, patient['id']), ['issues'])
+
+
+def test_refresh_never_overwrites_a_block_of_a_spec_without_generation_record(tmp_path, monkeypatch):
+    connection = _setup(tmp_path, monkeypatch)
+    with connection() as conn:
+        patient, loaded = _saved_report(conn)
+        legacy = {k: v for k, v in loaded.items() if k != 'demographics_generated'}
+        legacy.update(patient='Typed by hand', expected_revision=loaded['revision'])
+        report.save(conn, patient, legacy)
+        refreshed = report.refresh(conn, _patient_row(conn, patient['id']))
+        assert refreshed['patient'] == 'Typed by hand'
+        assert any(c['key'] == 'patient' for c in refreshed['demographic_conflicts'])

@@ -319,12 +319,15 @@ async function reportEditorClick(b) {
   if (page !== 'report_editor' || !reportRecord) return false;
   const d = b.dataset;
   if (d.reportRefresh !== undefined) {
-    if (!confirm("This replaces the report's conditions, allergies, observations, medicine tables and pathology with the current interview. Your findings and letter text are kept. A backup of the current report is saved.")) return true;
+    if (!confirm("This replaces the report's conditions, allergies, observations, medicine tables and pathology with the current interview. Patient, GP and date blocks follow the patient record unless you edited them; you will be asked about each edited block. Your findings and letter text are kept. A backup of the current report is saved.")) return true;
     const id = reportId, screen = $('screen');
     screen.inert = true;
     try {
       if (!(await reportSaver.save())) return true;
-      await hmr.api('POST', `/api/patients/${encodeURIComponent(id)}/report/refresh`);
+      let result = await hmr.api('POST', `/api/patients/${encodeURIComponent(id)}/report/refresh`);
+      // Blocks the pharmacist edited are kept; each difference from the patient record is offered, never replaced silently.
+      const replace = (result?.demographic_conflicts || []).filter((c) => confirm(`The ${c.label} in this report was edited and differs from the current patient record.\n\nIn the report:\n${c.report}\n\nIn the patient record:\n${c.record}\n\nOK replaces the report text with the patient record. Cancel keeps your edited text.`)).map((c) => c.key);
+      if (replace.length) await hmr.api('POST', `/api/patients/${encodeURIComponent(id)}/report/refresh`, { replace_demographics: replace });
       if (page === 'report_editor' && reportId === id) {
         const updated = await hmr.api('GET', `/api/patients/${encodeURIComponent(id)}/report`);
         if (page === 'report_editor' && reportId === id) { reportRecord = updated; reportSaver.reset(updated); renderReport(); loadSuggestions(); }

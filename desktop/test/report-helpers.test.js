@@ -58,3 +58,22 @@ test('report refresh does not post when saving pending edits fails', async () =>
   assert.equal(await context.reportEditorClick({ dataset: { reportRefresh: '' } }), true);
   assert.equal(saves, 1); assert.equal(posts, 0); assert.equal(screen.inert, false);
 });
+
+test('report refresh offers each edited-block conflict and replaces only the ones accepted', async () => {
+  const calls = [], prompts = [];
+  const screen = { inert: false };
+  const conflicts = [{ key: 'doctor', label: 'GP details block', report: 'Typed GP', record: 'Dr Record' },
+    { key: 'patient', label: 'patient details block', report: 'Typed patient', record: 'DOB: 01-Feb-1950' }];
+  const context = vm.createContext({ H: { autosaver: () => ({ save: async () => true, reset() {} }), esc: (x) => x },
+    page: 'report_editor', $: () => screen, errorText: String, alert() {},
+    confirm: (text) => { prompts.push(text); return !/The patient details block/.test(text); },
+    hmr: { api: async (method, url, body) => { calls.push([method, url, body]); return method === 'POST' && !body ? { demographic_conflicts: conflicts } : {}; } },
+    document: { addEventListener() {} } });
+  vm.runInContext(fs.readFileSync(require.resolve('../renderer/report-editor.js'), 'utf8'), context);
+  vm.runInContext("reportId = 'one'; reportRecord = {}; renderReport = () => {}; loadSuggestions = () => {}", context);
+  await context.reportEditorClick({ dataset: { reportRefresh: '' } });
+  assert.equal(prompts.length, 3);                               // initial confirm, then one per conflict
+  assert.match(prompts[1], /GP details block[\s\S]*Typed GP[\s\S]*Dr Record/);
+  const replace = calls.find((c) => c[2] && c[2].replace_demographics);
+  assert.deepEqual(replace[2].replace_demographics, ['doctor']); // the declined block is not replaced
+});

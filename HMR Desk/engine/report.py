@@ -273,7 +273,7 @@ def start(conn, patient):
     name = p['name']; gp = p.get('gp') or h['gp'] or ''
     data = manual_defaults.initial_text(name, gp)
     demo = _demographics(conn, patient, record); name = demo['name']; visit = demo['assess_date']
-    data.update(out=str(folder / ('HMR ' + re.sub(r'[<>:"/\\|?*]', '', name).rstrip(' .') + '.docx')), report_date=dt.date.today().strftime('%d/%m/%Y'), path_date=dates, **demo, issues=[], needs_review=REVIEW.copy())
+    data.update(out=str(folder / ('HMR ' + re.sub(r'[<>:"/\\|?*]', '', name).rstrip(' .') + '.docx')), report_date=dt.date.today().strftime('%d/%m/%Y'), path_date=dates, demographics_generated=demo, **demo, issues=[], needs_review=REVIEW.copy())
     data.update(derived, medicine_snapshot=medicine_snapshot.snapshot(record), medicine_snapshot_sha256=medicine_snapshot.digest(medicine_snapshot.snapshot(record)), interview_revision=record['revision'], interview_reason=record['details']['reason'], pathology_revision=__import__('pathology_records').revision(conn, patient))
     intro = intro_text(record, name, visit)
     if intro: data['intro'] = intro
@@ -287,16 +287,33 @@ def start(conn, patient):
     conn.commit()
     return data
 
-def refresh(conn, patient):
-    with _lock: return _refresh(conn, patient)
+DEMOGRAPHIC_LABELS = {'name': 'patient name', 'assess_date': 'assessment date', 'patient': 'patient details block', 'doctor': 'GP details block', 'dear': 'salutation'}
 
-def _refresh(conn, patient):
+def _merge_demographics(data, new, replace=()):
+    """Refresh brings corrected record values into blocks the pharmacist has not touched. A block that differs from
+    what the app last generated was edited (or is from an older spec): it is kept, and returned as a conflict so
+    the pharmacist chooses. Only blocks named in `replace` are overwritten."""
+    if not isinstance(replace, (list, tuple)) or any(k not in DEMOGRAPHIC_LABELS for k in replace): raise ValueError('invalid replace_demographics')
+    generated = data.get('demographics_generated') if isinstance(data.get('demographics_generated'), dict) else {}
+    conflicts = []
+    for key in DEMOGRAPHIC_LABELS:
+        current = data.get(key, '')
+        if current == new[key]: continue
+        if key in replace or (key in generated and generated[key] == current): data[key] = new[key]
+        else: conflicts.append({'key': key, 'label': DEMOGRAPHIC_LABELS[key], 'report': current, 'record': new[key]})
+    data['demographics_generated'] = new
+    return conflicts
+
+def refresh(conn, patient, replace=()):
+    with _lock: return _refresh(conn, patient, replace)
+
+def _refresh(conn, patient, replace=()):
     data = records.get_json(conn, patient['id'], 'report_spec.json')
     if data is None: raise ValueError('report spec does not exist')
     validate(data)
     record, derived, _ = _derived(conn, patient)
     import pathology_records
-    data.update(_demographics(conn, patient, record))  # a corrected DOB, GP or visit date must reach the report, not only the tables
+    conflicts = _merge_demographics(data, _demographics(conn, patient, record), replace)
     folder = jobs.patient_folder(patient)
     stored = Path(str(data.get('out') or ''))
     if stored.name and (not stored.is_absolute() or stored.parent.resolve() != folder):
@@ -305,7 +322,7 @@ def _refresh(conn, patient):
                 pathology_revision=pathology_records.revision(conn, patient))
     saved = save(conn, patient, data)
     db.log(conn, patient['id'], 'report_refreshed', {}, 'job')
-    return saved
+    return dict(saved, demographic_conflicts=conflicts)  # response only; never stored
 
 def _read(path):
     stamp = path.stat().st_mtime_ns

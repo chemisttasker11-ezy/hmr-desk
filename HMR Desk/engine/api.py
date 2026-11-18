@@ -948,7 +948,10 @@ def handle(conn, method, path, query, body):
             import report
             p = conn.execute('SELECT * FROM patients WHERE id=?', (int(match[1]),)).fetchone()
             if not p: return 404, {'error': 'patient not found'}
-            result = report.refresh(conn, p); conn.commit(); return 200, result
+            replace = body.get('replace_demographics', []) if isinstance(body, dict) else []
+            try: result = report.refresh(conn, p, replace)
+            except ValueError as exc: conn.rollback(); return 400, {'error': str(exc)}
+            conn.commit(); return 200, result
         match = re.fullmatch(r'/api/patients/(\d+)/report', path)
         if match:
             import report
