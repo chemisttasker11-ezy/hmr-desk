@@ -65,3 +65,48 @@ test('reports list enables sign-off only for a verified current build', () => {
   assert.match(html, /data-sign-off="7">Signed off/);
   assert.match(html, /Build Word &#10003; Done/);
 });
+
+async function patientOverview(status) {
+  const detail = { innerHTML: '', hidden: false, querySelector: () => null };
+  const patient = {
+    id: 7, name: 'Synthetic Patient', state: 'report_drafted', stage: 'report',
+    next_step: 'sign off', flags: [], messages: [], events: [], tasks: [], visits: [],
+    files: { folder: [], pathology: [] },
+    steps: [
+      { name: 'report_start', done: true, ready: false },
+      { name: 'report_build', done: true, ready: false, reason: 'already done' },
+    ],
+  };
+  const context = vm.createContext({
+    H, esc: H.esc, date: H.date, page: 'patients', selected: '', detailTab: 'Overview',
+    formOpen: false, patients: [{ id: 7, name: patient.name, next_step: 'sign off' }],
+    $: (id) => id === 'detail' ? detail : id === 'offer-form' ? { addEventListener() {} } : null,
+    document: { querySelector: () => null, querySelectorAll: () => [] },
+    hmr: { api: async (_method, url) => {
+      if (url.endsWith('/timeline')) return { entries: [], milestones: {} };
+      if (url.endsWith('/report-status')) return status;
+      if (url === '/api/messages/board') return { outbox_mode: 'test', needs_you: [] };
+      if (url === '/api/agents') return { agents: [] };
+      return patient;
+    } },
+    messageComposer: () => '', actionLabels: { note: 'Note', update: 'Update', report_sent: 'Report sent' },
+  });
+  vm.runInContext(fs.readFileSync(require.resolve('../renderer/patients.js'), 'utf8'), context);
+  await context.showPatient(7);
+  return detail.innerHTML;
+}
+
+test('patient overview directs a stale report to rebuild, not sign-off', async () => {
+  const html = await patientOverview(currency('outdated', ['interview_changed']));
+  assert.match(html, /Outdated:.*interview changed/);
+  assert.match(html, /data-report-open="7" data-build="build"/);
+  assert.match(html, /data-sign-off="7" disabled/);
+  assert.doesNotMatch(html, /Build report<\/span><span class="step-state is-done">Done/);
+});
+
+test('patient overview allows reviewable sign-off UI for verified current build', async () => {
+  const html = await patientOverview(currency('current'));
+  assert.match(html, /Matches the saved interview and pathology/);
+  assert.match(html, /data-sign-off="7" >Signed off/);
+  assert.match(html, /Build report<\/span><span class="step-state is-done">Done/);
+});
