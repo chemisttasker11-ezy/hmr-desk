@@ -96,43 +96,150 @@ SYN_QUERIES = ['syn', 'Synthstatin', 'statin 40', '(synthbrand)', '(', 'alphamed
                'MR 665', 'mg tablet', 'mg/10', 'zz', 'ab', 'SYNTHSTATIN 20', '  synth   med ', '\\', 'tablet (', 'oral liquid', '10 mL']
 
 
-def test_indexed_search_is_identical_to_plain_scan_and_exact_check_is_indexed():
+def _ro(path):
     import sqlite3
+    c = sqlite3.connect(Path(path).as_uri() + '?mode=ro', uri=True)
+    return c
+
+
+def _plain_vs_indexed(path, queries=None):
+    """Returns the queries whose indexed result differs from a forced plain scan of the same file."""
+    from medicine_data import catalog
+    ro = _ro(path); catalog._TRUST.clear()
+    bad = []
+    for q in queries or SYN_QUERIES + ['newmed', 'qqqq', 'abcnew', 'replaced']:
+        got = catalog.search(ro, q, 15)
+        orig = catalog._fts_usable
+        catalog._fts_usable = lambda db: False
+        try: want = catalog.search(ro, q, 15)
+        finally: catalog._fts_usable = orig
+        if got != want: bad.append(q)
+    ro.close()
+    return bad
+
+
+def test_indexed_search_is_identical_to_plain_scan_and_exact_check_is_indexed():
     from medicine_data import catalog
     with tempfile.TemporaryDirectory() as t:
         path = Path(t) / 'r.sqlite'
         db = _synthetic_db(str(path), SYN)
         plain = {q: catalog.search(db, q, 15) for q in SYN_QUERIES}
         assert any(plain.values())
-        assert catalog.build_search_index(db) == {'display': True, 'fts': True}
-        assert catalog.build_search_index(db) == {'display': True, 'fts': True}  # idempotent
+        made = catalog.build_search_index(db)
+        assert made['display'] and made['fts'] and len(made['content_sha256']) == 64
+        assert catalog.build_search_index(db)['fts']  # idempotent rebuild
         db.close()
-        ro = sqlite3.connect(path.as_uri() + '?mode=ro', uri=True)
+        ro = _ro(path); catalog._TRUST.clear()
         assert catalog._fts_usable(ro)
         for q in SYN_QUERIES:
             assert catalog.search(ro, q, 15) == plain[q], q
         plan = ' '.join(r[3] for r in ro.execute("EXPLAIN QUERY PLAN SELECT * FROM medicine WHERE lower(display)=?", ('x',)))
         assert 'medicine_display_lower' in plan
         ro.close()
+        assert _plain_vs_indexed(path) == []
 
 
-def test_stale_or_missing_fts_falls_back_to_the_plain_scan_and_import_drops_it():
-    import sqlite3
+def _mutations():
+    """Each way an index can disagree with the rows while the row COUNT stays the same (or the name is reused)."""
+    return {
+        'same-count update of search_text': "UPDATE medicine SET search_text='newmed 5 mg tablet', display='Newmed 5 mg tablet' WHERE code='C0'",
+        'same-count update, same length': "UPDATE medicine SET search_text=replace(search_text,'synth','qqqqq') WHERE code='C0'",
+        'delete and insert, same count': "DELETE FROM medicine WHERE code='C1'; INSERT INTO medicine VALUES('syn','Z9','Abcnew 1 mg tablet','abcnew 1 mg tablet','generic',NULL,NULL,NULL,'[]','{}')",
+        'rowid reassigned, same count': "UPDATE medicine SET rowid=rowid+1000 WHERE code='C2'",
+    }
+
+
+def test_same_count_content_changes_never_hide_matches_via_a_stale_index():
+    from medicine_data import catalog
+    for name, sql in _mutations().items():
+        with tempfile.TemporaryDirectory() as t:
+            path = Path(t) / 'r.sqlite'
+            db = _synthetic_db(str(path), SYN); catalog.build_search_index(db)
+            count = db.execute('SELECT count(*) FROM medicine').fetchone()[0]
+            db.executescript(sql); db.commit()
+            assert db.execute('SELECT count(*) FROM medicine').fetchone()[0] == count, name
+            db.close()
+            ro = _ro(path); catalog._TRUST.clear()
+            assert not catalog._fts_usable(ro), name  # the fingerprint no longer matches
+            ro.close()
+            assert _plain_vs_indexed(path) == [], name
+            # and the new/changed rows are actually findable
+            ro = _ro(path)
+            found = {q: [r['code'] for r in catalog.search(ro, q, 15)] for q in ('newmed', 'abcnew', 'qqqqq')}
+            ro.close()
+            assert any(found.values()) or name == 'rowid reassigned, same count', (name, found)
+
+
+def test_existing_incompatible_objects_under_the_same_names_are_replaced_not_trusted():
     from medicine_data import catalog
     with tempfile.TemporaryDirectory() as t:
         path = Path(t) / 'r.sqlite'
         db = _synthetic_db(str(path), SYN)
-        catalog.build_search_index(db)
-        db.execute("INSERT INTO medicine VALUES('syn','NEW','Newmed 5 mg tablet','newmed 5 mg tablet','generic',NULL,NULL,NULL,'[]','{}')")
-        db.commit(); catalog._FTS_OK.clear()
-        assert not catalog._fts_usable(db)
-        assert [r['code'] for r in catalog.search(db, 'newmed', 15)] == ['NEW']  # never hidden by a stale index
-        db.execute('DROP TABLE medicine_fts'); catalog._FTS_OK.clear()
+        db.execute("CREATE VIRTUAL TABLE medicine_fts USING fts5(display, content='medicine', content_rowid='rowid', tokenize='unicode61')")
+        db.execute("INSERT INTO medicine_fts(medicine_fts) VALUES('rebuild')")
+        db.execute('CREATE INDEX medicine_display_lower ON medicine(display)')  # wrong definition, same name
+        db.commit()
+        catalog._TRUST.clear()
+        assert not catalog._fts_usable(db)  # no meta, wrong definition: not trusted
+        assert [r['code'] for r in catalog.search(db, 'statin 40', 15)] == ['C1']
+        made = catalog.build_search_index(db)
+        assert made['fts']
+        sql = db.execute("SELECT sql FROM sqlite_master WHERE name='medicine_fts'").fetchone()[0].lower()
+        assert 'trigram' in sql and 'search_text' in sql
+        assert 'lower(display)' in db.execute("SELECT sql FROM sqlite_master WHERE name='medicine_display_lower'").fetchone()[0].lower()
+        db.close()
+        assert _plain_vs_indexed(path) == []
+        # a tampered/forged meta row or wrong version is not trusted either
+        w = sqlite3_connect(path); w.execute("UPDATE search_index_meta SET value='deadbeef' WHERE key='content_sha256'"); w.commit(); w.close()
+        ro = _ro(path); catalog._TRUST.clear(); assert not catalog._fts_usable(ro); ro.close()
+        w = sqlite3_connect(path); w.execute("UPDATE search_index_meta SET value='2' WHERE key='version'"); w.commit(); w.close()
+        ro = _ro(path); catalog._TRUST.clear(); assert not catalog._fts_usable(ro); ro.close()
+
+
+def test_index_swapped_for_an_incompatible_one_after_build_is_not_trusted():
+    from medicine_data import catalog
+    with tempfile.TemporaryDirectory() as t:
+        path = Path(t) / 'r.sqlite'
+        db = _synthetic_db(str(path), SYN); catalog.build_search_index(db)
+        db.execute('DROP TABLE medicine_fts')  # rows and meta unchanged; only the live index definition differs
+        db.execute("CREATE VIRTUAL TABLE medicine_fts USING fts5(search_text, content='medicine', content_rowid='rowid', tokenize='unicode61')")
+        db.execute("INSERT INTO medicine_fts(medicine_fts) VALUES('rebuild')"); db.commit(); db.close()
+        ro = _ro(path); catalog._TRUST.clear(); assert not catalog._fts_usable(ro); ro.close()
+        assert _plain_vs_indexed(path) == []
+
+
+def sqlite3_connect(path):
+    import sqlite3
+    return sqlite3.connect(path)
+
+
+def test_capability_is_proved_by_execution_and_missing_fts_falls_back():
+    from medicine_data import catalog
+    assert catalog._fts_check_command_works()  # this SQLite supports trigram and detects a stale index
+    with tempfile.TemporaryDirectory() as t:
+        path = Path(t) / 'r.sqlite'
+        db = _synthetic_db(str(path), SYN)
+        real = catalog._fts_check_command_works
+        catalog._fts_check_command_works = lambda: False  # simulate an SQLite without trigram / content check
+        try:
+            made = catalog.build_search_index(db)
+        finally:
+            catalog._fts_check_command_works = real
+        assert made['display'] and not made['fts'] and made['content_sha256'] is None
+        assert db.execute("SELECT count(*) FROM sqlite_master WHERE name IN ('medicine_fts','search_index_meta')").fetchone()[0] == 0
+        catalog._TRUST.clear()
         assert [r['code'] for r in catalog.search(db, 'synthstatin 20', 15)] == ['C0']
-        catalog.build_search_index(db)
+        db.close()
+
+
+def test_import_drops_derived_index_and_meta():
+    from medicine_data import catalog
+    with tempfile.TemporaryDirectory() as t:
+        path = Path(t) / 'r.sqlite'
+        db = _synthetic_db(str(path), SYN); catalog.build_search_index(db)
         with catalog.snapshot(db, 'syn', '20260102', str(path), 'https://example.invalid/synthetic'):
             catalog.add_medicine(db, 'syn', 'X1', 'Replacement 1 mg tablet', 'generic')
-        assert db.execute("SELECT count(*) FROM sqlite_master WHERE name='medicine_fts'").fetchone()[0] == 0
+        assert db.execute("SELECT count(*) FROM sqlite_master WHERE name IN ('medicine_fts','search_index_meta')").fetchone()[0] == 0
         assert [r['code'] for r in catalog.search(db, 'replacement', 15)] == ['X1']
         db.close()
 
@@ -146,7 +253,7 @@ def test_failed_index_step_rejects_install_and_keeps_current_reference():
         real = catalog.build_search_index
         def boom(db):
             db.execute("UPDATE medicine SET display=display||'x'")  # an index step that changes rows must be refused
-            return {'display': True, 'fts': False}
+            return {'display': True, 'fts': False, 'content_sha256': None}
         catalog.build_search_index = boom
         try:
             try: ref.install(str(new)); assert False
@@ -155,6 +262,39 @@ def test_failed_index_step_rejects_install_and_keeps_current_reference():
             catalog.build_search_index = real
         assert target.read_bytes() == before and ref.status()['installed']
         assert not (Path(t) / 'medicine-reference.sqlite.incoming').exists()
+        assert not ref.status()['installing']
+
+
+def test_provenance_keeps_source_and_installed_hashes_distinct_and_source_authenticity_untouched():
+    import hashlib, json, sqlite3
+    with tempfile.TemporaryDirectory() as t:
+        target = fresh(t)
+        new = candidate(t)
+        src_hash = hashlib.sha256(new.read_bytes()).hexdigest()
+        before = sqlite3.connect(new).execute('SELECT source, release, sha256, source_url, row_count FROM source_release ORDER BY source').fetchall()
+        result = ref.install(str(new))
+        assert result['provenance_recorded']
+        record = json.loads((Path(t) / 'medicine-reference.install.json').read_text(encoding='utf-8'))
+        assert record['source_sha256'] == src_hash == hashlib.sha256(new.read_bytes()).hexdigest()
+        assert record['installed_sha256'] == hashlib.sha256(target.read_bytes()).hexdigest() != record['source_sha256']
+        assert record['installed_bytes'] == target.stat().st_size and record['source_bytes'] == new.stat().st_size
+        after = sqlite3.connect(target).execute('SELECT source, release, sha256, source_url, row_count FROM source_release ORDER BY source').fetchall()
+        assert after == before  # the source import authenticity record is exactly as the operator's file had it
+
+
+def test_second_install_is_refused_while_one_runs_and_scans_are_bounded():
+    import threading
+    assert ref._INSTALL_LOCK.acquire(blocking=False)
+    try:
+        ref._installing = True
+        assert ref.status()['installing'] is True
+        try: ref.install('/nonexistent.sqlite'); assert False
+        except ValueError as exc: assert 'already running' in str(exc)
+    finally:
+        ref._installing = False; ref._INSTALL_LOCK.release()
+    assert ref._SCANS.acquire(blocking=False) and ref._SCANS.acquire(blocking=False)
+    assert not ref._SCANS.acquire(blocking=False)  # third concurrent scan must wait
+    ref._SCANS.release(); ref._SCANS.release()
 
 
 if __name__ == '__main__':
@@ -183,7 +323,7 @@ def test_install_validates_and_replaces_atomically():
         assert a.execute("SELECT count(*) FROM sqlite_master WHERE name IN ('medicine_display_lower','medicine_fts')").fetchone()[0] == 2
         assert b.execute("SELECT count(*) FROM sqlite_master WHERE name IN ('medicine_display_lower','medicine_fts')").fetchone()[0] == 0
         a.close(); b.close()
-        assert result['search_index'] == {'display': True, 'fts': True}
+        assert result['search_index']['display'] and result['search_index']['fts']
         previous = Path(t) / 'medicine-reference.previous.sqlite'
         assert previous.is_file() and previous.stat().st_size > 0
         assert ref.search('examplestatin')['results']

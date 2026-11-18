@@ -11,7 +11,7 @@ const clickCode = source.slice(source.indexOf('async function agentClick'), sour
 const SRC = { source: 'amt', release: '20261031', row_count: 171257 };
 const STALE = 'No medicine reference installed. Type medicine names by hand.';
 
-function setup(hmr) {
+function setup(hmr, timers = { ticks: [], cleared: 0 }) {
   const elements = new Map();
   const el = id => {
     if (!elements.has(id)) elements.set(id, { textContent: '', innerHTML: '', dataset: {}, disabled: false });
@@ -25,7 +25,11 @@ function setup(hmr) {
     hmr,
     confirm: () => true,
     alert: () => {},
+    setInterval: (fn) => { timers.ticks.push(fn); return timers.ticks.length; },
+    clearInterval: () => { timers.cleared++; },
+    Date,
   });
+  context.timers = timers;
   vm.runInContext(clickCode, context);
   return { context, el };
 }
@@ -87,4 +91,26 @@ test('a rejected file reports the error, keeps the current reference claim, and 
   assert.equal(el('medicine-reference-status').textContent, 'The selected file could not be read as a valid medicine reference database Current reference unchanged.');
   assert.equal(el('medicine-reference-persistent').textContent, STALE);
   assert.equal(apiCalls, 0);
+});
+
+test('a long install shows a ticking busy status, keeps the button disabled and always stops the ticker', async () => {
+  let release;
+  const gate = new Promise(r => { release = r; });
+  const { context, el } = setup({
+    installMedicineReference: async () => { await gate; return { installed: true, sources: [SRC], previous_retained: false }; },
+    api: async () => ({ installed: true, sources: [SRC] }),
+  });
+  const b = button();
+  const done = context.agentClick(b);
+  await Promise.resolve();
+  assert.equal(b.disabled, true);
+  context.timers.ticks[0]();
+  assert.match(el('medicine-reference-status').textContent, /Installing medicine reference\.\.\. \d+ s\..*a minute or two.*Keep this window open.*current reference until this finishes/);
+  release(); await done;
+  assert.equal(context.timers.cleared, 1);
+  assert.equal(b.disabled, false);
+  const failing = setup({ installMedicineReference: async () => { throw new Error('boom'); }, api: async () => ({}) });
+  const fb = button(); await failing.context.agentClick(fb);
+  assert.equal(failing.context.timers.cleared, 1);
+  assert.match(failing.el('medicine-reference-status').textContent, /boom Current reference unchanged\./);
 });
