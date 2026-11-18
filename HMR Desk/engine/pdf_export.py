@@ -71,6 +71,24 @@ def _remove_all(*folders):
     return left
 
 
+def masked_tail(raw, limit=300):
+    """Last part of converter output with every path-like text replaced, so a patient or folder name in a
+    path never reaches the log or the screen. Returns '' for empty output."""
+    import re
+    text = raw.decode('utf-8', 'replace') if isinstance(raw, (bytes, bytearray)) else str(raw or '')
+    text = re.sub(r'(?:[A-Za-z]:)?[\\/][^\r\n"\']*', '<path>', text)
+    text = re.sub(r'file:[^\s]*', '<path>', text)
+    return ' '.join(text.split())[-limit:]
+
+
+def failure_text(exc):
+    """Why a conversion failed, safe to show and log: the converter message for our own errors, only the
+    error type and code for OS errors (their text can hold a patient folder path)."""
+    if isinstance(exc, OSError) and not isinstance(exc, FileExistsError):
+        return '%s (errno %s, winerror %s)' % (type(exc).__name__, exc.errno, getattr(exc, 'winerror', None))
+    return str(exc) if isinstance(exc, (RuntimeError, ValueError)) else type(exc).__name__
+
+
 def available():
     selected = os.environ.get('HMR_PDF_CONVERTER')
     if selected:
@@ -104,20 +122,38 @@ def convert(docx, pdf, timeout=120):
         profile = Path(profile_dir) / 'lo-profile'
         output_dir = staging / 'rendered'
         output_dir.mkdir()
+        # Convert a private copy with a short ASCII name: the patient's Word file is never held open by the
+        # converter or an antivirus scan that has only just seen it, and special characters in a patient or
+        # folder name cannot reach the converter's command line.
+        staged = staging / 'report.docx'
+        shutil.copyfile(source, staged)
         cmd = [str(engine), '-env:UserInstallation=' + profile.as_uri(),
                '--headless', '--nologo', '--nodefault', '--nofirststartwizard',
-               '--convert-to', 'pdf:writer_pdf_Export', '--outdir', str(output_dir), str(source)]
-        kwargs = {'capture_output': True, 'timeout': timeout, 'check': False}
+               '--convert-to', 'pdf:writer_pdf_Export', '--outdir', str(output_dir), str(staged)]
+        # stdin is closed explicitly: the packaged engine has no console, so an inherited stdin is invalid.
+        kwargs = {'capture_output': True, 'timeout': timeout, 'check': False, 'stdin': subprocess.DEVNULL}
         if os.name == 'nt': kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
-        try:
-            result = subprocess.run(cmd, **kwargs)
-        except subprocess.TimeoutExpired as exc:
-            raise RuntimeError('PDF converter exceeded the safety timeout') from exc
-        except OSError as exc:
-            raise RuntimeError('Cannot launch bundled PDF converter') from exc
-        converted = output_dir / source.with_suffix('.pdf').name
-        if result.returncode != 0 or not converted.is_file() or converted.stat().st_size < 100:
-            raise RuntimeError('Bundled PDF conversion failed; review the Word draft')
+        converted = output_dir / 'report.pdf'
+        reason = ''
+        for attempt in (1, 2):
+            try:
+                result = subprocess.run(cmd, **kwargs)
+            except subprocess.TimeoutExpired as exc:
+                raise RuntimeError('PDF converter exceeded the safety timeout') from exc
+            except OSError as exc:
+                error = RuntimeError('Cannot launch bundled PDF converter (%s, winerror %s)' % (type(exc).__name__, getattr(exc, 'winerror', None)))
+                raise error from exc
+            ok = result.returncode == 0 and converted.is_file() and converted.stat().st_size >= 100
+            if ok: break
+            reason = 'attempt %d: converter exit code %s, %s' % (
+                attempt, result.returncode, 'no PDF produced' if not converted.is_file() else 'PDF too small')
+            tail = masked_tail(result.stderr) or masked_tail(result.stdout)
+            if tail: reason += ', output: ' + tail
+            if attempt == 1: time.sleep(2.0)  # a first-start profile or a just-written file can fail once
+        if not ok:
+            error = RuntimeError('Bundled PDF conversion failed (%s); review the Word draft' % reason)
+            error.detail = reason
+            raise error
         if target.exists():
             raise FileExistsError('PDF appeared during conversion; refusing overwrite')
         os.replace(converted, target)

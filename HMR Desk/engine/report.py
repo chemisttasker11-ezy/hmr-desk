@@ -22,6 +22,13 @@ REVIEW = ['thanks', 'reason', 'intro', 'followup']
 _cache = {}
 _lock = threading.RLock()
 
+def _dmy(value):
+    """Display an ISO date as DD/MM/YYYY like the assessment and report dates; other text is unchanged."""
+    import re
+    match = re.fullmatch(r'(\d{4})-(\d{2})-(\d{2})', str(value).strip())
+    return match[3] + '/' + match[2] + '/' + match[1] if match else value
+
+
 def validate(data):
     if not isinstance(data, dict) or not jobs.REPORT_KEYS <= data.keys(): raise ValueError('report spec missing required keys')
     for key in jobs.REPORT_KEYS - set(WIDTHS) - {'issues'}:
@@ -263,7 +270,7 @@ def _demographics(conn, patient, record):
     name = p['name']; gp = p.get('gp') or h['gp'] or ''
     address = ', '.join(filter(None, (p.get('address'), p.get('suburb'))))
     patient_lines = [name, 'DOB: ' + (p.get('dob') or h['dob']), 'Medicare No: ' + (p.get('medicare') or ''), 'Address: ' + address, 'Phone: ' + (p.get('phone') or '')]
-    doctor_lines = [gp, p.get('clinic') or '', 'Request date: ' + (p.get('referral_date') or '')]
+    doctor_lines = [gp, p.get('clinic') or '', 'Request date: ' + _dmy(p.get('referral_date') or '')]
     import steps
     visit = steps.event_date(conn, patient, 'visited') or p.get('visit_date') or h['visit'].split(' ')[0]
     return dict(name=name, assess_date=visit, patient='\n'.join(patient_lines), doctor='\n'.join(filter(None, doctor_lines)), dear='Dear ' + gp + ',')

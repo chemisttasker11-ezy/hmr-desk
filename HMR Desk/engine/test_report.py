@@ -367,7 +367,7 @@ def test_extended_path_and_short_profile_root(tmp_path, monkeypatch):
     fake = tmp_path / 'soffice.exe'; fake.write_bytes(b'x'); monkeypatch.setenv('HMR_PDF_CONVERTER', str(fake))
     seen = {}
     def run(cmd, **k):
-        seen['profile'] = cmd[1]; out = Path(cmd[cmd.index('--outdir') + 1]); (out / 'r.pdf').write_bytes(b'%PDF-' + b'0' * 200)
+        seen['profile'] = cmd[1]; out = Path(cmd[cmd.index('--outdir') + 1]); (out / (Path(cmd[-1]).stem + '.pdf')).write_bytes(b'%PDF-' + b'0' * 200)
         return subprocess.CompletedProcess(cmd, 0, b'', b'')
     monkeypatch.setattr(pdf_export.subprocess, 'run', run)
     result = pdf_export.convert(source, source.with_suffix('.pdf'))
@@ -404,7 +404,7 @@ def test_convert_reports_cleanup_pending_after_success(tmp_path, monkeypatch):
     fake = tmp_path / 'soffice.exe'; fake.write_bytes(b'x')
     monkeypatch.setenv('HMR_PDF_CONVERTER', str(fake))
     def run(cmd, **k):
-        out = Path(cmd[cmd.index('--outdir') + 1]); (out / 'r.pdf').write_bytes(b'%PDF-' + b'0' * 200)
+        out = Path(cmd[cmd.index('--outdir') + 1]); (out / (Path(cmd[-1]).stem + '.pdf')).write_bytes(b'%PDF-' + b'0' * 200)
         return subprocess.CompletedProcess(cmd, 0, b'', b'')
     monkeypatch.setattr(pdf_export.subprocess, 'run', run)
     monkeypatch.setattr(pdf_export, 'remove_tree', lambda p, **k: 'OSError: locked')

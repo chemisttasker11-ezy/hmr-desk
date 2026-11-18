@@ -325,7 +325,9 @@ def report_build(patient_id, pdf=False):
                 left = getattr(exc, 'cleanup_pending', None)
                 if left:
                     db.log(conn, p['id'], 'pdf_cleanup_pending', {'folder': left, 'conversion': 'failed', 'error': exc.cleanup_error}, 'job'); conn.commit()
-                raise RuntimeError('Local PDF conversion failed; prior Word draft preserved' + ('; ' + pdf_export.pending_note(left) if left else '')) from exc
+                why = pdf_export.failure_text(exc)
+                db.log(conn, p['id'], 'pdf_conversion_failed', {'reason': why}, 'job'); conn.commit()
+                raise RuntimeError('Local PDF conversion failed; prior Word draft preserved. Reason: ' + why + ('; ' + pdf_export.pending_note(left) if left else '')) from exc
             if isinstance(converted, dict) and converted.get('cleanup_pending'):
                 left = Path(converted['cleanup_pending']).name
                 db.log(conn, p['id'], 'pdf_cleanup_pending', {'folder': left, 'conversion': 'ok', 'error': converted.get('cleanup_error', '')}, 'job')
