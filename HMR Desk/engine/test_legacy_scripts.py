@@ -4,11 +4,12 @@ These files assert at import time and define no test functions, so `pytest file.
 nothing ("no tests ran") and CI never executed them. Running each as a script makes an assertion
 failure fail a real test. Each script creates its own temporary data directory.
 Not included (each fails when run as a script in an isolated data dir on Linux; causes found so far):
-- test_independent_repairs: steps.built(conn, p) call is stale and the assertion still fails after fixing it.
-- test_actions: stale steps.exists call (fixed), then api.claim_list returns [] in this environment.
-- test_importer: needs an appointment plan file in the data directory. test_interview: expects an
-  interview.json file on disk, but interview records now live in the records store.
-- test_api, test_manual_workflow, test_planner: assertion or key mismatch, not yet diagnosed.
+- test_actions: needs the optional PPA claim helper (PPA Claim Helper/make-claims.py), which is not in the repository,
+  so api.claim_list returns [] by design ("PPA integration unavailable").
+- test_api, test_manual_workflow, test_independent_repairs: later sections call act('signed_off') and act('report_sent'),
+  which now need an explicit pharmacist review, a built owner-approved Word and PDF pair and its checksum
+  (report_auth.check_approval). The scripts cannot reach their later checks without that evidence; test_report_auth
+  covers the gate itself. test_independent_repairs also reads report_spec.json from disk, but it lives in the records store.
 - test_referral_entry (pytest): 1 case fails, it needs a scripts/intake folder in the default data directory.
 """
 import os
@@ -23,7 +24,8 @@ HERE = Path(__file__).resolve().parent
 SCRIPTS = ['test_lifecycle.py', 'test_days.py', 'test_consent_sign.py', 'test_mims_binding.py', 'test_proda_sms.py',
            'test_engine.py', 'test_referral.py', 'test_run_catalog.py', 'test_suggest.py', 'test_timeline.py',
            'test_tracking_followon.py', 'test_autopilot.py', 'test_referral_fields.py',
-           'test_messaging.py', 'test_replies.py', 'test_scenarios.py', 'test_revision4.py']
+           'test_messaging.py', 'test_replies.py', 'test_scenarios.py', 'test_revision4.py',
+           'test_planner.py', 'test_interview.py', 'test_importer.py']
 # Each script runs in its own interpreter, so module state, environment variables and temp data
 # never leak between scripts or into the pytest session. A non-zero exit (any assertion) fails.
 BOOT = ("import runpy, sys, types\n"
