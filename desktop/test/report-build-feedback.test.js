@@ -34,3 +34,11 @@ test('a failed build says it did not finish and keeps the reason on screen', asy
   assert.equal(els['report-build-status'].textContent, 'Build did not finish: Local PDF conversion failed; prior Word draft preserved. Reason: no PDF produced');
   assert.deepEqual(buttons.map((b) => b.disabled), [false, false]);
 });
+
+test('a second click while a build runs does not start a second job', async () => {
+  const { ctx, seenDisabled } = editor({ state: 'done', output: 'Built x.docx' });
+  await Promise.all([ctx.buildReport(false), ctx.buildReport(false)]);
+  assert.equal(seenDisabled.length, 1);
+  await ctx.buildReport(false);
+  assert.equal(seenDisabled.length, 2);
+});

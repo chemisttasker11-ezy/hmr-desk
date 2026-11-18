@@ -16,6 +16,7 @@ let reportId = '',
   reportUndoTimer,
   reportOutput = '',
   reportBuildStatus = '',
+  reportBuildRunning = false,
   lastBuildResult = null,
   reportSaveStatus = 'All changes saved',
   reportSuggestions = [],
@@ -340,7 +341,11 @@ async function buildReport(pdf) {
     alert('add at least one finding');
     return;
   }
-  if (!await reportSaver.save(true)) return;
+  if (reportBuildRunning) return;  // a build is already running: a second click must not start a second job
+  reportBuildRunning = true;
+  try { if (!await reportSaver.save(true)) return; await runBuild(pdf); } finally { reportBuildRunning = false; }
+}
+async function runBuild(pdf) {
   const setStatus = (text) => { reportBuildStatus = text; const el = $('report-build-status'); if (el) el.textContent = text; };
   const buttons = () => [...document.querySelectorAll('[data-report-build]')];
   buttons().forEach((b) => { b.disabled = true; });
