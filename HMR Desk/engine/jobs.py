@@ -255,6 +255,7 @@ def report_start(patient_id):
 def report_build(patient_id, pdf=False):
     import report
     with connection() as conn:
+        conn.execute('BEGIN')  # one read snapshot: the spec, the checks and the evidence below all see the same committed state
         p = get_patient(conn, patient_id)
         folder = patient_folder(p)
         spec_bytes = record_store.get(conn, p['id'], 'report_spec.json')
@@ -278,12 +279,16 @@ def report_build(patient_id, pdf=False):
             'source_files_sha256': report_auth.source_snapshot(conn, p),
             'clinical_snapshot_sha256': report_auth.clinical_snapshot_hash(conn, p),
         }
-        target = Path(data['out'])
-        if not target.is_absolute(): target = folder / target
-        target = target.resolve()
-        if target.parent != folder or target.suffix.lower() != '.docx': raise ValueError('Report output must be a DOCX in patient folder; refresh the report from the interview to repair the output path')
+        conn.rollback()  # end the read snapshot before rendering; later writes (events, state) must not be blocked by it
+        from pathlib import PureWindowsPath
+        raw = str(data['out'])
+        if not (Path(raw).is_absolute() or PureWindowsPath(raw).is_absolute()): raise ValueError('Report spec out must be an absolute path')
+        # A restored or moved workspace keeps the old root in the stored path. The output always lands in this patient's
+        # folder under the stored file name, whichever root the spec was written under.
+        name = PureWindowsPath(raw).name
+        target = (folder / name).resolve() if name not in ('', '.', '..') else folder
+        if target.parent != folder or target.suffix.lower() != '.docx': raise ValueError('Report output must be a DOCX in patient folder')
         # Preserve every prior DOCX/PDF and any signed revision; never overwrite.
-        if not Path(data['out']).is_absolute(): raise ValueError('Report spec out must be an absolute path')
         original = target
         for revision in range(1, 1001):
             target = original if revision == 1 else original.with_name(original.stem + '-v' + str(revision) + original.suffix)
