@@ -140,9 +140,11 @@ def confirmed_medicines_current(conn, p):
     data = records.get_json(conn, p['id'], 'confirmed_meds.json')
     if data is None: return False
     try:
+        current_snapshot = current_medicine_snapshot(conn, p)
         if 'medicine_snapshot_sha256' in data:
-            current_snapshot = current_medicine_snapshot(conn, p)
             if current_snapshot is None or medicine_snapshot.digest(current_snapshot) != data['medicine_snapshot_sha256']: return False
+        elif current_snapshot is not None and 'confirmed_at' in data:
+            return False  # a real confirmation (always timestamped) made before any interview existed was never reviewed against these interview medicines
         meds = data['meds']
         if not isinstance(meds, list) or any(not isinstance(row, list) or len(row) != 2 or any(not isinstance(value, str) for value in row) for row in meds): return False
         current = relevant_usage(interview_usage(conn, p), meds)
@@ -1093,7 +1095,8 @@ def handle(conn, method, path, query, body):
                 result['interview_usage'] = usage
                 snapshot = current_medicine_snapshot(conn, p)
                 current_digest = medicine_snapshot.digest(snapshot) if snapshot is not None else 'missing'
-                result['medicine_snapshot_changed'] = 'medicine_snapshot_sha256' in result and result['medicine_snapshot_sha256'] != current_digest
+                result['medicine_snapshot_changed'] = (('medicine_snapshot_sha256' in result and result['medicine_snapshot_sha256'] != current_digest)
+                                                       or ('medicine_snapshot_sha256' not in result and 'confirmed_at' in result and snapshot is not None))
                 result['medicine_snapshot'] = snapshot
                 result['medicine_snapshot_sha256'] = medicine_snapshot.digest(snapshot) if snapshot is not None else 'missing'
                 return 200, result
