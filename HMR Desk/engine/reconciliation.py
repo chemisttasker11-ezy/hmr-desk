@@ -29,6 +29,7 @@ def audit(record):
     details = record.get("details") or {}
     flags = []
     groups = {}
+    concepts = {}
     entries = []
     for section, width in (("meds", 5), ("other_meds", 4)):
         rows = record.get(section) or []
@@ -54,6 +55,9 @@ def audit(record):
                           "Medicine row contains information but no name")
                 continue
             groups.setdefault(normalise(name), []).append(key)
+            ref = m.get("reference")
+            if isinstance(ref, dict) and isinstance(ref.get("source"), str) and isinstance(ref.get("code"), str):
+                concepts.setdefault((ref["source"], ref["code"]), []).append((key, normalise(name)))
             entries.append({"id": key, "medicine": name, "source": section,
                             "status": status or "unknown"})
             if status in ("", "unknown"):
@@ -78,6 +82,12 @@ def audit(record):
             for key in ids:
                 _flag(flags, "possible_duplicate", key,
                       "Same medicine name appears in multiple rows; check brand, strength and formulation")
+    for rows_for_concept in concepts.values():
+        # Same chosen reference concept under different typed names: a duplicate the text check misses.
+        if len(rows_for_concept) > 1 and len({n for _, n in rows_for_concept}) > 1:
+            for key, _ in rows_for_concept:
+                _flag(flags, "possible_duplicate_concept", key,
+                      "Linked to the same reference medicine as another row under a different name; check for a duplicate")
     flags.sort(key=lambda x: (x["medicine_id"], x["code"]))
     return {"version": VERSION, "medicines": entries, "flags": flags,
             "review_required": bool(flags), "flag_count": len(flags)}

@@ -185,7 +185,7 @@ async function openPatientWorkspace(id, tab = 'Overview', layout = 'patient') {
   setPatientLayout(layout);
   return { ok: true };
 }
-async function showPatient(id, action) {
+async function showPatient(id, action, background = false) {
   if (formOpen && selected !== String(id)) { if (!confirm('Switch patient and discard unsaved changes?')) return false; formOpen = false; }
   if (action && action !== 'offer_new') detailTab = 'Overview';
   const request = ++patientRequest, startedPage = typeof page === 'undefined' ? null : page;
@@ -200,7 +200,7 @@ async function showPatient(id, action) {
   if (!$('detail') || selected !== String(id) || request !== patientRequest || (typeof page !== 'undefined' && page !== startedPage) || (typeof navToken !== 'undefined' && navToken !== startedNav)) return false;
   if (offerPatient !== String(id)) { offerPatient = String(id); offerDraft = null; offerStatus = ''; }
   const [board, agents] = await Promise.all([hmr.api('GET', '/api/messages/board').catch(() => ({})), hmr.api('GET', '/api/agents').catch(() => ({}))]);
-  if (!$('detail') || selected !== String(id) || request !== patientRequest || (typeof page !== 'undefined' && page !== startedPage) || (typeof navToken !== 'undefined' && navToken !== startedNav) || formOpen) return false;
+  if (!$('detail') || selected !== String(id) || request !== patientRequest || (typeof page !== 'undefined' && page !== startedPage) || (typeof navToken !== 'undefined' && navToken !== startedNav) || formOpen || (background && $('detail').querySelector?.('details[open]'))) return false;
   const milestones = timeline.milestones || {};
   const canChange = action !== 'offer_new' && !!p.change_kinds?.length;
   const phone = String(p.phone || '').replace(/[^\d+]/g, '');
@@ -536,4 +536,4 @@ function openForm(action, patient) {
       alert(action === 'visited' ? `Visit recorded, but the patient view could not be refreshed: ${errorText(error)}` : `Saved, but the view could not be refreshed: ${errorText(error)}`);
     }
   });
-}
+               }

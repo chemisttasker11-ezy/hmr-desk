@@ -155,3 +155,18 @@ test('health refresh restores keyboard focus to the equivalent portal control', 
   focused = null; oldFocus = original('mhr'); doc.activeElement = outside; await context.health();
   assert.equal(focused, null); assert.equal(doc.activeElement, outside);
 });
+
+test('in-flight background patient reads cannot replace newly expanded actions', async () => {
+  let resolveBoard, expanded = false;
+  const board = new Promise(resolve => { resolveBoard = resolve; });
+  const detail = { innerHTML: 'expanded actions stay here', querySelector: () => expanded ? {} : null };
+  const context = vm.createContext({ H, $: id => id === 'detail' ? detail : null, page: 'patients', selected: '5', formOpen: false,
+    detailTab: 'Overview', renderPatients() {}, hmr: { api: async (method, path) => path.endsWith('/timeline') ? { milestones: {} } : path === '/api/messages/board' ? board : path === '/api/agents' ? {} : { id: 5 } } });
+  vm.runInContext(patientSource, context);
+  const reading = context.showPatient(5, undefined, true);
+  await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+  expanded = true;
+  resolveBoard({});
+  assert.equal(await reading, false);
+  assert.equal(detail.innerHTML, 'expanded actions stay here');
+});

@@ -14,6 +14,14 @@ const defaults = {
 };
 fs.mkdirSync(dataDir, { recursive: true });
 const configPath = path.join(dataDir, 'app-config.json');
+// Electron throws when Windows has no resolvable Documents folder (redirected or missing profile). Fall back so
+// backup and restore dialogs still open at a usable default instead of failing.
+function documentsDir() {
+  for (const name of ['documents', 'home']) {
+    try { const p = app.getPath(name); if (p) return p; } catch { /* try the next location */ }
+  }
+  return dataDir;
+}
 // Invalid historical configuration is retained under an .invalid-* copy.
 // Never guess or silently reassign a patient workspace.
 const loadedConfig = require('./src/config-load').loadConfig(configPath, defaults);
@@ -189,7 +197,7 @@ prodaLogin = require('./src/proda-login')({
   getWindow: () => win,
 });
 ipcMain.handle('api', async (e, method, p, b) => {
-  if (e.sender !== win.webContents || p === '/api/referrals/review' || p.startsWith('/api/backups/') || (p.startsWith('/api/storage/') && p !== '/api/storage/status') ||
+  if (e.sender !== win.webContents || p === '/api/referrals/review' || p.startsWith('/api/backups/') || (p.startsWith('/api/records/') && p !== '/api/records/status') || (p.startsWith('/api/storage/') && p !== '/api/storage/status') ||
       (method === 'POST' && p.endsWith('/pathology/sources')) ||
       (method === 'POST' && p === '/api/templates/register') ||
       require('./src/control').isPrivateApiRoute(p)) throw Error('Forbidden');
@@ -415,7 +423,25 @@ ipcMain.handle('open-pathology-source', async (e, patientId, sourceId) => {
   return {opened:true};
 });
 let pdfViewerWindow = null;
-async function openBundledPdfViewer(file, title) {
+ipcMain.handle('local-reference-pick', async (event, edition) => {
+  if (event.sender !== win.webContents || typeof edition !== 'string' || !edition.trim() || edition.length > 100) throw Error('Enter the edition shown on the original PDF');
+  const picked = await dialog.showOpenDialog(win, { title:'Choose your private local Brainstorm PDF', properties:['openFile'], filters:[{name:'PDF reference',extensions:['pdf']}] });
+  if (picked.canceled || !picked.filePaths[0]) return {cancelled:true};
+  const result = await dialog.showMessageBox(win, {type:'question',message:'Use this reference locally?',detail:'Confirm you may use this local PDF. It stays at its original location and is not bundled or uploaded. This writing guide is not clinical advice. Cross-check current clinical sources and review every match.',buttons:['Use local copy','Cancel'],defaultId:1,cancelId:1,noLink:true});
+  if (result.response !== 0) return {cancelled:true};
+  return api('POST','/api/reference/local',{path:picked.filePaths[0],edition,local_use_confirmed:true});
+});
+ipcMain.handle('local-reference-open', async (event, hash, page) => {
+  if (event.sender !== win.webContents || !/^[a-f0-9]{64}$/.test(hash || '') || !Number.isSafeInteger(page) || page < 1) throw Error('Invalid reference citation');
+  const source = await api('POST','/api/reference/open',{pdf_sha256:hash,page});
+  const stat = await fsp.lstat(source.path);
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 25*1024*1024) throw Error('Reference file unavailable');
+  const bytes = await fsp.readFile(source.path);
+  if (require('node:crypto').createHash('sha256').update(bytes).digest('hex') !== hash || source.page !== page) throw Error('Reference changed; register it again');
+  await openBundledPdfViewer(source.path, 'local reference physical page '+page, page);
+  return {opened:true,page};
+});
+async function openBundledPdfViewer(file, title, physicalPage = null) {
   if (pdfViewerWindow && !pdfViewerWindow.isDestroyed()) pdfViewerWindow.close();
   pdfViewerWindow = new BrowserWindow({
     width: 1100, height: 900, parent: win, title: 'HMR PDF - ' + title,
@@ -428,7 +454,7 @@ async function openBundledPdfViewer(file, title) {
   pdfViewerWindow.webContents.on('will-navigate', (event, url) => {
     if (url !== fileUrl && !url.startsWith(fileUrl + '#')) event.preventDefault();
   });
-  await pdfViewerWindow.loadURL(fileUrl);
+  await pdfViewerWindow.loadURL(fileUrl + (physicalPage ? `#page=${physicalPage}` : ''));
 }
 ipcMain.handle('open-report-version', async (e, patientId, reportFile, format) => {
   if (e.sender !== win.webContents || !Number.isSafeInteger(patientId) || patientId < 1 ||
@@ -498,13 +524,33 @@ ipcMain.on('draft-store', (e, action, key, value) => {
     e.returnValue = { error: 'Protected draft storage failed (' + error.constructor.name + ')' };
   }
 });
+// Removing plain copies requires an explicit native confirmation, never page-supplied consent.
+ipcMain.handle('records-retire', async (e) => {
+  if (e.sender !== win.webContents) throw Error('Invalid request');
+  const choice = await dialog.showMessageBox(win, { type: 'warning',
+    title: 'Remove verified plain record copies?',
+    message: 'Remove only plain record files whose exact bytes are already saved in the encrypted database?',
+    detail: 'Stop other apps or editors changing the workspace first. Different or unreadable files stay in place for review. Word, PDF and source/import documents stay unchanged. This is ordinary file deletion, not secure erasure: old copies may remain in backups, synced storage or disk recovery. Export a readable copy first if you need one.',
+    buttons: ['Cancel', 'Remove matching copies'], defaultId: 0, cancelId: 0 });
+  if (choice.response !== 1) return { cancelled: true };
+  return api('POST', '/api/records/retire', { confirmed: true });
+});
+// Record export gets its own channel: the folder is chosen in a native dialog here, never supplied by page code.
+ipcMain.handle('records-export', async (e, patientId) => {
+  if (e.sender !== win.webContents || !Number.isInteger(patientId) || patientId < 0) throw Error('Invalid export request');
+  const chosen = await dialog.showOpenDialog(win, { title: 'Choose a folder for the exported records (the copy will not be encrypted)',
+    properties: ['openDirectory', 'createDirectory'] });
+  if (chosen.canceled || !chosen.filePaths[0]) return { cancelled: true };
+  return api('POST', '/api/records/export', { patient_id: patientId,
+    destination: path.join(chosen.filePaths[0], (patientId === 0 ? 'HMR exported shared records' : 'HMR exported records - patient ' + patientId)) });
+});
 ipcMain.handle('encrypted-backup', async (e, action, passphrase) => {
   if (e.sender !== win.webContents || !['create', 'restore', 'preview'].includes(action) ||
       typeof passphrase !== 'string' || passphrase.length < 12 || passphrase.length > 512)
     throw Error('Invalid backup request or passphrase (minimum 12 characters)');
   if (action === 'create') {
     const chosen = await dialog.showSaveDialog(win, { title: 'Save encrypted HMR backup',
-      defaultPath: path.join(app.getPath('documents'), 'hmr-backup.hmrbak'),
+      defaultPath: path.join(documentsDir(), 'hmr-backup.hmrbak'),
       filters: [{ name: 'Encrypted HMR backup', extensions: ['hmrbak'] }] });
     if (chosen.canceled || !chosen.filePath) return { cancelled: true };
     return api('POST', '/api/backups/create', { target: chosen.filePath, passphrase });
@@ -547,7 +593,7 @@ ipcMain.handle('activate-restored', async (e, passphrase) => {
     throw Error('Recovery integrity verification failed');
   const backup = await dialog.showSaveDialog(win, {
     title: 'Mandatory encrypted backup of CURRENT data before activating recovered cases',
-    defaultPath: path.join(app.getPath('documents'),'hmr-before-restore-activation.hmrbak'),
+    defaultPath: path.join(documentsDir(),'hmr-before-restore-activation.hmrbak'),
     filters:[{name:'Encrypted HMR backup',extensions:['hmrbak']}],
   });
   if (backup.canceled || !backup.filePath) return {cancelled:true};
@@ -628,7 +674,7 @@ ipcMain.handle('migrate-workspace', async (e, passphrase) => {
   const target = path.join(chosen.filePaths[0], 'HMR-Desk-Workspace-Migrated');
   const backup = await dialog.showSaveDialog(win, {
     title: 'Choose a separate location for the mandatory encrypted pre-migration backup',
-    defaultPath: path.join(app.getPath('documents'), 'hmr-before-migration.hmrbak'),
+    defaultPath: path.join(documentsDir(), 'hmr-before-migration.hmrbak'),
     filters: [{name:'Encrypted HMR backup',extensions:['hmrbak']}],
   });
   if (backup.canceled || !backup.filePath) return {cancelled:true};
@@ -717,7 +763,7 @@ if (hasLock)
       if (choice.response === 1) {
         const picked = await dialog.showOpenDialog({
           title: 'Select patient workspace', properties: ['openDirectory', 'createDirectory'],
-          defaultPath: app.getPath('documents'),
+          defaultPath: documentsDir(),
         });
         if (picked.canceled || !picked.filePaths[0]) { app.quit(); return; }
         config.base = picked.filePaths[0];
@@ -1171,4 +1217,4 @@ async function captureShots() {
     if (syntheticSignInListeners) { for (const listener of syntheticSignInListeners) ipcMain.on('sign-in-page', listener); signIns.update = originalSignInUpdate; signIns.reset = originalSignInReset; }
     if (win && !win.isDestroyed()) win.webContents.removeListener('console-message', onConsole);
   }
-}
+      }

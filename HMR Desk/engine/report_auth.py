@@ -11,6 +11,7 @@ from pathlib import Path
 
 import interview
 import jobs
+import records
 import pathology_records
 import template_report_builder
 
@@ -19,11 +20,11 @@ def digest(file):
     return hashlib.sha256(Path(file).read_bytes()).hexdigest()
 
 
-def source_snapshot(patient):
+def source_snapshot(conn, patient):
     """Hash original referral/pathology sources, excluding generated reports."""
     folder = jobs.patient_folder(patient).resolve()
     candidates = []
-    for name in ('referral_source.json', 'pathology_sources.json', 'referral.pdf'):
+    for name in ('referral_source.json', 'referral.pdf'):
         candidates.append(folder / name)
     candidates.extend(sorted(
         p for p in folder.iterdir() if p.is_file() and 'referral' in p.stem.lower() and p.suffix.lower() == '.pdf'
@@ -32,6 +33,8 @@ def source_snapshot(patient):
     if pathology.is_dir():
         candidates.extend(sorted(pathology.glob('*.pdf')))
     result = {}
+    stored = records.get(conn, patient['id'], 'pathology_sources.json')
+    if stored is not None: result['pathology_sources.json'] = hashlib.sha256(stored).hexdigest()
     for file in candidates:
         if not file.exists():
             continue
@@ -46,13 +49,12 @@ def clinical_snapshot_hash(conn, patient):
     """Canonical read-only source snapshot. Never edits legacy JSON."""
     import clinical_snapshot
     folder = jobs.patient_folder(patient)
-    report = jobs.report_spec_path(patient)
-    spec = json.loads(report.read_text(encoding='utf-8')) if report.is_file() else {}
+    spec = records.get_json(conn, patient['id'], 'report_spec.json') or {}
     source = folder / 'referral_source.json'
     provenance = json.loads(source.read_text(encoding='utf-8')) if source.is_file() else {}
     canonical = clinical_snapshot.canonical(
         dict(patient), interview.load(conn, patient),
-        pathology_records.load(patient), spec, provenance, source_snapshot(patient)
+        pathology_records.load(conn, patient), spec, provenance, source_snapshot(conn, patient)
     )
     return clinical_snapshot.digest(canonical)
 
@@ -122,7 +124,7 @@ def check_approval(conn, patient, body):
     template, approved = template_report_builder.approved_template(template_report_builder.active_template_root())
     if detail.get('template_sha256') != approved['sha256']:
         raise ValueError('Approved template changed since report generation; rebuild first')
-    if detail.get('source_files_sha256') != source_snapshot(patient):
+    if detail.get('source_files_sha256') != source_snapshot(conn, patient):
         raise ValueError('Original referral or pathology source changed since report generation')
     if detail.get('clinical_snapshot_sha256') != clinical_snapshot_hash(conn, patient):
         raise ValueError('Clinical source contract changed since report generation; rebuild')
@@ -133,16 +135,15 @@ def check_approval(conn, patient, body):
     pdf = file.with_suffix('.pdf')
     if pdf.parent != root or not pdf.is_file() or digest(pdf) != detail['pdf_sha256']:
         raise ValueError('Matching PDF has changed or is missing')
-    spec = jobs.report_spec_path(patient)
-    if not spec.is_file() or digest(spec) != detail.get('report_spec_sha256'):
+    spec_bytes = records.get(conn, patient['id'], 'report_spec.json')
+    if spec_bytes is None or hashlib.sha256(spec_bytes).hexdigest() != detail.get('report_spec_sha256'):
         raise ValueError('Report content changed since it was built; rebuild and review')
-    if interview.revision(root / 'interview.json') != detail.get('interview_revision'):
+    if interview.revision(conn, patient) != detail.get('interview_revision'):
         raise ValueError('Interview changed after report; refresh and rebuild')
-    if pathology_records.revision(pathology_records.file_for(patient)) != detail.get('pathology_revision'):
+    if pathology_records.revision(conn, patient) != detail.get('pathology_revision'):
         raise ValueError('Pathology changed after report; refresh and rebuild')
     import reconciliation
-    review_file = root / 'reconciliation_review.json'
-    saved_review = json.loads(review_file.read_text(encoding='utf-8')) if review_file.is_file() else {}
+    saved_review = records.get_json(conn, patient['id'], 'reconciliation_review.json') or {}
     current_interview = interview.load(conn, patient)
     review_status = reconciliation.review_status(current_interview, saved_review)
     if not review_status['reviewed']:
@@ -180,13 +181,13 @@ def check_sent(conn, patient):
     pdf = file.with_suffix('.pdf')
     if not pdf.is_file() or digest(pdf) != evidence.get('pdf_sha256'):
         raise ValueError('Signed PDF version is no longer intact')
-    if digest(jobs.report_spec_path(patient)) != evidence.get('report_spec_sha256'):
+    if hashlib.sha256(records.get(conn, patient['id'], 'report_spec.json') or b'').hexdigest() != evidence.get('report_spec_sha256'):
         raise ValueError('Report was edited after sign-off')
-    if interview.revision(folder / 'interview.json') != evidence.get('interview_revision'):
+    if interview.revision(conn, patient) != evidence.get('interview_revision'):
         raise ValueError('Interview was edited after sign-off')
-    if pathology_records.revision(pathology_records.file_for(patient)) != evidence.get('pathology_revision'):
+    if pathology_records.revision(conn, patient) != evidence.get('pathology_revision'):
         raise ValueError('Pathology was edited after sign-off')
-    if evidence.get('source_files_sha256') != source_snapshot(patient):
+    if evidence.get('source_files_sha256') != source_snapshot(conn, patient):
         raise ValueError('Original source files changed after sign-off')
     if evidence.get('clinical_snapshot_sha256') != clinical_snapshot_hash(conn, patient):
         raise ValueError('Clinical source contract was changed after signing')

@@ -160,3 +160,126 @@ class RealParserTests(unittest.TestCase):
 
 
 if __name__ == '__main__': unittest.main()
+
+class IntakeInterviewPreparationTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        parser_path = self.root / 'scripts' / 'intake' / 'intake.py'
+        parser_path.parent.mkdir(parents=True)
+        parser_path.write_bytes((Path(__file__).resolve().parents[2] / 'scripts' / 'intake' / 'intake.py').read_bytes())
+        self.old_base, self.old_data = db.BASE, db.DATA_DIR
+        db.BASE = str(self.root)
+        db.DATA_DIR = str(self.root / 'userdata')
+        (self.root / 'userdata').mkdir()
+        self.conn = db.connect(str(self.root / 'userdata' / 'hmr.db'))
+        self.pdf = self.root / 'source.pdf'
+        doc = fitz.open()
+        page = doc.new_page()
+        page.insert_text((50, 70), 'Medical History\nSynthetic condition\nCurrent Medications\n- Syntheticmed 5 mg MR tablet take one tablet\n')
+        doc.save(self.pdf)
+        doc.close()
+        class Parser:
+            def classify(self, text): return 'referral', [], []
+            def extract_fields(self, text): return {'name': 'Synthetic Person', 'gp': 'Test Doctor'}, []
+        self.patcher = patch.object(referral_entry, 'parser', return_value=Parser())
+        self.patcher.start()
+
+    def tearDown(self):
+        self.patcher.stop()
+        self.conn.close()
+        db.BASE, db.DATA_DIR = self.old_base, self.old_data
+        self.temp.cleanup()
+
+    def test_commit_materializes_interview_with_unconfirmed_exact_proposal(self):
+        import interview, records
+        from medicine_data import catalog
+        import medicine_reference as ref
+        conn = catalog.connect(ref.reference_path())
+        source = self.root / 'synthetic-source.txt'; source.write_text('SYNTHETIC ONLY')
+        with catalog.snapshot(conn, 'amt', '20260101', source, 'https://example.invalid/synthetic'):
+            catalog.add_medicine(conn, 'amt', '1001', 'Syntheticmed 5 mg MR tablet', 'MPUU', generic='Syntheticmed 5 mg MR tablet', form='tablet')
+        conn.close()
+        row = referral_entry.review(self.conn, [str(self.pdf)])['rows'][0]
+        pid = referral_entry.commit(self.conn, row['token'], row['fields'])['patient_id']
+        patient = self.conn.execute('SELECT * FROM patients WHERE id=?', (pid,)).fetchone()
+        data = interview.load(self.conn, patient)
+        assert data['revision'] != 'missing'
+        proposal = data['details']['meds'][0]['prefill_proposal']
+        assert proposal['input_text'] == 'Syntheticmed 5 mg MR tablet'
+        assert proposal['candidate']['code'] == '1001' and proposal['candidate']['release'] == '20260101'
+        assert 'reference' not in data['details']['meds'][0]
+        assert data['details']['meds'][0]['source_evidence']['kind'] == 'referral_text'
+        assert self.conn.execute("SELECT 1 FROM events WHERE type='interview_prepared_at_intake' AND patient_id=?", (pid,)).fetchone()
+        # Quiet materialization: no pharmacist-save side effects belong to intake.
+        assert self.conn.execute("SELECT has_sheet FROM patients WHERE id=?", (pid,)).fetchone()[0] == 0
+        assert not self.conn.execute("SELECT 1 FROM events WHERE type='interview_saved' AND patient_id=?", (pid,)).fetchone()
+        assert not list((self.root / patient['folder']).glob('PPA Consent - *.pdf'))
+        # Referral-derived text only; no clinical confirmation is promoted at intake.
+        assert data['conditions'] == 'Synthetic condition'
+        assert all('reference' not in m for m in data['details']['meds'])
+
+    def test_commit_without_catalogue_still_materializes_record(self):
+        import interview
+        row = referral_entry.review(self.conn, [str(self.pdf)])['rows'][0]
+        pid = referral_entry.commit(self.conn, row['token'], row['fields'])['patient_id']
+        patient = self.conn.execute('SELECT * FROM patients WHERE id=?', (pid,)).fetchone()
+        data = interview.load(self.conn, patient)
+        assert data['revision'] != 'missing'
+        assert 'prefill_proposal' not in data['details']['meds'][0]
+        assert data['details']['meds'][0]['source_evidence']['kind'] == 'referral_text'
+
+    def test_materialization_failure_leaves_intake_fully_intact(self):
+        import records as records_mod
+        row = referral_entry.review(self.conn, [str(self.pdf)])['rows'][0]
+        with patch.object(records_mod, 'put', side_effect=RuntimeError('synthetic disk failure')):
+            pid = referral_entry.commit(self.conn, row['token'], row['fields'])['patient_id']
+        patient = self.conn.execute('SELECT * FROM patients WHERE id=?', (pid,)).fetchone()
+        assert patient is not None
+        assert self.conn.execute("SELECT 1 FROM events WHERE type='referral_received' AND patient_id=?", (pid,)).fetchone()
+        assert (self.root / patient['folder'] / 'referral.pdf').is_file()
+        assert records_mod.get(self.conn, pid, 'interview.json') is None
+        assert not self.conn.execute("SELECT 1 FROM events WHERE type='interview_prepared_at_intake' AND patient_id=?", (pid,)).fetchone()
+        # The fallback path still builds the record on first interview open.
+        import interview
+        data = interview.load(self.conn, patient)
+        assert data['details']['meds'][0]['source_evidence']['kind'] == 'referral_text'
+        assert all('prefill_proposal' not in m for m in data['details']['meds'])
+
+    def test_rollback_at_event_boundary_removes_inserted_record(self):
+        import db as db_mod
+        import records as records_mod
+        real_log = db_mod.log
+        inserted = []
+        def failing_log(conn, pid, type_, detail, actor):
+            if type_ == 'interview_prepared_at_intake':
+                # The record insert is visible inside the transaction right before
+                # the failing log write, so a later rollback must remove it.
+                inserted.append(records_mod.get(conn, pid, 'interview.json') is not None)
+                raise RuntimeError('synthetic log failure')
+            return real_log(conn, pid, type_, detail, actor)
+        row = referral_entry.review(self.conn, [str(self.pdf)])['rows'][0]
+        with patch.object(db_mod, 'log', failing_log):
+            pid = referral_entry.commit(self.conn, row['token'], row['fields'])['patient_id']
+        assert inserted == [True]
+        patient = self.conn.execute('SELECT * FROM patients WHERE id=?', (pid,)).fetchone()
+        assert patient is not None
+        assert self.conn.execute("SELECT 1 FROM events WHERE type='referral_received' AND patient_id=?", (pid,)).fetchone()
+        assert records_mod.get(self.conn, pid, 'interview.json') is None
+        assert not self.conn.execute("SELECT 1 FROM events WHERE type='interview_prepared_at_intake' AND patient_id=?", (pid,)).fetchone()
+
+    def test_confirmed_intake_clinical_review_promotes_into_materialized_record(self):
+        # referral_source.json is written once at intake and never mutated after,
+        # so promotion at intake materialization matches the pre-change first-open
+        # build exactly; early record creation cannot freeze out a later review.
+        row = referral_entry.review(self.conn, [str(self.pdf)])['rows'][0]
+        clinical = {'confirmed': True, 'allergies_status': 'unknown', 'reviewed_by': 'Synthetic Pharmacist',
+                    'conditions': 'Reviewed synthetic condition', 'medicines': '', 'observations': '', 'allergies': '',
+                    'source_page': 1}
+        pid = referral_entry.commit(self.conn, row['token'], row['fields'], clinical=clinical)['patient_id']
+        patient = self.conn.execute('SELECT * FROM patients WHERE id=?', (pid,)).fetchone()
+        import interview
+        data = interview.load(self.conn, patient)
+        assert data['revision'] != 'missing'
+        assert data['conditions'] == 'Reviewed synthetic condition'
+        assert any(s == 'Conditions confirmed: referral.pdf page 1; Synthetic Pharmacist' for s in data['sources'])

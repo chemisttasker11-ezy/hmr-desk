@@ -166,6 +166,12 @@ def main():
         import importer
         logging.warning('Database empty at start: re-importing from the plan and logs')
         importer.run(conn)
+    try:
+        import records
+        migrated = records.migrate_all(conn, lambda row: api.jobs.patient_folder(row), api.jobs.outside_files)
+        logging.info('Record migration: %s', migrated)
+    except Exception as exc:
+        logging.error('Record migration failed (%s); plain files are untouched', type(exc).__name__)
     api_token(conn)
     hook = None
     try:

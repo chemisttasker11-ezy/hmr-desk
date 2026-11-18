@@ -62,3 +62,9 @@ test('report and follow-up editors keep protected drafts like the interview', ()
   assert.match(read('interview.js'), /draftKey: \(\) => `followup:\$\{followupId\}-\$\{followupNumber\}`/);
   assert.match(fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8'), /keyPersisted: osCryptKeyPersisted/);
 });
+
+test('backup dialogs do not call app.getPath(documents) directly', () => {
+  const src = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'main.js'), 'utf8');
+  assert.equal(src.split("app.getPath('documents')").length - 1, 0);
+  assert.match(src, /function documentsDir\(\)/);
+});

@@ -20,6 +20,9 @@ import inbox
 import messaging
 import jobs
 import agents
+import records
+import medicine_reference
+import medicine_snapshot
 import steps
 import app_paths
 import manual_medicine_names
@@ -50,40 +53,39 @@ if _record_path.is_file():
     _record_spec.loader.exec_module(record)
 
 
-def report_data(p):
+def report_data(conn, p):
     try:
-        path = jobs.report_spec_path(p)
-        return json.loads(path.read_text(encoding='utf-8')) if path.is_file() else None
+        return records.get_json(conn, p['id'], 'report_spec.json')
     except ValueError:
         return None
 
 
-def proposal(p):
+def proposal(conn, p):
+    saved = records.get_json(conn, p['id'], 'interview.json')
+    if saved is not None:
+        import interview
+        data = saved; interview.validate(data)
+        meds = []
+        for key, actual in (('meds', 2), ('other_meds', 1)):
+            rows = data.get(key, []); meta = data.get('details', {}).get(key, [{} for _ in rows])
+            for row, detail in zip(rows, meta):
+                status = detail.get('use_status', '')
+                if row[0].strip() and (status == 'taking' or (not status and row[actual].strip())): meds.append([row[0], ''])
+        usage = interview_usage(conn, p)
+        stopped = {name for item in usage if item['status'] == 'not_using' for name in mims.ingredients(item['name'])}
+        taking = {name for item in usage if item['status'] == 'taking' for name in mims.ingredients(item['name'])}
+        meds = [row for row in meds if not stopped.intersection(mims.ingredients(row[0])) or set(mims.ingredients(row[0])) <= taking]
+        return {'meds': meds, 'allergies': [x.strip() for x in data['allergies'].splitlines() if x.strip()], 'proposed': True}
     path = jobs.interview_spec_path(p)
-    spec = json.loads(path.read_text(encoding='utf-8')) if path.is_file() else {}
-    if not path.is_file():
-        target = jobs.patient_folder(p) / 'interview.json'
-        if target.is_file():
-            import interview
-            data = json.loads(target.read_text(encoding='utf-8')); interview.validate(data)
-            meds = []
-            for key, actual in (('meds', 2), ('other_meds', 1)):
-                rows = data.get(key, []); meta = data.get('details', {}).get(key, [{} for _ in rows])
-                for row, detail in zip(rows, meta):
-                    status = detail.get('use_status', '')
-                    if row[0].strip() and (status == 'taking' or (not status and row[actual].strip())): meds.append([row[0], ''])
-            usage = interview_usage(p)
-            stopped = {name for item in usage if item['status'] == 'not_using' for name in mims.ingredients(item['name'])}
-            taking = {name for item in usage if item['status'] == 'taking' for name in mims.ingredients(item['name'])}
-            meds = [row for row in meds if not stopped.intersection(mims.ingredients(row[0])) or set(mims.ingredients(row[0])) <= taking]
-            return {'meds': meds, 'allergies': [x.strip() for x in data['allergies'].splitlines() if x.strip()], 'proposed': True}
+    stored_spec = records.get_json(conn, p['id'], 'interview_spec.json')
+    spec = stored_spec if stored_spec is not None else (json.loads(path.read_text(encoding='utf-8')) if path.is_file() else {})
     meds = []
     for row in spec.get('meds', []):
         text = row[0] if isinstance(row, list) and row else row
         if not isinstance(text, str) or mims.SKIP.match(text.strip()): continue
         for name in mims.ingredients(text):
             if name not in [r[0] for r in meds]: meds.append([name, mims.brand(text) or ''])
-    usage = interview_usage(p)
+    usage = interview_usage(conn, p)
     stopped = {name for item in usage if item['status'] == 'not_using' for name in mims.ingredients(item['name'])}
     taking = {name for item in usage if item['status'] == 'taking' for name in mims.ingredients(item['name'])}
     meds = [row for row in meds if row[0] not in stopped or row[0] in taking]
@@ -92,11 +94,10 @@ def proposal(p):
     return {'meds': meds, 'allergies': allergies, 'proposed': True}
 
 
-def interview_usage(p):
-    path = jobs.patient_folder(p) / 'interview.json'
-    if not path.is_file(): return []
+def interview_usage(conn, p):
+    data = records.get_json(conn, p['id'], 'interview.json')
+    if data is None: return []
     import interview
-    data = json.loads(path.read_text(encoding='utf-8'))
     interview.validate(data)
     result = []
     details = data.get('details', {})
@@ -106,8 +107,8 @@ def interview_usage(p):
                 result.append({'name': row[0], 'status': meta['use_status'], 'detail': interview.use_text(meta), 'source': 'Referral medicine' if key == 'meds' else 'Found during interview', 'directions': row[1:3]})
     return result
 
-def conflicting_medicines(p, meds):
-    stopped = {name for item in interview_usage(p) if item['status'] == 'not_using' for name in mims.ingredients(item['name'])}
+def conflicting_medicines(conn, p, meds):
+    stopped = {name for item in interview_usage(conn, p) if item['status'] == 'not_using' for name in mims.ingredients(item['name'])}
     return [row[0] for row in meds if stopped.intersection(mims.ingredients(row[0]))]
 
 def relevant_usage(usage, meds):
@@ -127,14 +128,24 @@ def valid_alternatives(meds, usage, alternatives):
         if normal(row[0]) != normal(choice['name']) or any(normal(choice['name']) == normal(item['name']) for item in stopped): return False
     return True
 
-def confirmed_medicines_current(p):
-    target = jobs.patient_folder(p) / 'confirmed_meds.json'
-    if not target.is_file(): return False
+def current_medicine_snapshot(conn, p):
+    data = records.get_json(conn, p['id'], 'interview.json')
+    if data is None: return None
+    import interview
+    interview.validate(data)
+    return medicine_snapshot.snapshot(data)
+
+
+def confirmed_medicines_current(conn, p):
+    data = records.get_json(conn, p['id'], 'confirmed_meds.json')
+    if data is None: return False
     try:
-        data = json.loads(target.read_text(encoding='utf-8'))
+        if 'medicine_snapshot_sha256' in data:
+            current_snapshot = current_medicine_snapshot(conn, p)
+            if current_snapshot is None or medicine_snapshot.digest(current_snapshot) != data['medicine_snapshot_sha256']: return False
         meds = data['meds']
         if not isinstance(meds, list) or any(not isinstance(row, list) or len(row) != 2 or any(not isinstance(value, str) for value in row) for row in meds): return False
-        current = relevant_usage(interview_usage(p), meds)
+        current = relevant_usage(interview_usage(conn, p), meds)
         previous = data.get('interview_usage')
         if (previous is not None and previous != current) or (previous is None and any(item['status'] == 'not_using' for item in current)): return False
         return not any(item['status'] == 'not_using' for item in current) or valid_alternatives(meds, current, data.get('alternatives'))
@@ -145,12 +156,11 @@ def mims_lists(conn):
     result = []
     for p in conn.execute("SELECT * FROM patients WHERE archived_at IS NULL AND state IN ('visited','report_drafted') ORDER BY name"):
         folder = jobs.patient_folder(p)
-        if steps.interactions_done(p): continue
-        confirmed = folder / 'confirmed_meds.json'
-        if confirmed.is_file():
-            confirmed_bytes = confirmed.read_bytes()
+        if steps.interactions_done(conn, p): continue
+        confirmed_bytes = records.get(conn, p['id'], 'confirmed_meds.json')
+        if confirmed_bytes is not None:
             data = json.loads(confirmed_bytes)
-            if not confirmed_medicines_current(p): raise ValueError('Medicine use changed or needs reconciliation; review and confirm medicines before running interactions for ' + p['name'])
+            if not confirmed_medicines_current(conn, p): raise ValueError('Medicine use changed or needs reconciliation; review and confirm medicines before running interactions for ' + p['name'])
             names = []
             for generic, brand in data['meds']:
                 for name in mims.ingredients(generic):
@@ -158,10 +168,10 @@ def mims_lists(conn):
                         names.append([name] + list(dict.fromkeys(a for a in [brand.lower().strip()] + mims.ALIASES.get(name, []) if a and a != name)))
             entry = {'meds': [x if len(x) > 1 else x[0] for x in names], 'allergies': data['allergies'], 'meds_revision': hashlib.sha256(confirmed_bytes).hexdigest()}
         else:
-            spec = report_data(p)
+            spec = report_data(conn, p)
             if spec is None: continue
             candidates = [[row[0] if isinstance(row, list) else row, ''] for row in spec.get('meds', []) + spec.get('otc', []) if row]
-            if conflicting_medicines(p, candidates): raise ValueError('Medicine use changed to not using; review medicines before running interactions for ' + p['name'])
+            if conflicting_medicines(conn, p, candidates): raise ValueError('Medicine use changed to not using; review medicines before running interactions for ' + p['name'])
             names = []
             for row in spec.get('meds', []) + spec.get('otc', []):
                 text = row[0] if isinstance(row, list) else row
@@ -179,7 +189,7 @@ def claim_list(conn):
     if claims_helper is None or record is None: return []  # PPA integration unavailable
     result = []
     for p in conn.execute("SELECT * FROM patients WHERE state='sent' AND is_test=0 AND archived_at IS NULL ORDER BY name"):
-        spec = report_data(p) or {}
+        spec = report_data(conn, p) or {}
         dates = {name: steps.event_date(conn, p, name) or '' for name in ('visited', 'report_sent')}
         given, family = claims_helper.split_name(p['name']); gp_given, gp_family = claims_helper.split_name(p['gp'])
         suburb = p['suburb'] or ''; match = re.match(r'(\d{4})\s+(.*)', suburb)
@@ -249,9 +259,9 @@ def _next_step(p, conn=None):
         name = 'pathology' if not steps.done('pathology', conn, p) else 'interview_sheet' if not steps.done('interview_sheet', None, p) else None
         return steps.BY_NAME[name].label if name else 'visit'
     if state == 'visited':
-        if report_data(p) is not None: return 'build report' if report_data(p).get('issues') else 'add findings'
-        if not steps.exists(p, 'confirmed_meds.json'): return 'confirm medicines'
-        if not steps.interactions_done(p): return 'check interactions'
+        if not confirmed_medicines_current(conn, p): return 'confirm medicines'
+        if report_data(conn, p) is not None: return 'build report' if report_data(conn, p).get('issues') else 'add findings'
+        if not steps.interactions_done(conn, p): return 'check interactions'
         return 'start report'
     if state == 'sent': return steps.BY_NAME['claim'].label
     return {'new': steps.BY_NAME['intake_dry'].label, 'pooled': 'offer a time', 'offered': 'wait for reply', 'report_drafted': 'sign off', 'signed_off': 'send report'}.get(state, '')
@@ -388,7 +398,7 @@ def _action(conn, p, body, moved_items):
         if name == 'report_sent':
             import report_auth
             report_auth.check_sent(conn, p)
-        if name == 'signed_off' and p['state'] == 'visited' and steps.built(p):
+        if name == 'signed_off' and p['state'] == 'visited' and steps.built(conn, p):
             db.set_state(conn, pid, 'report_drafted', source='app')
         db.set_state(conn, pid, target, status, source='app', force=name == 'book_phone' and p['state'] in ('new', 'pooled'))
         if name == 'visited':  # the list shows the real visit date, not the booked one
@@ -433,15 +443,11 @@ def _action(conn, p, body, moved_items):
         today = dt.date.today()
         stem = 'MIMS interactions (manual) ' + today.isoformat()
         n = 1
-        while True:
-            path = folder / (stem + (f' ({n})' if n > 1 else '') + '.txt')
-            try:
-                with path.open('x', encoding='utf-8') as f:
-                    f.write('Checked by hand by ' + settings.get(conn, 'pharmacist_name') + ' on ' + today.strftime('%d/%m/%Y') + '\n' + text)
-                break
-            except FileExistsError: n += 1
-        db.log(conn, pid, name, {'file': path.name}, 'app')
-        conn.execute("UPDATE tasks SET state='done',output=?,finished=? WHERE patient_id=? AND step='interactions' AND state IN ('queued','waiting')", (path.name, db.now(), pid))
+        while records.exists(conn, pid, stem + (f' ({n})' if n > 1 else '') + '.txt'): n += 1
+        rec_name = stem + (f' ({n})' if n > 1 else '') + '.txt'
+        records.put(conn, pid, rec_name, ('Checked by hand by ' + settings.get(conn, 'pharmacist_name') + ' on ' + today.strftime('%d/%m/%Y') + '\n' + text).encode('utf-8'))
+        db.log(conn, pid, name, {'file': rec_name}, 'app')
+        conn.execute("UPDATE tasks SET state='done',output=?,finished=? WHERE patient_id=? AND step='interactions' AND state IN ('queued','waiting')", (rec_name, db.now(), pid))
     elif name in ('archive', 'unarchive'):
         if name == 'archive' and p['state'] not in ('claimed', 'declined', 'expired'):
             raise ValueError('Cannot archive this patient')
@@ -608,6 +614,38 @@ def handle(conn, method, path, query, body):
                     'approved_by': result['approved_by']}, 'app')
             conn.commit()
             return 200, result
+        if path == '/api/medicines/status' and method == 'GET':
+            return 200, medicine_reference.status()
+        if path == '/api/medicines/suggest' and method == 'POST':
+            if not isinstance(body, dict) or set(body) != {'queries'}: raise ValueError('Invalid suggestion request')
+            return 200, medicine_reference.suggest_many(body['queries'])
+        if path == '/api/medicines/search' and method == 'GET':
+            q = query.get('q', ''); q = q[0] if isinstance(q, list) and q else q
+            if not isinstance(q, str): raise ValueError('invalid search')
+            return 200, medicine_reference.search(q)
+        if path == '/api/records/status' and method == 'GET':
+            return 200, records.status(conn, lambda row: jobs.patient_folder(row), jobs.outside_files)
+        if path == '/api/records/migrate' and method == 'POST':
+            return 200, records.migrate_all(conn, lambda row: jobs.patient_folder(row), jobs.outside_files)
+        if path == '/api/records/retire' and method == 'POST':
+            if body != {'confirmed': True}: raise ValueError('Confirmation required')
+            result = records.retire_matching(conn, lambda row: jobs.patient_folder(row), jobs.outside_files)
+            db.log(conn, None, 'record_plain_copies_removed', result, 'api')
+            conn.commit()
+            return 200, result
+        if path == '/api/records/export' and method == 'POST':
+            if not isinstance(body, dict) or set(body) != {'patient_id', 'destination'} or not isinstance(body['patient_id'], int): raise ValueError('invalid export input')
+            row = conn.execute('SELECT * FROM patients WHERE id=?', (body['patient_id'],)).fetchone()
+            if not row and body['patient_id'] != records.GLOBAL_PATIENT: raise ValueError('patient not found')
+            dest = Path(body['destination']) if isinstance(body['destination'], str) else None
+            if not dest or not dest.is_absolute() or dest.is_symlink(): raise ValueError('choose an export folder')
+            resolved = dest.resolve()
+            for guarded in (Path(db.DATA_DIR).resolve(), Path(db.BASE).resolve()):
+                if resolved == guarded or guarded in resolved.parents: raise ValueError('export outside the app data and the patient workspace')
+            result = records.export_folder(conn, body['patient_id'], resolved)
+            db.log(conn, row['id'] if row else None, 'records_exported', {'count': len(result)}, 'api')
+            conn.commit()
+            return 200, {'files': result, 'folder': str(resolved), 'warning': 'This copy is outside the encryption HMR Desk applies to its own storage.'}
         if path == '/api/backups/create' and method == 'POST':
             import backup_bundle
             if not isinstance(body, dict) or set(body) != {'target', 'passphrase'}: raise ValueError('invalid backup input')
@@ -734,7 +772,8 @@ def handle(conn, method, path, query, body):
             patient = conn.execute('SELECT * FROM patients WHERE id=?', (row['patient_id'],)).fetchone() if row['step'] == 'interactions' and body['state'] == 'done' else None
             with interview.record_lock(patient) if patient else nullcontext():
                 if row['step'] == 'interactions' and body['state'] == 'done':
-                    if not patient or not steps.interactions_result_current(patient, body.get('mims_result')):
+                    if patient: steps.ingest_generated(conn, patient, body.get('mims_result'))
+                    if not patient or not steps.interactions_result_current(conn, patient, body.get('mims_result')):
                         body = {**body, 'state': 'failed', 'output': 'Medicine list changed or result could not be verified; run the interaction check again.'}
                 if row['step'] == 'pathology' and body.get('output', '').strip().lower() == 'no report to read':
                     body = {**body, 'state': 'done', 'output': 'No pathology reports in My Health Record'}
@@ -786,17 +825,50 @@ def handle(conn, method, path, query, body):
                 life = lifecycle.stage(conn, p)
                 patients.append({**{k: p[k] for k in ('id','key','name','suburb','gp','phone','state','status_text','visit_date','visit_time','folder','has_pathology','has_sheet','referral_date')}, 'archived': bool(p['archived_at']), 'stage': life['stage'], 'stage_step': life['step'], 'flags': lifecycle.flags(conn, p), 'referral_expiry': expiry.isoformat() if expiry else None, 'next_step': 'follow-up due' if follow and follow['due'] else next_step(p, conn)})
             return 200, {'patients': patients}
+        if path in ('/api/reference/local', '/api/reference/search', '/api/reference/open'):
+            import reference_library
+            try:
+                if path == '/api/reference/local' and method == 'POST': return 200, reference_library.register(body)
+                if path == '/api/reference/local' and method == 'GET': return 200, reference_library.public(reference_library.current())
+                if path == '/api/reference/search' and method == 'GET': return 200, reference_library.search((query.get('q') or [''])[0])
+                if path == '/api/reference/open' and method == 'POST' and isinstance(body,dict) and set(body)=={'pdf_sha256','page'}:
+                    return 200, reference_library.open_source(body['pdf_sha256'],body['page'])
+            except reference_library.ReferenceUnavailable as exc: return 409, {'error':str(exc)}
+            return 400, {'error':'Invalid local reference request'}
         if method == 'GET' and path == '/api/library':
             import report
             q = query.get('q', '')
             return 200, {'results': report.library(q[0] if isinstance(q, list) and q else q)}
-        match = re.fullmatch(r'/api/patients/(\d+)/suggestions', path)
+        match = re.fullmatch(r'/api/patients/(\d+)/reference-matches', path)
+        if method == 'GET' and match:
+            import reference_matches, reference_library
+            patient=conn.execute('SELECT * FROM patients WHERE id=?',(int(match[1]),)).fetchone()
+            if not patient: return 404, {'error':'patient not found'}
+            try: return 200, reference_matches.for_patient(conn,patient)
+            except reference_library.ReferenceUnavailable as exc:
+                return 409, {'error':str(exc),'matches':[], 'review_status':'reference_unavailable'}
+        match = re.fullmatch(r'/api/patients/(\d+)/candidate-checks', path)
+        if method == 'GET' and match:
+            import candidate_checks
+            patient=conn.execute('SELECT * FROM patients WHERE id=?',(int(match[1]),)).fetchone()
+            if not patient: return 404, {'error':'patient not found'}
+            try: return 200, candidate_checks.for_patient(conn,patient)
+            except ValueError as exc:
+                return 409, {'error':str(exc),'observations':[], 'review_status':'checks_unavailable'}
+        match = re.fullmatch(r'/api/patients/(\d+)/suggestions(?:/context)?', path)
         if method == 'GET' and match:
             import suggest
             p = conn.execute('SELECT * FROM patients WHERE id=?', (int(match[1]),)).fetchone()
             if not p: return 404, {'error': 'patient not found'}
             context = suggest.context_for(conn, p)
-            return 200, {'suggestions': suggest.suggest(context), 'context_gaps': suggest.context_gaps(context)}
+            if path.endswith('/context'):
+                return 200, {'context_snapshot_sha256': context['context_snapshot_sha256']}
+            try:
+                suggestions = suggest.suggest(context)
+            except suggest.LibraryUnavailable:
+                return 503, {'error': 'Offline suggestions unavailable: the reviewed reference library is not installed or cannot be read. Current interview evidence is retained; no suggestions were generated.'}
+            return 200, {'suggestions': suggestions, 'context_gaps': suggest.context_gaps(context),
+                         'context_snapshot_sha256': context['context_snapshot_sha256']}
         match = re.fullmatch(r'/api/patients/(\d+)/report/refresh', path)
         if method == 'POST' and match:
             import report
@@ -838,10 +910,10 @@ def handle(conn, method, path, query, body):
             p = conn.execute('SELECT * FROM patients WHERE id=?', (int(match[1]),)).fetchone()
             if not p: return 404, {'error': 'patient not found'}
             if method == 'GET':
-                return 200, pathology_import.sources(p)
+                return 200, pathology_import.sources(conn, p)
             if not isinstance(body, dict) or set(body) != {'path'} or not isinstance(body['path'], str):
                 raise ValueError('Invalid pathology import')
-            result = pathology_import.import_pdf(p, body['path'])
+            result = pathology_import.import_pdf(conn, p, body['path'])
             db.log(conn, p['id'], 'pathology_source_imported',
                    {'sha256': result['sha256'], 'pages': result['page_count'], 'name': result['name']}, 'api')
             conn.commit()
@@ -852,9 +924,9 @@ def handle(conn, method, path, query, body):
             p = conn.execute('SELECT * FROM patients WHERE id=?', (int(match[1]),)).fetchone()
             if not p: return 404, {'error': 'patient not found'}
             if method == 'GET':
-                return 200, pathology_records.load(p)
+                return 200, pathology_records.load(conn, p)
             try:
-                result = pathology_records.save(p, body, reviewer=settings.get(conn, 'pharmacist_name'))
+                result = pathology_records.save(conn, p, body, reviewer=settings.get(conn, 'pharmacist_name'))
             except ValueError as exc:
                 if 'changed; reload' in str(exc): return 409, {'error': str(exc)}
                 raise
@@ -869,12 +941,11 @@ def handle(conn, method, path, query, body):
             p = conn.execute('SELECT * FROM patients WHERE id=?', (int(match[1]),)).fetchone()
             if not p: return 404, {'error': 'patient not found'}
             record = interview.load(conn, p)
-            review_file = jobs.patient_folder(p) / 'reconciliation_review.json'
-            saved_review = json.loads(review_file.read_text(encoding='utf-8')) if review_file.is_file() else {}
+            saved_review = records.get_json(conn, p['id'], 'reconciliation_review.json') or {}
             if method == 'POST':
                 if not isinstance(body, dict) or set(body) != {'source_hash', 'reviewed_by'}: raise ValueError('invalid reconciliation review')
                 review = reconciliation.acknowledge(record, body['source_hash'], body['reviewed_by'])
-                jobs.atomic_json(review_file, review)
+                records.put_json(conn, p['id'], 'reconciliation_review.json', review)
                 db.log(conn, p['id'], 'reconciliation_reviewed', {'source_hash': review['source_hash']}, 'api')
                 conn.commit()
                 return 200, reconciliation.review_status(record, review)
@@ -892,6 +963,12 @@ def handle(conn, method, path, query, body):
                 except interview.Conflict:
                     conn.rollback(); return 409, {'error': 'interview conflict'}
                 return 200, result
+        match = re.fullmatch(r'/api/patients/(\d+)/medicine-context', path)
+        if match and method == 'GET':
+            p = conn.execute('SELECT * FROM patients WHERE id=?', (int(match[1]),)).fetchone()
+            if not p: return 404, {'error': 'patient not found'}
+            import followup
+            return 200, followup.medicine_context(conn, p)
         match = re.fullmatch(r'/api/patients/(\d+)/(timeline|followup/([12])(/export)?)', path)
         if match:
             p = conn.execute('SELECT * FROM patients WHERE id=?', (int(match[1]),)).fetchone()
@@ -902,12 +979,12 @@ def handle(conn, method, path, query, body):
             if match[3]:
                 import followup
                 number = int(match[3])
-                if method == 'GET' and not match[4]: return 200, followup.load(p, number)
-                if method == 'POST' and match[4]: return 200, {'file': followup.export(p, number)}
+                if method == 'GET' and not match[4]: return 200, followup.load(conn, p, number)
+                if method == 'POST' and match[4]: return 200, {'file': followup.export(conn, p, number)}
                 if method == 'POST':
                     followup.validate(body)
                     if body['date']: date(body['date'])
-                    result = followup.save(p, number, body)
+                    result = followup.save(conn, p, number, body)
                     if body['date'] and not conn.execute("SELECT 1 FROM visits WHERE patient_id=? AND kind=? AND visit_date IS NOT NULL", (p['id'], 'followup' + str(number))).fetchone():
                         action(conn, p, {'action': 'followup_done', 'kind': 'followup' + str(number), 'date': body['date']})
                     return 200, result
@@ -915,19 +992,27 @@ def handle(conn, method, path, query, body):
         if match:
             p = conn.execute('SELECT * FROM patients WHERE id=?', (int(match[1]),)).fetchone()
             if not p: return 404, {'error': 'patient not found'}
-            target = jobs.patient_folder(p) / 'confirmed_meds.json'
             if method == 'GET':
-                result = json.loads(target.read_text(encoding='utf-8')) if target.is_file() else proposal(p)
-                usage = interview_usage(p)
+                result = records.get_json(conn, p['id'], 'confirmed_meds.json') or proposal(conn, p)
+                usage = interview_usage(conn, p)
                 result['interview_usage'] = usage
+                snapshot = current_medicine_snapshot(conn, p)
+                current_digest = medicine_snapshot.digest(snapshot) if snapshot is not None else 'missing'
+                result['medicine_snapshot_changed'] = 'medicine_snapshot_sha256' in result and result['medicine_snapshot_sha256'] != current_digest
+                result['medicine_snapshot'] = snapshot
+                result['medicine_snapshot_sha256'] = medicine_snapshot.digest(snapshot) if snapshot is not None else 'missing'
                 return 200, result
             if method == 'POST':
                 import interview
                 with interview.record_lock(p):
-                    if not isinstance(body, dict) or set(body) not in ({'meds', 'allergies'}, {'meds', 'allergies', 'interview_usage'}, {'meds', 'allergies', 'interview_usage', 'alternatives'}): raise ValueError('invalid medicine list')
+                    if not isinstance(body, dict) or set(body) - {'medicine_snapshot_sha256'} not in ({'meds', 'allergies'}, {'meds', 'allergies', 'interview_usage'}, {'meds', 'allergies', 'interview_usage', 'alternatives'}): raise ValueError('invalid medicine list')
+                    current_snapshot = current_medicine_snapshot(conn, p)
+                    current_digest = medicine_snapshot.digest(current_snapshot) if current_snapshot is not None else 'missing'
+                    if 'medicine_snapshot_sha256' in body and body['medicine_snapshot_sha256'] != current_digest: raise ValueError('Interview medicines or allergies changed; reload and review before confirming')
+                    if current_snapshot is not None and any(item['item_id'] for item in current_snapshot['items']) and 'medicine_snapshot_sha256' not in body: raise ValueError('Reload and review the current medicine snapshot before confirming')
                     meds, allergies = body['meds'], body['allergies']
                     if not isinstance(meds, list) or len(meds) > 60 or any(not isinstance(row, list) or len(row) != 2 or any(not isinstance(x, str) for x in row) or not row[0].strip() for row in meds): raise ValueError('invalid medicines')
-                    usage = interview_usage(p)
+                    usage = interview_usage(conn, p)
                     relevant = relevant_usage(usage, meds)
                     snapshot = body.get('interview_usage')
                     if relevant and snapshot is None: raise ValueError('Review and reconcile interview medicine use before confirming')
@@ -936,7 +1021,9 @@ def handle(conn, method, path, query, body):
                     if not valid_alternatives(meds, relevant, alternatives): raise ValueError('Select the medicine actually taking for each stopped overlap')
                     if not isinstance(allergies, list) or len(allergies) > 60 or any(not isinstance(x, str) for x in allergies): raise ValueError('invalid allergies')
                     data = {'meds': meds, 'allergies': allergies, 'confirmed_at': db.now(), 'interview_usage': relevant, 'alternatives': alternatives}
-                    jobs.atomic_json(target, data)
+                    if current_snapshot is not None:
+                        data.update(medicine_snapshot=current_snapshot, medicine_snapshot_sha256=current_digest)
+                    records.put_json(conn, p['id'], 'confirmed_meds.json', data)
                     db.log(conn, p['id'], 'meds_confirmed', {}, 'api'); conn.commit()
                     return 200, data
         match = re.fullmatch(r'/api/patients/(\d+)(/action)?', path)

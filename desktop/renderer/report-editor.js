@@ -18,6 +18,9 @@ let reportId = '',
   reportSaveStatus = 'All changes saved',
   reportSuggestions = [],
   reportGaps = [],
+  reportSuggestionSnapshot = '',
+  reportSuggestionRun = 0,
+  reportSuggestionAdding = false,
   reportSuggestionMessage = '',
   reportAdded = new Set(),
   reportDismissed = new Set(),
@@ -101,17 +104,22 @@ async function reportScreen() {
   loadSuggestions();
 }
 async function loadSuggestions() {
-  const id = reportId;
+  const id = reportId, run = ++reportSuggestionRun;
+  reportSuggestionSnapshot = '';
+  reportSuggestions = [];
   reportSuggestionMessage = 'Loading suggestions...';
   if ($('suggestions')) $('suggestions').innerHTML = suggestionsHtml();
   try {
     const data = await hmr.api('GET', `/api/patients/${encodeURIComponent(id)}/suggestions`);
-    if (id !== reportId || page !== 'report_editor') return;
+    if (id !== reportId || page !== 'report_editor' || run !== reportSuggestionRun) return;
     reportSuggestions = data.suggestions || [];
+    reportSuggestionSnapshot = data.context_snapshot_sha256 || '';
+    reportAdded = new Set();
+    reportDismissed = new Set();
     reportGaps = data.context_gaps || [];
     reportSuggestionMessage = reportSuggestions.length ? '' : 'No suggestions for this patient yet.';
   } catch (error) {
-    if (id !== reportId || page !== 'report_editor') return;
+    if (id !== reportId || page !== 'report_editor' || run !== reportSuggestionRun) return;
     reportSuggestions = [];
     reportGaps = [];
     reportSuggestionMessage =
@@ -121,8 +129,12 @@ async function loadSuggestions() {
   }
   if ($('suggestions')) $('suggestions').innerHTML = suggestionsHtml();
 }
+function suggestionEvidenceHtml(item) {
+  if (!item.evidence?.length) return '<p>No source-addressed evidence supplied. Reload suggestions.</p>';
+  return `<details open><summary>Matched source evidence (not clinical interpretation)</summary>${item.evidence.map(e => `<section class="suggestion-evidence" style="overflow-wrap:anywhere"><strong>${esc(e.kind)} - ${esc(e.id)}</strong><p style="white-space:pre-wrap">${esc(e.text)}</p><p>${esc(e.verification || '')}${e.verified_by ? ` | ${esc(e.verified_by)} at ${esc(e.verified_at || 'time not recorded')}` : ''}${e.use_status ? ` | Use: ${esc(e.use_status)}` : ''}</p><p>Source: ${esc(e.source || 'not established')} | Date: ${esc(e.date || 'not established')}${e.age_days !== null && e.age_days !== undefined ? ` (${esc(e.age_days)} days before context check)` : ''}</p>${e.unit !== undefined ? `<p>Units: ${esc(e.unit || 'missing')} | Reference interval: ${esc(e.reference_interval || 'not recorded')}</p>` : ''}${e.comment ? `<p>Original comment: ${esc(e.comment)}</p>` : ''}${e.flags?.length ? `<p>Check: ${esc(e.flags.join('; '))}</p>` : ''}</section>`).join('')}</details>`;
+}
 function suggestionsHtml() {
-  return `${reportGaps.length ? (reportGaps.every(gap => typeof gap === 'string' && gap.trim()) ? `<ul class="muted">${reportGaps.map(gap => `<li>${esc(gap.replaceAll('_', ' '))}</li>`).join('')}</ul>` : '<p class="muted">Add interview notes or confirm the medicines to get suggestions.</p>') : ''}${reportSuggestionMessage ? `<p class="muted">${esc(reportSuggestionMessage)}</p>` : ''}${reportSuggestions.map((item, i) => (reportDismissed.has(i) ? '' : `<article class="card helper-card"><span class="source-chip">${esc(H.sourceLabel(item.source))}</span><h3>${esc(item.title)}</h3>${item.why?.length ? `<ul>${item.why.map((why) => `<li>${esc(why)}</li>`).join('')}</ul>` : ''}${item.missing?.length ? `<p>Check first: ${esc(item.missing.join(', '))}</p>` : ''}${item.brainstorm ? `<details><summary>Brainstorm V2 - ${esc(item.brainstorm.title)} (p.${esc(item.brainstorm.page)})</summary><p>${esc(item.brainstorm.snippet)}</p><button data-suggestion-copy="${i}">Copy</button></details>` : ''}<div class="actions"><button data-suggestion-add="${i}" ${reportAdded.has(i) ? 'disabled' : ''}>${reportAdded.has(i) ? 'Added' : 'Add to findings'}</button><button data-suggestion-dismiss="${i}">Dismiss</button></div></article>`)).join('')}`;
+  return `${reportGaps.length ? (reportGaps.every(gap => typeof gap === 'string' && gap.trim()) ? `<ul class="muted">${reportGaps.map(gap => `<li>${esc(gap.replaceAll('_', ' '))}</li>`).join('')}</ul>` : '<p class="muted">Add interview notes or confirm the medicines to get suggestions.</p>') : ''}${reportSuggestionMessage ? `<p class="muted">${esc(reportSuggestionMessage)}</p>` : ''}${reportSuggestions.map((item, i) => (reportDismissed.has(i) ? '' : `<article class="card helper-card"><span class="source-chip">${esc(H.sourceLabel(item.source))}</span><h3>${esc(item.title)}</h3>${item.why?.length ? `<ul>${item.why.map((why) => `<li>${esc(why)}</li>`).join('')}</ul>` : ''}<p class="muted">Past-case template only, not a patient finding. Review and edit before inclusion.</p><h4>Proposed recommendation</h4><p>${esc(item.rec || '')}</p><h4>Template rationale</h4><p>${esc(item.rationale || '')}</p>${suggestionEvidenceHtml(item)}${item.missing?.length ? `<p>Check first: ${esc(item.missing.join(', '))}</p>` : ''}${item.brainstorm ? `<details><summary>Brainstorm V2 - ${esc(item.brainstorm.title)} (p.${esc(item.brainstorm.page)})</summary><p>${esc(item.brainstorm.snippet)}</p><button data-suggestion-copy="${i}">Copy</button></details>` : ''}<div class="actions"><button data-suggestion-add="${i}" ${reportAdded.has(i) || !reportSuggestionSnapshot ? 'disabled' : ''}>${reportAdded.has(i) ? 'Added' : 'Add to findings'}</button><button data-suggestion-dismiss="${i}">Dismiss</button></div></article>`)).join('')}`;
 }
 function reportField(key, label, multiline = true) {
   const review = reportRecord.needs_review?.includes(key)
@@ -173,7 +185,7 @@ function renderReport() {
             ([key, label]) =>
               `<label>${label}${key === 'title' ? `<input data-issue="${i}" data-prop="${key}" value="${esc(issue[key] || '')}">` : `<textarea data-issue="${i}" data-prop="${key}">${esc(issue[key] || '')}</textarea>`}</label>`,
           )
-          .join('')}</article>`,
+          .join('')}${issue.suggestion_source ? `<details><summary>Evidence retained when selected (not automatically refreshed)</summary><p>Re-review if the interview, pathology or medicines change. Editing the finding does not update this retained evidence.</p>${suggestionEvidenceHtml(issue.suggestion_source)}</details>` : ''}</article>`,
     )
     .join('');
   const file = (reportDetail.files?.folder || []).find((f) => /^mims interactions.*\.txt$/i.test(f));
@@ -181,8 +193,10 @@ function renderReport() {
     .split(/[\\/]/)
     .pop();
   $('screen').innerHTML =
-    `<div class="report-top"><button data-page="reports">Back to reports</button><div><strong>${esc(reportDetail.name || reportRecord.name)}</strong><span class="muted"> &middot; ${esc(reportDetail.gp || String(reportRecord.doctor || '').split('\n')[0] || 'GP not set')}</span><br><small class="muted">${esc(outputName)}</small></div><div class="report-dates">${reportField('assess_date', 'Assessment date (DD/MM/YYYY)', false)}${reportField('report_date', 'Report date (DD/MM/YYYY)', false)}</div><span id="report-status" role="status">${esc(reportSaveStatus)}</span><div class="actions"><button data-report-save>Save</button><button data-report-build="word" ${!reportRecord.issues.length ? 'disabled' : ''}>Build Word</button><button class="primary" data-report-build="pdf" ${!reportRecord.issues.length ? 'disabled' : ''}>Build Word + PDF</button></div></div>${H.showInterviewRefresh(reportRecord, reportDetail) || reportRecord.pathology_newer ? `<div class="report-refresh" role="status"><span>${esc(reportRecord.pathology_newer ? 'Verified pathology has changed since this report was prepared. Refresh and re-review the report before building.' : 'The interview was changed after this report was started.')}</span><button data-report-refresh>Refresh report from current interview and pathology</button></div>` : ''}<div class="report-layout"><div class="report-main"><section class="report-findings"><h2>Findings</h2><p class="muted">${reportRecord.issues.length} findings &middot; about 4-8</p>${findings}<div class="actions"><button data-finding-add>Add finding</button>${reportUndo ? '<button data-finding-undo>Undo deletion</button>' : ''}</div></section><details class="interview-section report-disclosure" id="report-letter" ${reportLetterOpen ? 'open' : ''}><summary>Letter wording</summary><div class="report-fields">${letter}</div></details><details class="interview-section report-disclosure" id="report-details" ${reportDetailsOpen ? 'open' : ''}><summary>Patient details in the report</summary><div class="report-fields">${details}</div></details></div><aside class="report-sidebar"><section><div class="helper-heading"><h2>Suggestions for this patient</h2><button data-suggestions-reload>Reload</button></div><div id="suggestions" role="status">${suggestionsHtml()}</div></section><section><h2>Find in library</h2><label>Search<input id="library-search" type="search" value="${esc(reportQuery)}"></label><div id="library-results" role="status">${libraryResultsHtml()}</div></section>${reportAi ? `<section><h2>AI assist (optional)</h2><p>${esc(reportAgent)}</p><button data-report-assist>Draft with AI</button>${reportDraft ? '<div class="actions"><button data-report-load="all">Load AI draft</button><button data-report-load="findings">Take findings only</button></div>' : ''}${file ? `<p>${esc(file)} <button data-open-interactions="${esc(file)}">Open</button></p>` : ''}<pre id="report-output" role="status">${esc(reportOutput)}</pre></section>` : ''}</aside></div>`;
+    `<div class="report-top"><button data-page="reports">Back to reports</button><div><strong>${esc(reportDetail.name || reportRecord.name)}</strong><span class="muted"> &middot; ${esc(reportDetail.gp || String(reportRecord.doctor || '').split('\n')[0] || 'GP not set')}</span><br><small class="muted">${esc(outputName)}</small></div><div class="report-dates">${reportField('assess_date', 'Assessment date (DD/MM/YYYY)', false)}${reportField('report_date', 'Report date (DD/MM/YYYY)', false)}</div><span id="report-status" role="status">${esc(reportSaveStatus)}</span><div class="actions"><button data-report-save>Save</button><button data-report-build="word" ${!reportRecord.issues.length ? 'disabled' : ''}>Build Word</button><button class="primary" data-report-build="pdf" ${!reportRecord.issues.length ? 'disabled' : ''}>Build Word + PDF</button></div></div>${H.showInterviewRefresh(reportRecord, reportDetail) || reportRecord.pathology_newer ? `<div class="report-refresh" role="status"><span>${esc(reportRecord.pathology_newer ? 'Verified pathology has changed since this report was prepared. Refresh and re-review the report before building.' : 'The interview was changed after this report was started.')}</span><button data-report-refresh>Refresh report from current interview and pathology</button></div>` : ''}<div class="report-layout"><div class="report-main"><section class="report-findings"><h2>Findings</h2><p class="muted">${reportRecord.issues.length} findings &middot; about 4-8</p>${findings}<div class="actions"><button data-finding-add>Add finding</button>${reportUndo ? '<button data-finding-undo>Undo deletion</button>' : ''}</div></section><details class="interview-section report-disclosure" id="report-letter" ${reportLetterOpen ? 'open' : ''}><summary>Letter wording</summary><div class="report-fields">${letter}</div></details><details class="interview-section report-disclosure" id="report-details" ${reportDetailsOpen ? 'open' : ''}><summary>Patient details in the report</summary><div class="report-fields">${details}</div></details></div><aside class="report-sidebar">${typeof evidenceReferencePanel==='function' ? evidenceReferencePanel() : ''}${localReferencePanel()}<section><div class="helper-heading"><h2>Suggestions for this patient</h2><button data-suggestions-reload>Reload</button></div><div id="suggestions" role="status">${suggestionsHtml()}</div></section><section><h2>Find in library</h2><label>Search<input id="library-search" type="search" value="${esc(reportQuery)}"></label><div id="library-results" role="status">${libraryResultsHtml()}</div></section>${reportAi ? `<section><h2>AI assist (optional)</h2><p>${esc(reportAgent)}</p><button data-report-assist>Draft with AI</button>${reportDraft ? '<div class="actions"><button data-report-load="all">Load AI draft</button><button data-report-load="findings">Take findings only</button></div>' : ''}${file ? `<p>${esc(file)} <button data-open-interactions="${esc(file)}">Open</button></p>` : ''}<pre id="report-output" role="status">${esc(reportOutput)}</pre></section>` : ''}</aside></div>`;
   document.querySelectorAll('.report-layout textarea').forEach(H.growTextarea);
+  refreshLocalReferenceStatus();
+  if(typeof refreshEvidenceReferences==='function')refreshEvidenceReferences();
   $('report-letter').addEventListener('toggle', (event) => {
     reportLetterOpen = event.target.open;
   });
@@ -314,13 +328,31 @@ async function reportEditorClick(b) {
     return true;
   }
   if (d.suggestionAdd !== undefined) {
-    const index = Number(d.suggestionAdd);
-    if (!reportAdded.has(index) && reportSuggestions[index]) {
-      reportRecord.issues.push(H.findingFromResult(reportSuggestions[index]));
+    const index = Number(d.suggestionAdd), item = reportSuggestions[index];
+    if (reportSuggestionAdding || reportAdded.has(index) || !item || !reportSuggestionSnapshot) return true;
+    const id = reportId, record = reportRecord, snapshot = reportSuggestionSnapshot;
+    reportSuggestionAdding = true;
+    try {
+      const current = await hmr.api('GET', `/api/patients/${encodeURIComponent(id)}/suggestions/context`);
+      if (reportId !== id || page !== 'report_editor' || reportRecord !== record || reportSuggestions[index] !== item || reportSuggestionSnapshot !== snapshot) return true;
+      if (current.context_snapshot_sha256 !== snapshot || item.context_snapshot_sha256 !== snapshot) {
+        reportSuggestionSnapshot = '';
+        reportSuggestionMessage = 'Source context changed. Reload suggestions and re-review the evidence before adding.';
+        if ($('suggestions')) $('suggestions').innerHTML = suggestionsHtml();
+        return true;
+      }
+      const finding = H.findingFromResult(item);
+      finding.suggestion_source = {version:1, context_snapshot_sha256:snapshot, evidence:item.evidence || []};
+      reportRecord.issues.push(finding);
       reportAdded.add(index);
       reportSaver.changed();
       renderReport();
-    }
+    } catch (error) {
+      if (reportId === id && page === 'report_editor' && reportRecord === record) {
+        reportSuggestionMessage = 'Could not verify source context: ' + errorText(error) + '. Nothing added.';
+        if ($('suggestions')) $('suggestions').innerHTML = suggestionsHtml();
+      }
+    } finally { reportSuggestionAdding = false; }
     return true;
   }
   if (d.reportSave !== undefined) {
@@ -395,3 +427,43 @@ async function reportEditorClick(b) {
   renderReport();
   return true;
 }
+
+function localReferencePanel() {
+  return `<section><h2>Private local reference</h2><p class="muted">Separate text matches from your own PDF, not patient-specific advice.</p><label>Edition shown on original<input id="local-ref-edition" maxlength="100" placeholder="e.g. V2.0 NOV2025"></label><button data-local-ref-pick>Choose local PDF</button><label>Search reference<input id="local-ref-query" type="search" maxlength="200"></label><button data-local-ref-search>Search</button><div id="local-ref-results" aria-live="polite"></div></section>`;
+}
+async function refreshLocalReferenceStatus() {
+  const target=$('local-ref-results'),edition=$('local-ref-edition');
+  if (!target) return;
+  localReferenceHits=[];
+  try {
+    const ref=await hmr.api('GET','/api/reference/local');
+    if (!target.isConnected) return;
+    edition.value=ref.edition;
+    target.textContent='Registered local edition: '+ref.edition+'. Search to review source passages.';
+  } catch (error) {if(target.isConnected) target.textContent=error.message;}
+}
+let localReferenceHits = [];
+function localReferenceHtml(response) {
+  const ref=response.reference;
+  return `<p>Brainstorm | ${esc(ref.edition)} | ${esc(ref.page_count)} physical PDF pages</p><p class="muted" style="overflow-wrap:anywhere">SHA-256: ${esc(ref.pdf_sha256)}</p><p>All search words must occur in the heading plus one physical page. Text matches only. Writing guide, not clinical advice. Cross-check current sources. Pharmacist review required.</p>` + (response.results.length ? response.results.map((hit,i)=>`<article class="card helper-card"><h3>${esc(hit.title)}</h3><p>${esc(hit.edition)} | Physical PDF page ${esc(hit.page)} | Section pages ${esc(hit.section_page)}-${esc(hit.section_page_end)}</p><blockquote style="white-space:pre-wrap;overflow-wrap:anywhere">${hit.omitted_before ? '[...] ' : ''}${esc(hit.snippet)}${hit.omitted_after ? ' [...]' : ''}</blockquote><p class="muted">Extracted text excerpt, spacing normalized. Not a clinical recommendation.</p><button data-local-ref-open="${i}">Open original physical page ${esc(hit.page)}</button></article>`).join('') : '<p>No matching passages. No clinical conclusion can be drawn from this.</p>');
+}
+document.addEventListener('click', async event => {
+  const el=event.target.closest('[data-local-ref-pick],[data-local-ref-search],[data-local-ref-open]');
+  if (!el || !['report_editor','settings'].includes(page)) return;
+  const status=$('local-ref-results');
+  try {
+    if (el.hasAttribute('data-local-ref-pick')) {
+      const result=await window.hmr.pickLocalReference($('local-ref-edition').value);
+      if (!result.cancelled) {localReferenceHits=[];if(typeof invalidateEvidenceReferences==='function')invalidateEvidenceReferences('Local reference changed. Refresh saved-evidence matches.');status.textContent='Registered private local PDF: '+result.edition+'. Search to find source passages.';}
+    } else if (el.hasAttribute('data-local-ref-search')) {
+      const query=$('local-ref-query').value.trim();
+      if (!query) {status.textContent='Enter reference search words.';return;}
+      const result=await window.hmr.api('GET','/api/reference/search?q='+encodeURIComponent(query));
+      localReferenceHits=result.results;status.innerHTML=localReferenceHtml(result);
+    } else {
+      const hit=localReferenceHits[Number(el.dataset.localRefOpen)];
+      if (!hit) throw Error('Search again to recover the citation');
+      await window.hmr.openLocalReference(hit.pdf_sha256,hit.page);
+    }
+  } catch(error) {status.textContent=error.message;}
+});

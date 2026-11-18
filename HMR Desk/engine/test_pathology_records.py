@@ -28,40 +28,40 @@ def test_pathology_requires_actual_unit_source_and_date():
 
 
 def test_pathology_file_roundtrip_conflict_and_original_untouched(tmp_path, monkeypatch):
-    monkeypatch.setattr(pathology_records.jobs, 'patient_folder', lambda _: tmp_path)
+    import db; conn = db.connect(str(tmp_path / 'p.db'))
     patient = {'id': 1}
-    initial = pathology_records.load(patient)
+    initial = pathology_records.load(conn, patient)
     assert initial['revision'] == 'missing'
     example = row()
-    result = pathology_records.save(patient, {'revision': 'missing', 'records': [example]}, reviewer='Synthetic Pharmacist')
+    result = pathology_records.save(conn, patient, {'revision': 'missing', 'records': [example]}, reviewer='Synthetic Pharmacist')
     assert result['records'][0] == example
     assert result['revision'] != 'missing'
-    assert pathlib.Path(tmp_path / 'pathology_records.json').exists()
+    import records; assert records.exists(conn, 1, 'pathology_records.json') and not (tmp_path / 'pathology_records.json').exists()
     with pytest.raises(ValueError, match='changed'):
-        pathology_records.save(patient, {'revision': 'missing', 'records': []})
-    assert pathology_records.load(patient)['records'] == [example]
+        pathology_records.save(conn, patient, {'revision': 'missing', 'records': []})
+    assert pathology_records.load(conn, patient)['records'] == [example]
 
 
 def test_verified_result_amendment_requires_fresh_pharmacist_review(tmp_path, monkeypatch):
-    monkeypatch.setattr(pathology_records.jobs, 'patient_folder', lambda _: tmp_path)
+    import db; conn = db.connect(str(tmp_path / 'p.db'))
     patient = {'id': 1}
     original = row()
-    created = pathology_records.save(patient, {'revision':'missing','records':[original]},
+    created = pathology_records.save(conn, patient, {'revision':'missing','records':[original]},
                                      reviewer='Synthetic Pharmacist')
     assert created['version'] == 2
     assert created['verification'][original['id']]['verified_by'] == 'Synthetic Pharmacist'
     with pytest.raises(ValueError, match='marked unverified'):
-        pathology_records.save(patient, {'revision':created['revision'],
+        pathology_records.save(conn, patient, {'revision':created['revision'],
                                           'records':[row(**{**original,'value':'120'})]},
                                 reviewer='Synthetic Pharmacist')
     unsigned = row(**{**original,'value':'120','verified':False})
-    changed = pathology_records.save(patient, {'revision':created['revision'],
+    changed = pathology_records.save(conn, patient, {'revision':created['revision'],
                                                 'records':[unsigned]}, reviewer='Synthetic Pharmacist')
     assert not changed['verification']
     confirmed = row(**{**unsigned,'verified':True})
     with pytest.raises(ValueError, match='pharmacist name'):
-        pathology_records.save(patient, {'revision':changed['revision'],'records':[confirmed]})
-    reviewed = pathology_records.save(patient, {'revision':changed['revision'],
+        pathology_records.save(conn, patient, {'revision':changed['revision'],'records':[confirmed]})
+    reviewed = pathology_records.save(conn, patient, {'revision':changed['revision'],
                                                 'records':[confirmed]}, reviewer='Another Pharmacist')
     assert reviewed['verification'][original['id']]['verified_by'] == 'Another Pharmacist'
     assert len(reviewed['history']) == 3
@@ -71,15 +71,15 @@ def test_verified_result_amendment_requires_fresh_pharmacist_review(tmp_path, mo
 
 def test_legacy_verified_records_retained_without_forged_reviewer(tmp_path, monkeypatch):
     import json
-    monkeypatch.setattr(pathology_records.jobs, 'patient_folder', lambda _: tmp_path)
+    import db; conn = db.connect(str(tmp_path / 'p.db'))
     legacy = row()
-    (tmp_path / 'pathology_records.json').write_text(json.dumps({'version':1,'records':[legacy]}))
+    import records; records.put(conn, 1, 'pathology_records.json', json.dumps({'version':1,'records':[legacy]}).encode()); conn.commit()
     patient={'id':1}
-    loaded = pathology_records.load(patient)
+    loaded = pathology_records.load(conn, patient)
     assert loaded['records'] == [legacy]
     assert loaded['verification'] == {}
     assert loaded['version'] == 1
-    migrated = pathology_records.save(patient, {'revision':loaded['revision'],'records':[legacy]})
+    migrated = pathology_records.save(conn, patient, {'revision':loaded['revision'],'records':[legacy]})
     assert migrated['version'] == 2
     assert migrated['records'] == [legacy]
     assert migrated['verification'] == {}

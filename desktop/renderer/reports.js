@@ -30,9 +30,10 @@ function reportRow(p, detail, agent) {
   const steps = Object.fromEntries((detail.steps || []).map((step) => [step.name, step]));
   const interactions = steps.interactions;
   const visited = ['visited', 'report_drafted', 'signed_off', 'sent', 'claimed'].includes(p.state);
+  const confirmation = steps.confirm_medicines;
   const medicines = {
     ready: visited,
-    done: visited && !!interactions && interactions.reason !== 'confirm the medicine list first',
+    done: visited && confirmation?.done === true,
     reason: visited ? '' : 'Visit not recorded',
   };
   const build = steps.report_build;
@@ -83,6 +84,8 @@ function renderMedicines() {
     <p>These are the medicines the patient is taking, copied from the interview. Check the generic names (and add brands if useful) &#8212; this list is used for the eMIMS interaction check. Stopped medicines are left out.</p>
     ${medicineData.proposed && (medicineData.meds.length || medicineData.allergies.length) ? `<p>Copied from the interview &#8212; ${medicineData.meds.length} medicines, ${medicineData.allergies.length} allergies</p>` : ''}
     ${(medicineData.interview_usage || []).length ? `<p>Review interview medicine use below. Confirm only medicines currently used; a different strength or formulation may still be used when another has stopped.</p><ul>${medicineData.interview_usage.map(item => `<li>${esc(item.source)} — ${esc(item.name)}: ${esc(item.detail)} ${esc((item.directions || []).filter(Boolean).join(" | "))}</li>`).join('')}</ul>` : ''}
+    ${medicineData.medicine_snapshot_changed ? '<p class="error" role="alert">The interview medicine identity, directions, use or allergies changed since this list was confirmed. Review the current interview list below before saving; previous interaction results are not current.</p>' : ''}
+    ${medicineData.medicine_snapshot?.items?.length ? `<details open><summary>Current interview medicine identities and use</summary><ul>${medicineData.medicine_snapshot.items.map(item => { const ref = item.metadata?.reference; return `<li>${esc(item.values[0])}${ref ? ` | ${esc(ref.display)} (${esc(ref.source.toUpperCase())} ${esc(ref.code)}, release ${esc(ref.release)})` : ' | Free text, no catalogue identity'} | ${esc(item.metadata?.use_status || 'Use not confirmed')}</li>`; }).join('')}</ul><p>These are interview source identities, not proof of an eMIMS mapping. Keep any mapping changes explicit.</p></details>` : ''}
     <div id="medicine-rows">${medicineData.meds
       .map(
         (med, i) => `<div class="medicine-row">
@@ -235,4 +238,4 @@ async function pharmacistReportSignoff(patientId) {
     });
     dialog.showModal();
   });
-}
+      }

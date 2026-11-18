@@ -5,6 +5,7 @@ import sqlite3
 from pathlib import Path
 import db
 import messaging
+import records
 import settings
 import steps
 
@@ -20,7 +21,7 @@ def auto_visit(conn, today=None, dry_run=False):
     for p in patients:
         notes = False
         try:
-            data = json.loads((steps.folder(p) / 'interview.json').read_text(encoding='utf-8'))
+            data = records.get_json(conn, p['id'], 'interview.json') or {}
             notes = bool(data.get('notes', '').strip())
         except (OSError, ValueError, TypeError, AttributeError):
             pass

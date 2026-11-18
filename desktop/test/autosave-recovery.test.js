@@ -21,7 +21,7 @@ function setup(shared = new Map(), post = async () => {}, equivalent) {
 }
 
 test('pre-change draft recovery fills new interview defaults before saving', async () => {
-  const context = vm.createContext({ H: { autosaver: () => ({}) }, document: { addEventListener() {} } });
+  const context = vm.createContext({ H: { ...require('../renderer/helpers'), autosaver: () => ({}) }, document: { addEventListener() {} } });
   vm.runInContext(fs.readFileSync(require.resolve('../renderer/interview.js'), 'utf8'), context);
   const normalize = record => context.normalizeInterviewDetails(record);
   const shared = new Map(), old = setup(shared);
@@ -44,7 +44,7 @@ test('pre-change draft recovery fills new interview defaults before saving', asy
 });
 
 test('old-format offline recovery clears the draft after saving', async () => {
-  const context = vm.createContext({ H: { autosaver: () => ({}) }, document: { addEventListener() {} } });
+  const context = vm.createContext({ H: { ...require('../renderer/helpers'), autosaver: () => ({}) }, document: { addEventListener() {} } });
   vm.runInContext(fs.readFileSync(require.resolve('../renderer/interview.js'), 'utf8'), context);
   const base = context.normalizeInterviewDetails({ notes: '', details: { meds: [{}] }, meds: [[]] }, false);
   const draft = structuredClone(base); draft.notes = 'draft';

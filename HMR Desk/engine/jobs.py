@@ -14,6 +14,7 @@ import uuid
 import db
 import importer
 import history
+import records as record_store
 
 INTAKE_SCRIPT = Path(db.BASE) / 'scripts' / 'intake' / 'intake.py'
 # Application-owned assets: never depend on an individual developer's Claude profile.
@@ -49,10 +50,21 @@ def correction(file, fields):
     if not isinstance(fields, dict) or not fields or not fields.keys() <= FIELDS or any(not isinstance(v, str) for v in fields.values()):
         raise ValueError('invalid fields')
     path = Path(db.BASE) / 'TO SORT' / 'intake_corrections.json'
-    with _lock:
-        data = importer.read(path) if path.exists() else {}
+    with _lock, connection() as conn:
+        data = record_store.get_json(conn, record_store.GLOBAL_PATIENT, 'intake_corrections.json')
+        if data is None:
+            data = importer.read(path) if path.exists() else {}
         data.setdefault(file, {}).update(fields)
-        atomic_json(path, data)
+        record_store.put_json(conn, record_store.GLOBAL_PATIENT, 'intake_corrections.json', data)
+
+
+def outside_files(conn):
+    """Record files that are not in a patient folder: (patient id, record name, plain path)."""
+    items = [(record_store.GLOBAL_PATIENT, 'intake_corrections.json', Path(db.BASE) / 'TO SORT' / 'intake_corrections.json'),
+             (record_store.GLOBAL_PATIENT, 'history-import-plan.json', Path(db.DATA_DIR) / 'history-import-plan.json')]
+    for p in conn.execute('SELECT * FROM patients').fetchall():
+        items.append((p['id'], 'interview_spec.json', interview_spec_path(p)))
+    return items
 
 
 def atomic_json(path, data):
@@ -207,7 +219,9 @@ def report_extract(patient_id):
     if case.exists() or images.exists(): raise FileExistsError('Extraction output already exists')
     import local_referral_extraction
     output = local_referral_extraction.extract(folder, images)
-    if (folder / 'interview.json').is_file():
+    with connection() as conn:
+        has_record = record_store.exists(conn, get_patient(conn, patient_id)['id'], 'interview.json')
+    if has_record:
         import interview
         with connection() as conn:
             record = interview.load(conn, get_patient(conn, patient_id))
@@ -242,14 +256,15 @@ def report_build(patient_id, pdf=False):
     import report
     with connection() as conn:
         p = get_patient(conn, patient_id)
-        folder, spec = patient_folder(p), report_spec_path(p)
-        if not spec.is_file(): raise FileNotFoundError('Report spec missing: ' + str(spec))
-        data = importer.read(spec)
+        folder = patient_folder(p)
+        spec_bytes = record_store.get(conn, p['id'], 'report_spec.json')
+        if spec_bytes is None: raise FileNotFoundError('Report spec missing')
+        data = json.loads(spec_bytes.decode('utf-8-sig'))
         report.validate(data)
         import interview, pathology_records
-        if data.get('interview_revision') and data['interview_revision'] != interview.revision(folder / 'interview.json'):
+        if data.get('interview_revision') and data['interview_revision'] != interview.revision(conn, p):
             raise ValueError('Interview changed after report preparation; refresh and re-review the report before building')
-        if data.get('pathology_revision') and data['pathology_revision'] != pathology_records.revision(pathology_records.file_for(p)):
+        if data.get('pathology_revision') and data['pathology_revision'] != pathology_records.revision(conn, p):
             raise ValueError('Pathology changed after report preparation; refresh and re-review the report before building')
         if not data['issues']: raise ValueError('add at least one finding')
         pending = report.placeholders(data)
@@ -301,13 +316,13 @@ def report_build(patient_id, pdf=False):
             'file': target.name,
             'sha256': hashlib.sha256(target.read_bytes()).hexdigest(),
             'pdf_sha256': hashlib.sha256(pdf_target.read_bytes()).hexdigest() if pdf else '',
-            'report_spec_sha256': hashlib.sha256(spec.read_bytes()).hexdigest(),
-            'interview_revision': interview.revision(folder / 'interview.json'),
-            'pathology_revision': pathology_records.revision(pathology_records.file_for(p)),
+            'report_spec_sha256': hashlib.sha256(spec_bytes).hexdigest(),
+            'interview_revision': interview.revision(conn, p),
+            'pathology_revision': pathology_records.revision(conn, p),
             'template_version': approved[1]['version'] if approved else '',
             'template_sha256': approved[1]['sha256'] if approved else '',
             'template_approved': bool(approved),
-            'source_files_sha256': report_auth.source_snapshot(p),
+            'source_files_sha256': report_auth.source_snapshot(conn, p),
             'clinical_snapshot_sha256': report_auth.clinical_snapshot_hash(conn, p),
         }
         db.log(conn, patient_id, 'report_build', evidence, 'job')
@@ -403,8 +418,7 @@ def report_assist(patient_id):
                 clinical_privacy.project(latest, sex=patient['sex'] or '')) != source_hash:
             raise ValueError('Clinical interview changed during AI analysis; rerun assistance')
         folder = patient_folder(patient)
-        target = folder / 'report_spec.ai.json'
-        if target.exists():
+        if record_store.exists(conn, patient['id'], 'report_spec.ai.json'):
             raise FileExistsError('Existing AI draft must be reviewed or removed before rerunning')
         manual = report.load(conn, patient)
         if not manual.get('saved'):
@@ -413,7 +427,7 @@ def report_assist(patient_id):
         candidate = {k: v for k, v in manual.items() if k not in ('saved', 'interview_newer')}
         candidate['issues'] = findings
         report.validate(candidate)
-        atomic_json(target, candidate)
+        record_store.put_json(conn, patient['id'], 'report_spec.ai.json', candidate)
         db.log(conn, patient_id, 'report_assist', {
             'agent': selected_name, 'clinical_snapshot': source_hash,
             'finding_count': len(findings)}, 'job')
@@ -421,15 +435,19 @@ def report_assist(patient_id):
 
 def import_history(patient_id):
     if patient_id is not None: raise ValueError('batch job takes no patient')
-    with connection() as conn: records = history.plan(conn)
-    atomic_json(Path(db.DATA_DIR) / 'history-import-plan.json', records)
-    return json.dumps(history.summary(records), ensure_ascii=False)
+    with connection() as conn:
+        plan = history.plan(conn)
+        record_store.put_json(conn, record_store.GLOBAL_PATIENT, 'history-import-plan.json', plan)
+    return json.dumps(history.summary(plan), ensure_ascii=False)
 
 
 def import_history_apply(patient_id):
     if patient_id is not None: raise ValueError('batch job takes no patient')
-    records = json.loads((Path(db.DATA_DIR) / 'history-import-plan.json').read_text(encoding='utf-8'))
-    with connection() as conn: count = history.apply(conn, records)
+    with connection() as conn:
+        plan = record_store.get_json(conn, record_store.GLOBAL_PATIENT, 'history-import-plan.json')
+        if plan is None:
+            plan = json.loads((Path(db.DATA_DIR) / 'history-import-plan.json').read_text(encoding='utf-8'))
+        count = history.apply(conn, plan)
     return json.dumps({'visits_added': count})
 
 

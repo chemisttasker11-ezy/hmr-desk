@@ -1,6 +1,7 @@
 ﻿import json, os, tempfile
 from pathlib import Path
 from docx import Document
+import records
 import api, db
 
 with tempfile.TemporaryDirectory() as tmp:
@@ -22,7 +23,7 @@ with tempfile.TemporaryDirectory() as tmp:
     assert call('POST','messages',{'kind':'custom'})[0] == 400
     status, draft = call('POST','messages',{'kind':'custom','body':'My text'})
     assert status == 200 and draft['body'] == 'My text' and draft['state'] == 'draft'
-    (folder / 'report_spec.json').write_text(json.dumps({'issues':[{'rec':'Review medicine'}]}), encoding='utf-8')
+    records.put(conn, 1, 'report_spec.json', (json.dumps({'issues':[{'rec':'Review medicine'}]})).encode('utf-8')); conn.commit()
     status, data = call('GET','followup/1'); assert status == 200 and data['recommendations'] == [['Review medicine','','']]
     data['date'] = '2026-02-10'; data['recommendations'][0][1] = 'partly'
     assert call('POST','followup/1', data)[0] == 200

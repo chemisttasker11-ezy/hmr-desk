@@ -67,10 +67,13 @@ test('report buttons use engine readiness and keep medicine confirmation editabl
   assert.doesNotMatch(row, /Check medicines for interaction check &#10003; Done/);
   const confirmed = context.reportRow(
     { id: 2, name: 'Test', state: 'visited' },
-    { steps: [{ name: 'interactions', ready: true, done: false, reason: '' }] },
+    { steps: [{ name: 'confirm_medicines', done: true }, { name: 'interactions', ready: true, done: false, reason: '' }] },
     'Agent',
   );
   assert.match(confirmed, /data-medicines="2"[^>]*>Check medicines for interaction check &#10003; Done/);
+  const stale = context.reportRow({ id: 2, name: 'Test', state: 'visited' },
+    { steps: [{ name: 'confirm_medicines', done: false }, { name: 'interactions', ready: true, reason: '' }] }, 'Agent');
+  assert.doesNotMatch(stale, /Check medicines for interaction check &#10003; Done/);
 });
 
 test('interview snapshots and row edits detect unsaved changes without mutating originals', () => {
@@ -147,6 +150,7 @@ test('consent signing hides for signed records and posts a drawn PNG', async () 
       if (args[0] === 'GET') return { consent: { signed: true }, consent_file: 'signed.pdf' };
       return {};
     } } });
+  vm.runInContext(fs.readFileSync(require.resolve('../renderer/followup-context.js'), 'utf8'), context);
   vm.runInContext(fs.readFileSync(require.resolve('../renderer/interview.js'), 'utf8'), context);
   vm.runInContext("interviewId = '1'; interviewRecord = { consent: { by: 'patient' }, consent_file: '' }; renderInterview()", context);
   assert.match(screen.innerHTML, /Sign consent form/);
@@ -181,6 +185,7 @@ test('touchpad signing draws separate strokes after a pause and exits on Escape'
     setTimeout(fn, ms) { assert.equal(ms, 700); timers.set(++timerId, fn); return timerId; },
     clearTimeout(id) { timers.delete(id); },
     hmr: { api: async () => ({ png: 'image' }) } });
+  vm.runInContext(fs.readFileSync(require.resolve('../renderer/followup-context.js'), 'utf8'), context);
   vm.runInContext(fs.readFileSync(require.resolve('../renderer/interview.js'), 'utf8'), context);
   vm.runInContext("interviewId = '1'; interviewRecord = { consent: { by: 'patient' } }", context);
   await context.openConsentDialog();
@@ -291,6 +296,7 @@ test('follow-up form saves the edited record and recommendation shape', async ()
   const handlers = {}, calls = [], nodes = {screen: {}, 'followup-status': {}};
   const record = {date: '', method: 'phone', spoke_with: '', med_changes: '', recommendations: [['Take medicine', '', '']], issues: '', outcome: '', notes: ''};
   const context = vm.createContext({ H, esc: H.esc, $: id => nodes[id], document: {addEventListener: (name, fn) => { handlers[name] = fn; }}, page: 'followup_editor', hmr: {api: async (...args) => { calls.push(args); if (args[0] === 'GET') return record; }}, errorText: String, setTimeout, clearTimeout, confirm: () => false });
+  vm.runInContext(fs.readFileSync(require.resolve('../renderer/followup-context.js'), 'utf8'), context);
   vm.runInContext(fs.readFileSync(require.resolve('../renderer/interview.js'), 'utf8'), context);
   vm.runInContext("followupId = '4'; followupNumber = '1'", context);
   await context.followupScreen();

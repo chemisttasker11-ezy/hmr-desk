@@ -7,6 +7,7 @@ from docx import Document
 
 import db
 import jobs
+import records
 import report_auth
 import reconciliation
 
@@ -34,8 +35,7 @@ def case(tmp_path, monkeypatch):
         'version': 'synthetic-test', 'sha256': thash,
         'approved_by': 'Synthetic QA', 'approved_on': '2026-11-16'
     }))
-    spec = folder / 'report_spec.json'
-    spec.write_text('{"synthetic":"reviewed"}')
+    spec_bytes = b'{"synthetic":"reviewed"}'
     (folder / 'referral.pdf').write_bytes(b'%PDF-1.4\\nsynthetic original source')
     word = folder / 'HMR Synthetic.docx'
     word.write_bytes(b'synthetic DOCX representation')
@@ -50,21 +50,22 @@ def case(tmp_path, monkeypatch):
         evidence = {
             'file': word.name, 'sha256': digest(word.read_bytes()),
             'pdf_sha256': digest(pdf.read_bytes()),
-            'report_spec_sha256': digest(spec.read_bytes()),
+            'report_spec_sha256': digest(spec_bytes),
             'interview_revision': 'missing', 'pathology_revision': 'missing',
             'template_approved': True, 'template_sha256': thash,
             'template_version': 'synthetic-test',
-            'source_files_sha256': report_auth.source_snapshot({'folder': 'TO SORT/Synthetic'}),
+            'source_files_sha256': report_auth.source_snapshot(conn, {'id': pid, 'folder': 'TO SORT/Synthetic'}),
             'clinical_snapshot_sha256': '',
         }
         db.log(conn, pid, 'report_build', evidence, 'job')
     patient = conn.execute('SELECT * FROM patients WHERE id=?', (pid,)).fetchone()
+    records.put(conn, pid, 'report_spec.json', spec_bytes); conn.commit()
     # The pharmacist explicitly acknowledged this synthetic medicine snapshot.
     record = {'meds': [], 'other_meds': [],
               'details': {'meds': [], 'other_meds': []}}
     monkeypatch.setattr(report_auth.interview, 'load', lambda conn, patient: record)
     review = reconciliation.acknowledge(record, reconciliation.digest(record), 'Synthetic Pharmacist')
-    (folder / 'reconciliation_review.json').write_text(json.dumps(review))
+    records.put(conn, pid, 'reconciliation_review.json', json.dumps(review).encode()); conn.commit()
     # Existing report event was recorded before the synthetic interview fixture
     # was mounted; bring its canonical digest into the test's immutable evidence.
     source_contract_hash = report_auth.clinical_snapshot_hash(conn, patient)
@@ -107,7 +108,7 @@ def test_signoff_rejects_unreviewed_or_changed_word(tmp_path, monkeypatch):
 
 def test_signoff_rejects_unapproved_template_and_changed_spec(tmp_path, monkeypatch):
     conn, patient, folder, body = case(tmp_path, monkeypatch)
-    (folder / 'report_spec.json').write_text('{"synthetic":"changed"}')
+    records.put(conn, patient['id'], 'report_spec.json', b'{"synthetic":"changed"}'); conn.commit()
     with pytest.raises(ValueError, match='Report content changed'):
         report_auth.check_approval(conn, patient, body)
     conn.close()
@@ -115,7 +116,7 @@ def test_signoff_rejects_unapproved_template_and_changed_spec(tmp_path, monkeypa
 
 def test_signoff_requires_current_medicine_reconciliation(tmp_path, monkeypatch):
     conn, patient, folder, body = case(tmp_path, monkeypatch)
-    (folder / 'reconciliation_review.json').unlink()
+    records.delete(conn, patient['id'], 'reconciliation_review.json'); conn.commit()
     with pytest.raises(ValueError, match='Medicine reconciliation'):
         report_auth.check_approval(conn, patient, body)
     conn.close()

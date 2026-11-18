@@ -98,6 +98,18 @@ jobs:
           HMR_MERGE_SHA: ${{ github.sha }}
           HMR_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: ./scripts/manifest-windows.ps1
+      - name: Package separate app archive for isolated acceptance without NSIS
+        run: python scripts/pack-acceptance.py
+      - name: Upload unsigned app archive (no install, synthetic acceptance only)
+        uses: actions/upload-artifact@v4
+        with:
+          name: hmr-m2-isolated-acceptance-app
+          path: |
+            desktop/dist/hmr-isolated-acceptance.zip
+            desktop/dist/hmr-isolated-acceptance.zip.sha256
+            desktop/dist/hmr-isolated-acceptance.manifest.json
+          if-no-files-found: error
+          retention-days: 7
       - name: Upload unsigned engineering artifact (not clinical release)
         uses: actions/upload-artifact@v4
         with:
