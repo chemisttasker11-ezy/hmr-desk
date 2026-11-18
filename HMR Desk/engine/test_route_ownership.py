@@ -14,7 +14,7 @@ import db
 
 HERE = Path(__file__).resolve().parent
 # api.py may only shrink. When code moves out, lower this number in the same change.
-API_LINE_CEILING = 438
+API_LINE_CEILING = 252
 
 
 def _tree(name):
@@ -31,7 +31,7 @@ def test_api_module_does_not_grow():
 
 
 def test_route_modules_do_not_import_the_facade():
-    for name in ('routes_system.py', 'routes_work.py', 'routes_schedule.py', 'routes_pathology.py', 'routes_report.py', 'routes_clinical_records.py', 'routes_messages.py', 'routes_reference.py', 'patient_actions.py', 'followup_schedule.py'):
+    for name in ('routes_system.py', 'routes_work.py', 'routes_schedule.py', 'routes_pathology.py', 'routes_report.py', 'routes_clinical_records.py', 'routes_messages.py', 'routes_reference.py', 'routes_followup.py', 'routes_medicines.py', 'medicine_review.py', 'external_helpers.py', 'patient_actions.py', 'followup_schedule.py'):
         for node in ast.walk(_tree(name)):
             modules = [a.name for a in node.names] if isinstance(node, ast.Import) else [node.module or ''] if isinstance(node, ast.ImportFrom) else []
             assert 'api' not in [m.split('.')[0] for m in modules], f'{name} imports api: that would be a cycle'
@@ -198,3 +198,28 @@ def test_message_and_reference_routes_keep_their_literal_behaviour(conn, tmp_pat
     assert h(conn, 'GET', '/api/patients/999/reference-matches', {}, None) == (404, {'error': 'patient not found'})
     assert h(conn, 'GET', '/api/patients/999/candidate-checks', {}, None) == (404, {'error': 'patient not found'})
     assert h(conn, 'GET', '/api/patients/999/suggestions', {}, None) == (404, {'error': 'patient not found'})
+
+
+def test_domain_modules_do_not_import_the_api_facade():
+    # steps, report and suggestion_context used to reach medicine confirmation through api; they own a domain module now.
+    for name in ('steps.py', 'report.py', 'suggestion_context.py'):
+        for node in ast.walk(_tree(name)):
+            modules = [a.name for a in node.names] if isinstance(node, ast.Import) else [node.module or ''] if isinstance(node, ast.ImportFrom) else []
+            assert 'api' not in [m.split('.')[0] for m in modules], f'{name} imports api'
+
+
+def test_followup_and_medicine_routes_have_one_owner_and_medicine_review_keeps_its_names(conn, tmp_path):
+    def literals(tree):
+        return {n.value for n in ast.walk(tree) if isinstance(n, ast.Constant) and isinstance(n.value, str) and n.value.startswith('/api/')}
+    follow, meds = literals(_tree('routes_followup.py')), literals(_tree('routes_medicines.py'))
+    assert r"/api/patients/(\d+)/(timeline|followup/([12])(/export)?)" in follow and r"/api/patients/(\d+)/meds" in meds
+    others = literals(_tree('api.py')) | literals(_tree('routes_report.py')) | literals(_tree('routes_clinical_records.py'))
+    assert not ((follow | meds) & others) and not (follow & meds)
+    import medicine_review
+    for name in ('report_data', 'proposal', 'interview_usage', 'conflicting_medicines', 'relevant_usage', 'valid_alternatives', 'same_name_as_stopped', 'current_medicine_snapshot', 'confirmed_medicines_current'):
+        assert getattr(api, name) is getattr(medicine_review, name)
+    (tmp_path / 'Ann_Alpha').mkdir()
+    conn.execute("INSERT INTO patients(key,name,state,is_test,folder) VALUES ('ann','Ann Alpha','visited',0,?)", (str(tmp_path / 'Ann_Alpha'),)); conn.commit()
+    assert api.handle(conn, 'GET', '/api/patients/999/meds', {}, None) == (404, {'error': 'patient not found'})
+    assert api.handle(conn, 'GET', '/api/patients/999/timeline', {}, None) == (404, {'error': 'patient not found'})
+    assert api.handle(conn, 'POST', '/api/patients/1/meds', {}, {}) == (400, {'error': 'invalid medicine list'})

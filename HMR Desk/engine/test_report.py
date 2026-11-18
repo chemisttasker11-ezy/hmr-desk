@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import api
+import medicine_review
 import agents
 import db
 import interview
@@ -84,7 +85,7 @@ def test_report_workflow(monkeypatch):
                 assert api.conflicting_medicines(conn, p, [['vitamin', '']]) == []
             stopped = {'name': 'drug 10mg tablet', 'status': 'not_using', 'detail': 'Not using', 'source': 'Referral medicine', 'directions': ['daily', '']}
             taking = {'name': 'drug 5mg', 'status': 'taking', 'detail': 'Taking', 'source': 'Found during interview', 'directions': ['daily', '']}
-            with patch.object(api.mims, 'ingredients', side_effect=lambda name: [name.lower().split()[0]]), patch.object(api, 'interview_usage', return_value=[stopped, taking]) as usage:
+            with patch.object(api.mims, 'ingredients', side_effect=lambda name: [name.lower().split()[0]]), patch.object(medicine_review, 'interview_usage', return_value=[stopped, taking]) as usage:
                 path = '/api/patients/1/meds'
                 payload = {'meds': [['drug', '']], 'allergies': [], 'interview_usage': [stopped, taking]}
                 # The handler requires the current interview medicine snapshot digest (freshness guard);
@@ -289,7 +290,7 @@ def test_report_workflow(monkeypatch):
                     finally: c3.close()
                 except Exception as exc: errors.append(exc)
             # The changed medicine is restored below; bypass only the confirmation check here.
-            with patch.object(api, 'confirmed_medicines_current', return_value=True): derived = report._derived(conn, p)
+            with patch.object(medicine_review, 'confirmed_medicines_current', return_value=True): derived = report._derived(conn, p)
             conn.commit()  # release the main connection's write transaction so the thread connections can write (WAL: one writer)
             with patch.object(report, '_derived', side_effect=paused_derived), patch.object(db, 'log'):
                 try:
@@ -307,7 +308,7 @@ def test_report_workflow(monkeypatch):
             d.update(height_referral='170 cm', weight_actual='70 kg', home_bp='130/80', home_bgl='6', smoking='current', smoking_details='5 daily', alcohol='no', missed_doses='sometimes', missed_doses_details='weekly', device_technique='issues', device_technique_details='inhaler', swallowing='yes', swallowing_details='tablets', sx_falls='yes', sx_falls_details='one fall', sx_dizziness='no', sx_pain='not_asked', recent_change='yes', recent_change_details='specialist', present='with_other', present_details='daughter', lives='alone', manager='other', manager_details='daughter', daa='yes', daa_type='webster', daa_pharmacy='Local pharmacy')
             record['meds'][1][2] = 'When required'; d['meds'][1]['prn_use'] = 'twice weekly'; d['other_meds'][0]['kind'] = 'otc'
             interview.save(conn, p, record)
-            with patch.object(api, 'confirmed_medicines_current', return_value=True):
+            with patch.object(medicine_review, 'confirmed_medicines_current', return_value=True):
                 records.delete(conn, p['id'], 'report_spec.json'); mapped = report.start(conn, p)
                 assert mapped['obs'].splitlines() == ['BP: 120/80 (referral)', 'Pulse: 72', 'Height / weight / BMI: Height: 170 cm (referral); Weight: 70 kg', 'Home BP readings: 130/80', 'Home blood glucose readings: 6', 'Smoking: Current smoker — 5 daily', 'Alcohol: No alcohol', 'Mobility: Walks independently', 'Missed doses: sometimes — weekly', 'Device technique: issues — inhaler', 'Swallowing problems reported: tablets', 'Reports falls in the last 12 months: one fall', 'Recent hospital or specialist change: specialist']
                 assert 'Reports falls in the last 12 months: one fall' in suggest.context_for(conn, p)['obs']

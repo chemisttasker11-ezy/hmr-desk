@@ -195,11 +195,11 @@ def other_actual(r, m):
 
 def _derived(conn, patient):
     folder = jobs.patient_folder(patient)
-    import api
+    import medicine_review
     with interview.record_lock(patient):
         has_interview = records.exists(conn, patient['id'], 'interview.json')
         if not records.exists(conn, patient['id'], 'confirmed_meds.json'): raise ValueError('confirm the medicine list first')
-        if not api.confirmed_medicines_current(conn, patient): raise ValueError('Medicine use changed; review and confirm medicines first')
+        if not medicine_review.confirmed_medicines_current(conn, patient): raise ValueError('Medicine use changed; review and confirm medicines first')
         record = interview.load(conn, patient); p = dict(patient); h = record['header']
     if not has_interview:
         confirmed = records.get_json(conn, patient['id'], 'confirmed_meds.json')
