@@ -187,6 +187,11 @@ const H = (() => {
     'report_build',
     'claim',
   ];
+  function buildOutcomeText(result, pdf) {
+    const first = String((result && result.output) || '').split(/\r?\n/).map((line) => line.trim()).find(Boolean) || '';
+    if (result && result.state === 'done') return `${pdf ? 'Word and PDF built' : 'Word built'}${first ? ': ' + first : ''}. The files are in the patient folder.`;
+    return `Build did not finish${first ? ': ' + first : ''}`;
+  }
   function patientPathway(p, milestones = {}, stepsList = []) {
     const stepsMap = Object.fromEntries((stepsList || p.steps || []).map((s) => [s.name, s]));
     const stage = p.stage;
@@ -708,6 +713,7 @@ const H = (() => {
     defaultInterviewId,
     bulkSteps,
     patientPathway,
+    buildOutcomeText,
     commonStep,
     suburb,
     displayAddress,
