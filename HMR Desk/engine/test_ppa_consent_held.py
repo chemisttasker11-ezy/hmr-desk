@@ -41,6 +41,7 @@ def test_exact_saved_signed_file_with_signature_and_flag_is_consent(tmp_path, mo
     c, p, folder = _setup(tmp_path, monkeypatch)
     _pdf(folder / SIGNED)
     assert api.consent_held(c, p) is True
+    assert api.consent_evidence(c, p) == 'app_signed'
 
 
 def test_no_interview_record_is_not_consent(tmp_path, monkeypatch):
@@ -48,7 +49,7 @@ def test_no_interview_record_is_not_consent(tmp_path, monkeypatch):
     assert api.consent_held(c, dict(p, id=999)) is False
 
 
-def test_flag_without_the_saved_file_is_not_consent(tmp_path, monkeypatch):
+def test_flag_without_file_or_date_is_not_consent(tmp_path, monkeypatch):
     c, p, folder = _setup(tmp_path, monkeypatch)
     assert api.consent_held(c, p) is False
 
@@ -83,12 +84,46 @@ def test_signed_file_for_a_previous_name_does_not_carry_over(tmp_path, monkeypat
     assert api.consent_held(c, c.execute('SELECT * FROM patients WHERE id=1').fetchone()) is False
 
 
-def test_removing_the_signed_file_withdraws_consent(tmp_path, monkeypatch):
+def test_removing_the_signed_file_removes_app_evidence_when_no_date_recorded(tmp_path, monkeypatch):
     c, p, folder = _setup(tmp_path, monkeypatch)
     _pdf(folder / SIGNED)
     assert api.consent_held(c, p) is True
     (folder / SIGNED).unlink()
     assert api.consent_held(c, p) is False
+
+
+def _attest(c, signed=True, date='2026-11-18'):
+    records.put(c, 1, 'interview.json', json.dumps({'consent': {'signed': signed, 'date': date}}).encode('utf-8'))
+
+
+def test_paper_consent_ticked_with_a_date_is_held_as_manual_attestation_not_app_signed(tmp_path, monkeypatch):
+    c, p, folder = _setup(tmp_path, monkeypatch)
+    _attest(c)
+    assert api.consent_held(c, p) is True
+    assert api.consent_evidence(c, p) == 'manual_attested'
+
+
+def test_manual_attestation_needs_the_tick_and_a_valid_date(tmp_path, monkeypatch):
+    c, p, folder = _setup(tmp_path, monkeypatch)
+    for signed, date in [(False, '2026-11-18'), (True, ''), (True, 'yesterday'), (True, '18/11/2026'), ('true', '2026-11-18')]:
+        _attest(c, signed, date)
+        assert api.consent_evidence(c, p) == '', (signed, date)
+
+
+def test_unticking_the_box_withdraws_an_attestation_and_a_stub_file_adds_nothing(tmp_path, monkeypatch):
+    c, p, folder = _setup(tmp_path, monkeypatch)
+    _attest(c)
+    (folder / SIGNED).write_bytes(b'%PDF-1.4 stub')
+    assert api.consent_evidence(c, p) == 'manual_attested'   # the stub is not app evidence
+    _attest(c, signed=False)
+    assert api.consent_evidence(c, p) == ''
+
+
+def test_app_artifact_wins_over_attestation(tmp_path, monkeypatch):
+    c, p, folder = _setup(tmp_path, monkeypatch)
+    _attest(c)
+    _pdf(folder / SIGNED)
+    assert api.consent_evidence(c, p) == 'app_signed'
 
 
 def _synthetic_consent_template(base):
@@ -122,5 +157,7 @@ def test_artifact_from_the_real_consent_sign_path_counts_as_held(tmp_path, monke
     result = consent_sign.sign(c, p, base64.b64encode(_png()).decode('ascii'), record['revision'])
     assert result['file'] == SIGNED.replace('One', 'Two')
     assert api.consent_held(c, p) is True               # the app's own signed artifact is accepted
+    assert api.consent_evidence(c, p) == 'app_signed'
     (folder / result['file']).unlink()
-    assert api.consent_held(c, p) is False
+    assert api.consent_evidence(c, p) == 'manual_attested'  # flag and date remain, so only the pharmacist's attestation
+    assert api.consent_held(c, p) is True   # attested only; evidence is reported separately

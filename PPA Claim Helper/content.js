@@ -13,7 +13,7 @@ function setText(id, value) {
 function tick(id, on) { const e = document.getElementById(id); if (e && e.checked !== !!on) e.click(); }
 
 function fill(c) {
-  // Only tick the declaration when HMR Desk holds signed consent for this patient.
+  // Tick only when HMR Desk records signed consent: an app-signed PDF, or the pharmacist's dated attestation (consentEvidence says which).
   const consentRecorded = c.consentHeld === true;
   if (consentRecorded) tick('writtenPatientConsentHeld_0', true);
   const map = {

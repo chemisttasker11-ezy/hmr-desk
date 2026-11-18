@@ -195,23 +195,13 @@ def mims_lists(conn):
 
 
 
+def consent_evidence(conn, p):
+    import consent_evidence as evidence
+    return evidence.consent_evidence(conn, p)
+
+
 def consent_held(conn, p):
-    """True only for signed consent the app itself saved: the interview records consent.signed
-    and the exact file consent_sign writes ('PPA Consent - <name> signed.pdf') exists in this
-    patient's folder as a readable PDF with the signature image on its signature page.
-    A renamed patient, a missing or replaced file, or an unrelated file with 'signed' in its
-    name does not count."""
-    try:
-        data = records.get_json(conn, p['id'], 'interview.json') or {}
-        if data.get('consent', {}).get('signed') is not True: return False
-        import consent_sign, fitz
-        path = consent_sign.unsigned_path(p)
-        path = path.with_name(path.stem + ' signed.pdf')
-        if not path.is_file(): return False
-        with fitz.open(path) as pdf:
-            return len(pdf) >= 2 and bool(pdf[1].get_images())
-    except Exception:
-        return False
+    return consent_evidence(conn, p) != ''
 
 
 def claim_list(conn):
@@ -230,7 +220,7 @@ def claim_list(conn):
             'referral': claims_helper.iso(p['referral_date']), 'gpProvider': provider.group(1).strip() if provider else '',
             'gpGiven': gp_given, 'gpFamily': gp_family, 'suburb': match.group(2) if match else suburb,
             'postcode': p['postcode'] or (match.group(1) if match else ''),
-            'reasons': record.reasons(spec) if spec.get('reason') else [], 'consentHeld': consent_held(conn, p), 'reasonOther': '', 'outcomes': outcomes, 'outcomeOther': other})
+            'reasons': record.reasons(spec) if spec.get('reason') else [], 'consentHeld': consent_held(conn, p), 'consentEvidence': consent_evidence(conn, p), 'reasonOther': '', 'outcomes': outcomes, 'outcomeOther': other})
     return result
 
 def meta(conn, key, default):
