@@ -101,7 +101,7 @@ const views = {},
   queues = {},
   saved = {};
 async function api(method, apiPath, body) {
-  if (!['GET', 'POST'].includes(method) || !/^\/api\/[a-zA-Z0-9_/?=&%.-]*$/.test(apiPath))
+  if (!['GET', 'POST'].includes(method) || !/^\/api\/[a-zA-Z0-9_/?=&%.-]*$/.test(apiPath) || !require('./src/api-route').isCanonicalApiRoute(apiPath))
     throw Error('Invalid API request');
   const token = process.env.HMR_TOKEN ?? (await fsp.readFile(config.tokenFile, 'utf8')).trim();
   const response = await fetch((process.env.HMR_API || config.api).replace(/\/$/, '') + apiPath, {
@@ -197,7 +197,7 @@ prodaLogin = require('./src/proda-login')({
   getWindow: () => win,
 });
 ipcMain.handle('api', async (e, method, p, b) => {
-  if (e.sender !== win.webContents || p === '/api/referrals/review' || p.startsWith('/api/backups/') || (p.startsWith('/api/records/') && p !== '/api/records/status') || (p.startsWith('/api/storage/') && p !== '/api/storage/status') ||
+  if (e.sender !== win.webContents || !require('./src/api-route').isCanonicalApiRoute(p) || p === '/api/referrals/review' || p.startsWith('/api/backups/') || (p.startsWith('/api/records/') && p !== '/api/records/status') || (p.startsWith('/api/storage/') && p !== '/api/storage/status') ||
       (method === 'POST' && p.endsWith('/pathology/sources')) ||
       (method === 'POST' && p === '/api/templates/register') ||
       require('./src/control').isPrivateApiRoute(p)) throw Error('Forbidden');
