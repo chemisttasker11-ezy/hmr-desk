@@ -5,6 +5,7 @@ report_auth.check_sent. This reads the same recorded build evidence and lists
 reasons it no longer matches, so screens do not show an old report as current.
 """
 import json
+import logging
 from pathlib import Path
 
 import interview
@@ -15,6 +16,15 @@ import report_auth
 import reconciliation
 
 READY_NOTE = 'Checklist of recorded state only. It is not clinical sign-off and does not approve the report.'
+log = logging.getLogger('hmr.report_status')
+
+
+def _unverifiable(where, error):
+    # Display only: whatever cannot be read is shown as unknown / cannot_verify, never as current or ready.
+    # Log the failing step and error type only, not the message (it can carry a patient file path).
+    log.warning('report status could not check %s (%s)', where, type(error).__name__)
+
+
 NOTE = 'Display status only. Pharmacist sign-off and sending are still checked separately.'
 
 
@@ -52,7 +62,8 @@ def _reasons(conn, patient, detail):
             reasons.append('source_files_changed')
         if detail.get('clinical_snapshot_sha256') != report_auth.clinical_snapshot_hash(conn, patient):
             reasons.append('clinical_record_changed')
-    except (OSError, ValueError, TypeError):
+    except Exception as error:  # an unreadable file or record is not a reason to fail the whole status
+        _unverifiable('build evidence', error)
         reasons.append('cannot_verify')
     return reasons
 
@@ -64,7 +75,8 @@ def _item(key, label, state):
 def _safe(key, label, check):
     try:
         return _item(key, label, check())
-    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+    except Exception as error:
+        _unverifiable(key, error)
         return _item(key, label, 'unknown')
 
 
