@@ -90,3 +90,28 @@ def test_confirmed_intake_medicines_become_unconfirmed_rows_exactly_as_entered(t
     reviewed.update(medicines='x'*401)
     (folder / 'referral_source.json').write_text(json.dumps({'clinical_review':reviewed}))
     assert interview.blank(conn,patient)['meds'] == []
+
+
+def test_saved_edits_to_reused_medicine_rows_survive_reopen(tmp_path,monkeypatch):
+    folder = tmp_path / 'workspace' / 'TO SORT' / 'Synthetic'
+    folder.mkdir(parents=True)
+    monkeypatch.setattr(db,'BASE',str(tmp_path / 'workspace'))
+    monkeypatch.setattr(db,'DATA_DIR',str(tmp_path / 'userdata'))
+    monkeypatch.setattr(interview,'referral_text',lambda folder:(None,[]))
+    conn = db.connect(str(tmp_path / 'userdata' / 'hmr.db'))
+    with conn:
+        pid=conn.execute("INSERT INTO patients(key,name,folder) VALUES (?,?,?)",
+                         ('synthetic','Synthetic Patient','TO SORT/Synthetic')).lastrowid
+    patient=conn.execute('SELECT * FROM patients WHERE id=?',(pid,)).fetchone()
+    reviewed={'confirmed':True,'source_page':1,'reviewed_by':'Synthetic Pharmacist','allergies_status':'unknown',
+              'conditions':'','allergies':'','observations':'','medicines':'Synthetic Medicine A - Take daily'}
+    (folder / 'referral_source.json').write_text(json.dumps({'clinical_review':reviewed}))
+    record=interview.load(conn,patient)
+    record['meds'][0][0]='Synthetic Medicine A 10 mg'
+    record['meds'][0][1]='Take daily'
+    interview.save(conn,patient,record); conn.commit()
+    # Change the review text afterwards: a saved interview must not be rebuilt from it.
+    reviewed['medicines']='Synthetic Medicine B - Take nightly'
+    (folder / 'referral_source.json').write_text(json.dumps({'clinical_review':reviewed}))
+    again=interview.load(conn,patient)
+    assert [r[:2] for r in again['meds']] == [['Synthetic Medicine A 10 mg','Take daily']]
