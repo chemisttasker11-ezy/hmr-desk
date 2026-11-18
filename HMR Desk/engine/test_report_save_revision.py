@@ -79,3 +79,17 @@ def test_save_without_expected_revision_still_works(tmp_path, monkeypatch):
         loaded['reason'] = 'Unconditional'
         report.save(conn, patient, loaded); conn.commit()
         assert report.load(conn, patient)['reason'] == 'Unconditional'
+
+
+def test_save_and_refresh_return_the_revision_so_the_next_conditional_save_succeeds(tmp_path, monkeypatch):
+    connection = _setup(tmp_path, monkeypatch)
+    with connection() as conn:
+        patient, loaded = _saved_report(conn)
+        first = dict(loaded, reason='Two', expected_revision=loaded['revision'])
+        saved = report.save(conn, patient, first)
+        assert saved['revision'] == records.revision(conn, patient['id'], 'report_spec.json')
+        second = dict(saved, reason='Three', expected_revision=saved['revision'])
+        saved = report.save(conn, patient, second)
+        refreshed = report.refresh(conn, patient)
+        assert refreshed['revision'] == records.revision(conn, patient['id'], 'report_spec.json')
+        report.save(conn, patient, dict(refreshed, reason='Four', expected_revision=refreshed['revision']))

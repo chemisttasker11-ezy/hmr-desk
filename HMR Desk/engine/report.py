@@ -105,7 +105,7 @@ def _save(conn, patient, data):
     records.put_json(conn, patient['id'], 'report_spec.json', data)
     db.log(conn, patient['id'], 'report_saved', {}, 'api')
     conn.commit()
-    return data
+    return dict(data, revision=records.revision(conn, patient['id'], 'report_spec.json'))  # the caller's next conditional save needs it
 
 def placeholders(data):
     return manual_defaults.unresolved(data)
@@ -295,9 +295,9 @@ def _refresh(conn, patient):
         data['out'] = str(folder / stored.name)  # a restored or moved workspace must not keep a path outside the patient folder
     data.update(derived, medicine_snapshot=medicine_snapshot.snapshot(record), medicine_snapshot_sha256=medicine_snapshot.digest(medicine_snapshot.snapshot(record)), interview_revision=record['revision'], interview_reason=record['details']['reason'],
                 pathology_revision=pathology_records.revision(conn, patient))
-    save(conn, patient, data)
+    saved = save(conn, patient, data)
     db.log(conn, patient['id'], 'report_refreshed', {}, 'job')
-    return data
+    return saved
 
 def _read(path):
     stamp = path.stat().st_mtime_ns

@@ -437,3 +437,20 @@ test('report editor shows the follow-up decision only for specs that carry it, a
   vm.runInContext("reportRecord = { followup_decision: '' }", context);
   assert.match(vm.runInContext('followupDecisionHtml()', context), /data-followup-decision/);
 });
+
+test('report autosave sends the revision it read as expected_revision and adopts the one returned', async () => {
+  const vm = require('node:vm'), fs = require('node:fs'), H = require('../renderer/helpers');
+  const posts = [], store = {};
+  const context = vm.createContext({ H, esc: H.esc, document: { addEventListener() {} }, page: 'report_editor', $: () => null,
+    localStorage: { getItem: k => store[k] ?? null, setItem: (k, v) => { store[k] = v; }, removeItem: k => { delete store[k]; } },
+    hmr: { api: async (method, url, body) => { posts.push([method, url, body]); return { ...body, revision: 'r' + posts.length }; } },
+    errorText: String });
+  vm.runInContext(fs.readFileSync(require.resolve('../renderer/report-editor.js'), 'utf8'), context);
+  vm.runInContext("reportId = '7'; reportRecord = { revision: 'a'.repeat(64), reason: 'one', issues: [] }; reportSaver.reset(reportRecord);", context);
+  vm.runInContext("reportRecord.reason = 'two'; reportSaver.changed()", context);
+  assert.equal(await vm.runInContext('reportSaver.save(true)', context), true);
+  assert.equal(posts[0][2].expected_revision, 'a'.repeat(64));
+  vm.runInContext("reportRecord.reason = 'three'; reportSaver.changed()", context);
+  assert.equal(await vm.runInContext('reportSaver.save(true)', context), true);
+  assert.equal(posts[1][2].expected_revision, 'r1');
+});
