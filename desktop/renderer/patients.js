@@ -236,6 +236,9 @@ async function showPatient(id, action, background = false) {
   const listPatient = typeof patients !== 'undefined' ? patients.find(item => String(item.id) === String(p.id)) : null;
   const proposedNext = String(p.next_step || listPatient?.next_step || p.stage_step || '').toLowerCase().replaceAll('_', ' ');
   const followupNext = p.followups?.next_action;
+  const reportWorkflow = H.reportWorkflowStatus(p.state, (p.steps || []).find((step) => step.name === 'report_build'), reportCurrency);
+  const next = proposedNext === 'sign off' && !reportWorkflow.canSign && ['visited', 'report_drafted'].includes(p.state)
+    ? 'build report' : proposedNext;
   const aliases = {
     'collect pathology': 'pathology',
     'read reply': 'conversation',
@@ -276,9 +279,6 @@ async function showPatient(id, action, background = false) {
   }
   const status = H.stageText(p);
   const steps = Object.fromEntries((p.steps || []).map((step) => [step.name, step]));
-  const reportWorkflow = H.reportWorkflowStatus(p.state, steps.report_build, reportCurrency);
-  const next = proposedNext === 'sign off' && !reportWorkflow.canSign && ['visited', 'report_drafted'].includes(p.state)
-    ? 'build report' : proposedNext;
   const aiInfo = (name) => {
     const agentName = agents.per_step?.[name] || agents.default;
     const agent = (agents.agents || []).find(a => a.name === agentName && a.enabled);
