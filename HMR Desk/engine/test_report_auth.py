@@ -61,9 +61,13 @@ def case(tmp_path, monkeypatch):
     patient = conn.execute('SELECT * FROM patients WHERE id=?', (pid,)).fetchone()
     records.put(conn, pid, 'report_spec.json', spec_bytes); conn.commit()
     # The pharmacist explicitly acknowledged this synthetic medicine snapshot.
-    record = {'meds': [], 'other_meds': [],
+    record = {'meds': [], 'other_meds': [], 'header': {'gp': 'Dr Synthetic', 'dob': '01-Jan-1950', 'visit': '12/11/2026 10:00'},
               'details': {'meds': [], 'other_meds': []}}
     monkeypatch.setattr(report_auth.interview, 'load', lambda conn, patient: record)
+    # Sign-off compares the report's patient, GP and date blocks with the current record, so the spec carries them.
+    import report
+    spec_bytes = json.dumps(report._demographics(conn, patient, record)).encode()
+    records.put(conn, pid, 'report_spec.json', spec_bytes); conn.commit()
     review = reconciliation.acknowledge(record, reconciliation.digest(record), 'Synthetic Pharmacist')
     records.put(conn, pid, 'reconciliation_review.json', json.dumps(review).encode()); conn.commit()
     # Existing report event was recorded before the synthetic interview fixture
@@ -72,6 +76,7 @@ def case(tmp_path, monkeypatch):
     latest = conn.execute("SELECT id,detail FROM events WHERE patient_id=? AND type='report_build' ORDER BY id DESC LIMIT 1",(pid,)).fetchone()
     event_detail = json.loads(latest['detail'])
     event_detail['clinical_snapshot_sha256'] = source_contract_hash
+    event_detail['report_spec_sha256'] = digest(spec_bytes)
     with conn:
         conn.execute('UPDATE events SET detail=? WHERE id=?',(json.dumps(event_detail),latest['id']))
     request = {'action':'signed_off', 'report_file':word.name,
@@ -129,3 +134,31 @@ def test_report_source_pdf_change_invalidates_signoff(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match='Original referral or pathology source'):
         report_auth.check_approval(conn, patient, body)
     conn.close()
+
+
+def test_signoff_refuses_unresolved_demographic_mismatch_and_honours_a_bound_keep(tmp_path, monkeypatch):
+    import report
+    conn, patient, folder, body = case(tmp_path, monkeypatch)
+    spec = json.loads(records.get(conn, patient['id'], 'report_spec.json'))
+
+    def current():
+        return conn.execute('SELECT * FROM patients WHERE id=?', (patient['id'],)).fetchone()
+
+    def record_changed(gp):
+        # The record change also moves the clinical snapshot hash; model a rebuild so only the report text is stale.
+        with conn:
+            conn.execute('UPDATE patients SET gp=? WHERE id=?', (gp, patient['id']))
+            latest = conn.execute("SELECT id,detail FROM events WHERE patient_id=? AND type='report_build' ORDER BY id DESC LIMIT 1", (patient['id'],)).fetchone()
+            detail = json.loads(latest['detail']); detail['clinical_snapshot_sha256'] = report_auth.clinical_snapshot_hash(conn, current())
+            conn.execute('UPDATE events SET detail=? WHERE id=?', (json.dumps(detail), latest['id']))
+    record_changed('Dr Synthetic Corrected')
+    with pytest.raises(ValueError, match='differs from the patient record'):
+        report_auth.check_approval(conn, current(), body)
+    # a deliberate keep, recorded through the engine, is bound to the exact text and the record value
+    with conn:
+        acks = {m['key']: report._ack_hash(m['key'], m['report'], m['record']) for m in report.demographic_mismatches(conn, current(), spec)}
+        records.put_json(conn, patient['id'], report.ACK_RECORD, acks)
+    assert report_auth.check_approval(conn, current(), body)['reviewer'] == 'Synthetic Pharmacist'
+    record_changed('Dr Synthetic Third')
+    with pytest.raises(ValueError, match='differs from the patient record'):
+        report_auth.check_approval(conn, current(), body)

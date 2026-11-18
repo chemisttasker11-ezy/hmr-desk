@@ -278,6 +278,7 @@ def report_build(patient_id, pdf=False):
             'pathology_revision': pathology_records.revision(conn, p),
             'source_files_sha256': report_auth.source_snapshot(conn, p),
             'clinical_snapshot_sha256': report_auth.clinical_snapshot_hash(conn, p),
+            'demographics': report.demographic_status(conn, p, data),  # block name -> matches/kept/unresolved, no text
         }
         conn.rollback()  # end the read snapshot before rendering; later writes (events, state) must not be blocked by it
         from pathlib import PureWindowsPath
@@ -344,6 +345,7 @@ def report_build(patient_id, pdf=False):
             'template_approved': bool(approved),
             'source_files_sha256': snapshot['source_files_sha256'],
             'clinical_snapshot_sha256': snapshot['clinical_snapshot_sha256'],
+            'demographics': snapshot['demographics'],
         }
         db.log(conn, patient_id, 'report_build', evidence, 'job')
         return output

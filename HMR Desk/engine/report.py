@@ -1,5 +1,6 @@
 """Local report editor data and reusable finding search."""
 import datetime as dt
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -52,6 +53,7 @@ def load(conn, patient, ai=False):
     if not ai: data = with_trusted_policy(conn, patient, data)
     if not ai: data['followup_text_reviewed'] = manual_defaults.review_valid(data)
     if not ai: data['revision'] = records.revision(conn, patient['id'], 'report_spec.json')
+    if not ai: data['demographic_mismatches'] = demographic_mismatches(conn, patient, data)
     if not ai: data['interview_newer'] = 'interview_revision' in data and interview.revision(conn, patient) != data['interview_revision']
     if not ai:
         import pathology_records
@@ -94,7 +96,7 @@ def _save(conn, patient, data):
     if expected is not None and not isinstance(expected, str): raise ValueError('invalid expected_revision')
     data = with_trusted_policy(conn, patient, data)
     validate(data)
-    data = manual_defaults.apply_followup_decision({k: v for k, v in data.items() if k not in ('interview_newer', 'pathology_newer', 'revision', 'expected_revision')})
+    data = manual_defaults.apply_followup_decision({k: v for k, v in data.items() if k not in ('interview_newer', 'pathology_newer', 'revision', 'expected_revision', 'demographic_mismatches', 'demographic_conflicts')})
     if expected is not None:
         # Compare and write in one write transaction so two saves cannot both pass the check.
         if not conn.in_transaction: conn.execute('BEGIN IMMEDIATE')
@@ -303,6 +305,62 @@ def _merge_demographics(data, new, replace=()):
         else: conflicts.append({'key': key, 'label': DEMOGRAPHIC_LABELS[key], 'report': current, 'record': new[key]})
     data['demographics_generated'] = new
     return conflicts
+
+ACK_RECORD = 'report_spec.demographics_ack.json'
+
+def _ack_hash(key, text, record_value):
+    """A keep decision is bound to this block's exact text and to what the patient record says now."""
+    return hashlib.sha256(json.dumps([key, text, record_value], ensure_ascii=False).encode('utf-8')).hexdigest()
+
+def demographic_mismatches(conn, patient, data):
+    """Blocks whose text differs from what the current patient record produces. Response-only. A block is
+    acknowledged only while the exact text and the exact record value are unchanged since the pharmacist kept it."""
+    record = interview.load(conn, patient)
+    new = _demographics(conn, patient, record)
+    acks = records.get_json(conn, patient['id'], ACK_RECORD)
+    acks = acks if isinstance(acks, dict) else {}
+    result = []
+    for key, label in DEMOGRAPHIC_LABELS.items():
+        text = data.get(key, '')
+        if text == new[key]: continue
+        result.append({'key': key, 'label': label, 'report': text, 'record': new[key],
+                       'acknowledged': acks.get(key) == _ack_hash(key, text, new[key])})
+    return result
+
+def unresolved_demographics(conn, patient, data):
+    return [m['key'] for m in demographic_mismatches(conn, patient, data) if not m['acknowledged']]
+
+def demographic_status(conn, patient, data):
+    """Key -> matches/kept/unresolved, for build evidence. Carries no patient text."""
+    status = {key: 'matches' for key in DEMOGRAPHIC_LABELS}
+    for m in demographic_mismatches(conn, patient, data): status[m['key']] = 'kept' if m['acknowledged'] else 'unresolved'
+    return status
+
+def resolve_demographics(conn, patient, action, keys):
+    """Per-block choice. 'replace' writes the record's value into the block; 'keep' records an acknowledgement bound to
+    the exact text and record value. Nothing else in the report changes."""
+    if action not in ('replace', 'keep') or not isinstance(keys, list) or not keys or any(k not in DEMOGRAPHIC_LABELS for k in keys):
+        raise ValueError('invalid demographic choice')
+    with _lock:
+        data = records.get_json(conn, patient['id'], 'report_spec.json')
+        if data is None: raise ValueError('report spec does not exist')
+        validate(data)
+        mismatches = {m['key']: m for m in demographic_mismatches(conn, patient, data)}
+        if any(k not in mismatches for k in keys): raise ValueError('That block already matches the patient record; reload the report')
+        if action == 'replace':
+            for k in keys: data[k] = mismatches[k]['record']
+            generated = dict(data.get('demographics_generated') or {})
+            generated.update({k: mismatches[k]['record'] for k in keys})
+            data['demographics_generated'] = generated
+            _save(conn, patient, data)
+        else:
+            acks = records.get_json(conn, patient['id'], ACK_RECORD)
+            acks = dict(acks) if isinstance(acks, dict) else {}
+            for k in keys: acks[k] = _ack_hash(k, mismatches[k]['report'], mismatches[k]['record'])
+            records.put_json(conn, patient['id'], ACK_RECORD, acks)
+            db.log(conn, patient['id'], 'report_demographics_kept', {'blocks': sorted(keys)}, 'api')  # block names only, no text
+            conn.commit()
+        return load(conn, patient)
 
 def refresh(conn, patient, replace=()):
     with _lock: return _refresh(conn, patient, replace)

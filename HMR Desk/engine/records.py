@@ -19,6 +19,7 @@ RECORD_PATTERNS = (
     r'interview\.json(\.bak)?',
     r'report_spec(\.ai)?\.json(\.bak)?',
     r'report_spec\.policy\.json',
+    r'report_spec\.demographics_ack\.json',
     r'confirmed_meds\.json',
     r'followup[12]\.json',
     r'pathology_sources\.json',
