@@ -1,4 +1,5 @@
 """Synthetic medicine reference data only. No licensed terminology is used or bundled."""
+from contextlib import closing
 import os, sys, tempfile, sqlite3
 from pathlib import Path
 sys.path.insert(0, os.path.dirname(__file__))
@@ -271,14 +272,16 @@ def test_provenance_keeps_source_and_installed_hashes_distinct_and_source_authen
         target = fresh(t)
         new = candidate(t)
         src_hash = hashlib.sha256(new.read_bytes()).hexdigest()
-        before = sqlite3.connect(new).execute('SELECT source, release, sha256, source_url, row_count FROM source_release ORDER BY source').fetchall()
+        with closing(sqlite3.connect(new)) as _c:
+            before = _c.execute('SELECT source, release, sha256, source_url, row_count FROM source_release ORDER BY source').fetchall()
         result = ref.install(str(new))
         assert result['provenance_recorded']
         record = json.loads((Path(t) / 'medicine-reference.install.json').read_text(encoding='utf-8'))
         assert record['source_sha256'] == src_hash == hashlib.sha256(new.read_bytes()).hexdigest()
         assert record['installed_sha256'] == hashlib.sha256(target.read_bytes()).hexdigest() != record['source_sha256']
         assert record['installed_bytes'] == target.stat().st_size and record['source_bytes'] == new.stat().st_size
-        after = sqlite3.connect(target).execute('SELECT source, release, sha256, source_url, row_count FROM source_release ORDER BY source').fetchall()
+        with closing(sqlite3.connect(target)) as _c:
+            after = _c.execute('SELECT source, release, sha256, source_url, row_count FROM source_release ORDER BY source').fetchall()
         assert after == before  # the source import authenticity record is exactly as the operator's file had it
 
 
