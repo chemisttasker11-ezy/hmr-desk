@@ -187,6 +187,17 @@ const H = (() => {
     'report_build',
     'claim',
   ];
+  // The submission note "N task(s) queued (...)" is written once. Shown later it would still say
+  // queued after the tasks finished, so describe the current state of the task list instead.
+  function runStatusText(message, tasks) {
+    const text = String(message || '');
+    const m = /^(\d+) task\(s\) queued( \([^\n]*\))?\./.exec(text);
+    if (!m || !Array.isArray(tasks)) return text;
+    const active = tasks.filter((t) => ['queued', 'running', 'waiting'].includes(t && t.state)).length;
+    const detail = m[2] || '';
+    const head = active ? `${m[1]} task(s) submitted${detail}. ${active} still queued, running or waiting.` : `${m[1]} task(s) submitted${detail}. None still queued, running or waiting.`;
+    return head + text.slice(m[0].length);
+  }
   function buildOutcomeText(result, pdf) {
     const first = String((result && result.output) || '').split(/\r?\n/).map((line) => line.trim()).find(Boolean) || '';
     if (result && result.state === 'done') return `${pdf ? 'Word and PDF built' : 'Word built'}${first ? ': ' + first : ''}. The files are in the patient folder.`;
@@ -731,6 +742,7 @@ const H = (() => {
     bulkSteps,
     patientPathway,
     buildOutcomeText,
+    runStatusText,
     commonStep,
     suburb,
     displayAddress,
