@@ -123,3 +123,20 @@ def test_line_prototype_gives_each_line_its_own_formatted_paragraph(tmp_path):
     assert [p.text for p in paragraphs] == ['Synthetic Person', 'DOB: UNKNOWN']
     assert paragraphs[0].runs[0].bold and not paragraphs[1].runs[0].bold
     assert '{{HMR_' not in '\n'.join(p.text for p in result.paragraphs)
+
+
+def test_block_without_finding_placeholders_is_rejected(tmp_path):
+    import pytest
+    template = tmp_path / 't.docx'
+    make_prototype_template(template)
+    doc = Document(template)
+    for p in doc.paragraphs:
+        if '{{HMR_ISSUE_RATIONALE}}' in p.text:
+            p._p.getparent().remove(p._p)
+    doc.save(template)
+    data = sample()
+    data['issues'] = [{'title': 'T', 'rec': 'R', 'rationale': 'X'}]
+    with pytest.raises(ValueError, match='HMR_ISSUE_RATIONALE'):
+        renderer.render(data, tmp_path / 'r.docx', template)
+    with pytest.raises(ValueError, match='HMR_ISSUE_RATIONALE'):
+        renderer.validate_layout(template)
