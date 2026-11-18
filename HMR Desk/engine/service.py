@@ -9,8 +9,10 @@ import os
 import re
 import secrets
 import subprocess
+import sys
 import threading
 import time
+from pathlib import Path
 from urllib.parse import urlsplit, parse_qs
 
 import api
@@ -211,7 +213,23 @@ def maintenance(conn):
             logging.exception('%s failed', name)
 
 
+def self_test_pdf(directory):
+    """Packaged-engine check used by CI: convert a synthetic Word file with this executable's own runtime and the
+    configured converter. Touches no patient data, database or network; prints the masked reason on failure."""
+    import docx, pdf_export
+    folder = Path(directory); folder.mkdir(parents=True, exist_ok=True)
+    source = folder / "Synthetic O'Brien & Test.docx"
+    document = docx.Document(); document.add_paragraph('Synthetic packaged-engine PDF self-test. No patient data.'); document.save(source)
+    try:
+        result = pdf_export.convert(source, source.with_suffix('.pdf'))
+    except Exception as exc:
+        print('FAIL: ' + pdf_export.failure_text(exc)); return 1
+    print('PASS: packaged engine produced a PDF (%s bytes)' % result['bytes']); return 0
+
+
 def main():
+    if len(sys.argv) == 3 and sys.argv[1] == '--self-test-pdf':
+        sys.exit(self_test_pdf(sys.argv[2]))
     STOP_EVENT.clear()
     if os.name == 'nt':  # child tools (tailscale, the renderers) must not flash a console window every minute
         popen_init = subprocess.Popen.__init__
