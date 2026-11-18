@@ -62,7 +62,7 @@ test('reports list fails closed when freshness cannot be fetched', () => {
 
 test('reports list enables sign-off only for a verified current build', () => {
   const html = reportCard(currency('current'));
-  assert.match(html, /data-sign-off="7">Signed off/);
+  assert.match(html, /data-sign-off="7"\s*>Signed off/);
   assert.match(html, /Build Word &#10003; Done/);
 });
 
@@ -78,7 +78,7 @@ async function patientOverview(status) {
     ],
   };
   const context = vm.createContext({
-    H, esc: H.esc, date: H.date, page: 'patients', selected: '', detailTab: 'Overview',
+    H, esc: H.esc, date: H.date, localDate: H.localDate, page: 'patients', selected: '', detailTab: 'Overview',
     formOpen: false, patients: [{ id: 7, name: patient.name, next_step: 'sign off' }],
     $: (id) => id === 'detail' ? detail : id === 'offer-form' ? { addEventListener() {} } : null,
     document: { querySelector: () => null, querySelectorAll: () => [] },
