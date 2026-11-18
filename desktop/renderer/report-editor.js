@@ -284,8 +284,8 @@ document.addEventListener('input', (event) => {
     (async () => {  // the engine fills only blank or unedited generated wording, so re-read it
       if (!(await reportSaver.save(true))) return;
       const fresh = await hmr.api('GET', `/api/patients/${encodeURIComponent(reportId)}/report`);
-      reportRecord.followup = fresh.followup;
-      reportSaver.reset(reportRecord);
+      // Keep edits made while this ran (a later tick or typing). reset() would mark them saved.
+      reportSaver.adopt({ followup: fresh.followup });
       renderReport();
     })().catch((e) => alert(errorText(e)));
     return;

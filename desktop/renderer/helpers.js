@@ -588,6 +588,23 @@ const H = (() => {
           return true;
         } catch (_) { status(storageMessage); return false; }
       },
+      // Take server-derived fields into both the record and the saved baseline without
+      // touching edits made while the request was in flight. A field the user has
+      // changed since the last save is left alone and stays dirty.
+      adopt(patch) {
+        const record = getRecord();
+        if (!record || !patch || conflicts.length) return false;
+        let base;
+        try { base = JSON.parse(saved); } catch (_) { return false; }
+        let adopted = true;
+        for (const [field, value] of Object.entries(patch)) {
+          if (JSON.stringify(record[field]) !== JSON.stringify(base[field])) { adopted = false; continue; }
+          record[field] = JSON.parse(JSON.stringify(value));
+          base[field] = JSON.parse(JSON.stringify(value));
+        }
+        saved = JSON.stringify(base);
+        return adopted;
+      },
       dirty,
       hasConflict: () => conflicts.length > 0,
       save,
