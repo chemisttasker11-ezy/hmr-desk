@@ -2,14 +2,14 @@
 
 Only PBS listing rows can be grouped, and only when every identity field below is
 present and exactly equal after trimming. Missing or uncertain metadata keeps the
-row on its own. Strength and pack text are never parsed: they are compared as the
+row on its own. Strength text is never parsed: it is compared as the
 source wrote them. Nothing is merged in storage; every listing keeps its own
 source, code and release, so the chosen listing stays traceable.
 """
 import json
 
 # Fields that must match exactly for two PBS listings to share one line.
-_IDENTITY_DETAIL_FIELDS = ('schedule_form', 'li_form', 'pack_size', 'manner_of_administration')
+_IDENTITY_DETAIL_FIELDS = ('schedule_form', 'li_form', 'manner_of_administration')
 _REQUIRED_ANY = ('schedule_form', 'li_form')   # at least one form/strength text is needed
 _LISTING_FIELDS = ('source', 'code', 'display', 'kind', 'generic_name', 'brand_name', 'dose_form', 'release')
 
@@ -86,9 +86,9 @@ def group_rows(rows, max_groups):
         if key is not None:
             details = _details(row)
             form = _text(details.get('schedule_form')) or _text(details.get('li_form'))
-            pack, route = _text(details.get('pack_size')), _text(details.get('manner_of_administration'))
-            # Fields that keep two groups apart are shown, so no two lines read the same.
-            entry['label'] = ' | '.join(filter(None, [key[3], form, 'pack ' + pack if pack else None, route.lower() if route else None]))
+            route = _text(details.get('manner_of_administration'))
+            # Pack, bottle and blister size never separate lines. Form and route do.
+            entry['label'] = ' | '.join(filter(None, [key[3], form, route.lower() if route else None]))
             entry['generic_name'], entry['brand_name'] = key[2], key[3]
             index[key] = len(groups)
         else:

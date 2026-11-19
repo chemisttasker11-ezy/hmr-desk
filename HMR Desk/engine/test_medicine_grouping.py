@@ -34,14 +34,14 @@ def test_same_product_different_pbs_codes_share_one_group_and_keep_listings():
     assert len(groups) == 1 and not more and groups[0]['grouped']
     assert [l['pbs_code'] for l in groups[0]['listings']] == ['1001A', '1002B', '1003C']
     assert [l['program_code'] for l in groups[0]['listings']] == ['GE', 'GE', 'S100']
-    assert groups[0]['label'] == 'Brandex | 20 mg tablet, 30 | pack 30'
+    assert groups[0]['label'] == 'Brandex | 20 mg tablet, 30'
 
 
-def test_strength_form_pack_brand_and_generic_differences_stay_separate():
-    rows = [pbs('1'), pbs('2', form='40 mg tablet, 30'), pbs('3', pack='60'), pbs('4', brand='Otherbrand'),
+def test_strength_form_brand_generic_and_route_differences_stay_separate():
+    rows = [pbs('1'), pbs('2', form='40 mg tablet, 30'), pbs('4', brand='Otherbrand'),
             pbs('5', generic='Examplestatin calcium'), pbs('6', manner_of_administration='ORAL')]
     groups, _ = mg.group_rows(rows, 15)
-    assert len(groups) == 6 and not any(g['count'] > 1 for g in mg.finish(groups))
+    assert len(groups) == 5 and not any(g['count'] > 1 for g in mg.finish(groups))
 
 
 def test_strength_text_is_not_parsed_as_equivalent():
@@ -120,7 +120,7 @@ def test_search_route_grouped_flag_is_opt_in():
 
 def test_labels_never_carry_the_pbs_code_and_uncertain_twins_say_so():
     g, _ = mg.group_rows([pbs('1001A'), pbs('1002B')], 15)
-    assert mg.finish(g)[0]['label'] == 'Brandex | 20 mg tablet, 30 | pack 30'
+    assert mg.finish(g)[0]['label'] == 'Brandex | 20 mg tablet, 30'
     twin = lambda code: {**pbs(code), 'details': {'pbs_listed': True, 'pbs_code': code}}
     g, _ = mg.group_rows([twin('1'), twin('2')], 15)
     labels = [x['label'] for x in mg.finish(g)]
@@ -145,3 +145,10 @@ def test_suggestions_carry_groups_and_keep_candidates_unchanged():
         assert sorted(len(g['indexes']) for g in out['groups']) == [1, 2]
         assert all('|' in g['label'] and not g['label'].endswith(('A', 'B', 'D')) for g in out['groups'])
         assert set(out['candidates'][0]) == {'source', 'code', 'display', 'kind', 'generic_name', 'brand_name', 'dose_form', 'release'}
+
+
+def test_pack_size_never_separates_lines():
+    rows = [pbs('1', pack='30'), pbs('2', pack='60'), pbs('3', pack='100'), pbs('4', pack=None)]
+    groups, _ = mg.group_rows(rows, 15)
+    assert len(groups) == 1 and groups[0]['grouped'] and len(groups[0]['listings']) == 4
+    assert 'pack' not in groups[0]['label']
