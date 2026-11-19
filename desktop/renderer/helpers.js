@@ -137,6 +137,13 @@ const H = (() => {
     if (p.stage === 'archived' && !words.includes('Archived')) words.push('Archived');
     return words;
   }
+  // When no single next action is offered, say where the real choices are and open them.
+  function nextActionHint(primaryAction, otherCount) {
+    if (primaryAction) return { text: '', openOthers: false };
+    return otherCount > 0
+      ? { text: 'Check the details, then choose what happened next below.', openOthers: true }
+      : { text: 'Review this patient before continuing.', openOthers: false };
+  }
   function stageActions(p, milestones = {}) {
     const actions = {
       intake: ['offer', 'book_phone', 'decline_phone', 'call', 'hold', 'expired', 'claim_now'],
@@ -781,7 +788,7 @@ const H = (() => {
     group,
     sentence,
     steps,
-    sectionOf, toBook, stepLabel, stageText, stageClass, hasNextStep, flagWords, stageActions, urgencySort,
+    sectionOf, toBook, stepLabel, stageText, stageClass, hasNextStep, flagWords, stageActions, nextActionHint, urgencySort,
     plainSteps,
     stepName,
     taskGroups,
