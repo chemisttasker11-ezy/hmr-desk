@@ -84,5 +84,6 @@ test('suggestion panel shows one code-free line per medicine and stores the chos
   assert.equal((html.match(/data-med-suggestion/g) || []).length, 1);
   assert.match(html, /3 matching entries combined/);
   ctx.medicineLookupClick({dataset: {medSuggestion: 'meds', row: '0', candidate: '0'}});
-  assert.deepEqual(ref(record), {source: 'pbs', code: 'GE:1:9', display: 'Brandex | 20 mg tablet, 30', release: '20260101'});
+  // Deliberate change: the stored reference now also carries the catalogue's own generic/brand when every listing in the group agrees.
+  assert.deepEqual(ref(record), {source: 'pbs', code: 'GE:1:9', display: 'Brandex | 20 mg tablet, 30', release: '20260101', generic_name: 'Examplestatin', brand_name: 'Brandex'});
 });

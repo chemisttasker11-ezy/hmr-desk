@@ -61,9 +61,19 @@ def use_text(meta):
     return text
 
 REFERENCE_KEYS = {'source', 'code', 'display', 'release'}
+# Optional, catalogue-owned identity names copied from the chosen listing when every listing in the chosen group
+# agrees. Never derived from the display text. Saved references without them stay valid (nothing is migrated).
+REFERENCE_OPTIONAL_KEYS = {'generic_name', 'brand_name'}
 
 def valid_reference(ref):
-    return isinstance(ref, dict) and set(ref) == REFERENCE_KEYS and all(isinstance(v, str) and 0 < len(v) <= 400 for v in ref.values())
+    return (isinstance(ref, dict) and REFERENCE_KEYS <= set(ref) <= REFERENCE_KEYS | REFERENCE_OPTIONAL_KEYS
+            and all(isinstance(v, str) and 0 < len(v) <= 400 for v in ref.values()))
+
+def reference_identity(meta):
+    # The catalogue's own generic/brand for a linked row, or None for a part it did not record or could not settle.
+    ref = (meta or {}).get('reference')
+    if not valid_reference(ref): return {'generic_name': None, 'brand_name': None}
+    return {k: ref.get(k) for k in ('generic_name', 'brand_name')}
 
 def reference_text(meta):
     ref = (meta or {}).get('reference')

@@ -1,3 +1,14 @@
+// Catalogue-owned generic/brand for a chosen medicine group: a name is carried only when every listing in the group
+// states the same non-empty value. A group that mixes brands or generics, or leaves one blank, carries nothing for
+// that part (it stays unknown). The display label is never parsed.
+function catalogueIdentity(listings) {
+  const out = {};
+  for (const key of ['generic_name', 'brand_name']) {
+    const values = (listings || []).map(r => r && r[key]);
+    if (values.length && values.every(v => typeof v === 'string' && v.trim() && v === values[0]) && values[0].length <= 400) out[key] = values[0];
+  }
+  return out;
+}
 const medicineSuggestions = new WeakMap();
 // One line per medicine for the suggestion panel. Lines come from the engine's groups when present; older
 // proposals show each candidate. The pharmacist never sees or chooses a listing code.
@@ -41,7 +52,7 @@ async function medicineLookupClick(b) {
     if (!candidate || interviewRecord[key][i][0] !== proposal.input_text) return true;
     const line=medicineProposalLines(proposal).find(g=>g.index===Number(b.dataset.candidate)), shown=line?.label || candidate.display;
     interviewRecord[key][i][0]=shown;
-    meta.reference={source:candidate.source,code:candidate.code,display:shown,release:candidate.release};
+    meta.reference={source:candidate.source,code:candidate.code,display:shown,release:candidate.release,...catalogueIdentity((proposal.groups?.find(g=>g.indexes[0]===Number(b.dataset.candidate))?.indexes||[Number(b.dataset.candidate)]).map(n=>proposal.candidates[n]))};
     medicineSuggestions.delete(meta);interviewChanged(key);renderInterview();return true;
   }
   if (b.dataset.medUnlink !== undefined) {
@@ -67,7 +78,7 @@ async function medicineLookupClick(b) {
     const choose = (r) => {
       if (page !== 'interview' || interviewId !== patientId || interviewRecord !== record || record[key][i] !== medicine || medicine[0].trim() !== text || !out.isConnected) return;
       interviewRecord[key][i][0] = r.display;
-      interviewRecord.details[key][i].reference = { source: r.source, code: r.code, display: r.display, release: r.release };
+      interviewRecord.details[key][i].reference = { source: r.source, code: r.code, display: r.display, release: r.release, ...catalogueIdentity(r.listings || [r]) };
       interviewChanged(key); renderInterview();
     };
     // Identical PBS listings arrive as one group; each listing stays individually pickable. Older replies are flat.
@@ -81,7 +92,7 @@ async function medicineLookupClick(b) {
       const pick = g.label ? Object.assign({}, first, { display: g.label }) : first;
       label.textContent = (g.label || first.display) + (g.listings.length > 1 ? ' (' + g.listings.length + ' matching entries combined)' : '');
       const use = document.createElement('button'); use.type = 'button'; use.textContent = 'Use this';
-      use.addEventListener('click', () => choose(pick));
+      use.addEventListener('click', () => choose(Object.assign({}, pick, { listings: g.listings })));
       row.append(label, use); out.append(row);
     }
     if (found.more_available) say('More matches exist. Type more of the name to narrow the list.');

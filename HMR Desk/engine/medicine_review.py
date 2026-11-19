@@ -30,7 +30,9 @@ def proposal(conn, p):
             rows = data.get(key, []); meta = data.get('details', {}).get(key, [{} for _ in rows])
             for row, detail in zip(rows, meta):
                 status = detail.get('use_status', '')
-                if row[0].strip() and (status == 'taking' or (not status and row[actual].strip())): meds.append([row[0], ''])
+                if row[0].strip() and (status == 'taking' or (not status and row[actual].strip())):
+                    identity = interview.reference_identity(detail)  # catalogue-owned names only; otherwise the row text, as before
+                    meds.append([identity['generic_name'] or row[0], identity['brand_name'] or ''])
         usage = interview_usage(conn, p)
         stopped = {name for item in usage if item['status'] == 'not_using' for name in external_helpers.mims.ingredients(item['name'])}
         taking = {name for item in usage if item['status'] == 'taking' for name in external_helpers.mims.ingredients(item['name'])}
