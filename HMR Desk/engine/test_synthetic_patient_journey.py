@@ -188,7 +188,9 @@ def test_synthetic_pdf_referral_to_signed_sent_report(tmp_path, monkeypatch):
         stored = report.load(conn, p)
         assert not report.placeholders(stored), report.placeholders(stored)
         output = jobs.report_build(pid, pdf=True)
-        assert 'PDF' in output, output
+        # report_build names the PDF in its message only when a cleanup note is pending, so the PDF is verified from
+        # the build event and the file itself below, not from the message text.
+        assert output.startswith('Built approved-layout Word draft'), output
 
         # REAL OUTPUT: inspect both generated files, not merely an event flag.
         events = conn.execute(
