@@ -220,6 +220,15 @@ const H = (() => {
       signReason: canBuild ? reason : 'This report is not awaiting sign-off.',
     };
   }
+  // A medicine linked to a catalogue line carries the catalogue label (brand, strength, form) as its text. The medicines panel
+  // copies that text into Generic name and cannot split it without guessing, so say so beside the field. Text only.
+  const LINKED_CATALOGUE_NOTE = 'Linked catalogue line (brand, strength and form), not a generic name. Enter the generic name and brand before the eMIMS check.';
+  function linkedCatalogueNote(name, snapshotItems) {
+    const text = String(name || '').trim();
+    if (!text) return '';
+    const linked = (snapshotItems || []).some((item) => item?.metadata?.reference && String(item.values?.[0] || '').trim() === text);
+    return linked ? LINKED_CATALOGUE_NOTE : '';
+  }
   // Freshness and recorded-state checklist from GET /api/patients/<id>/report-status. Display only: it never
   // says approved or ready, and unknown or unverifiable stays visibly uncertain.
   function reportStatusHtml(status) {
@@ -801,6 +810,7 @@ const H = (() => {
     buildOutcomeText,
     runStatusText,
     reportWorkflowStatus,
+    linkedCatalogueNote,
     reportStatusHtml,
     commonStep,
     suburb,

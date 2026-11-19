@@ -105,7 +105,7 @@ async function api(method, apiPath, body) {
   if (!['GET', 'POST'].includes(method) || !/^\/api\/[a-zA-Z0-9_/?=&%.-]*$/.test(apiPath) || !require('./src/api-route').isCanonicalApiRoute(apiPath))
     throw Error('Invalid API request');
   const token = process.env.HMR_TOKEN ?? (await fsp.readFile(config.tokenFile, 'utf8')).trim();
-  const response = await fetch((process.env.HMR_API || config.api).replace(/\/$/, '') + apiPath, {
+  const response = await require('./src/read-retry').fetchWithReadRetry(fetch, method, (process.env.HMR_API || config.api).replace(/\/$/, '') + apiPath, {
     method,
     headers: { 'X-HMR-Token': token, 'Content-Type': 'application/json' },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),

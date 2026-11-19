@@ -108,6 +108,7 @@ function renderMedicines() {
         (med, i) => `<div class="medicine-row">
     <label>Generic name<input name="generic" value="${esc(med[0] || '')}"></label>
     <label>Brand<input name="brand" value="${esc(med[1] || '')}"></label>
+    ${H.linkedCatalogueNote(med[0], medicineData.medicine_snapshot?.items) ? `<p class="muted" role="note">${esc(H.linkedCatalogueNote(med[0], medicineData.medicine_snapshot?.items))}</p>` : ''}
     ${(medicineData.interview_usage || []).some(item => item.status === 'not_using') ? `<label>Only needed if saving asks for it. If this medicine shares an ingredient with one recorded as not using in the interview, enter the different medicine currently taken above and select it here<select name="alternative"><option value="">Choose if needed</option>${(medicineData.interview_usage || []).map((item, index) => item.status === 'taking' ? `<option value="${index}" ${JSON.stringify(medicineData.alternatives?.[i]) === JSON.stringify(item) ? 'selected' : ''}>${esc(item.name)} — ${esc(item.source)} — ${esc((item.directions || []).filter(Boolean).join(' | '))}</option>` : '').join('')}</select></label>` : ''}
     <button type="button" data-remove-medicine="${i}">Remove</button></div>`,
       )
