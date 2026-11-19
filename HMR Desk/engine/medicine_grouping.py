@@ -86,7 +86,9 @@ def group_rows(rows, max_groups):
         if key is not None:
             details = _details(row)
             form = _text(details.get('schedule_form')) or _text(details.get('li_form'))
-            entry['label'] = ' | '.join(filter(None, [key[3], form]))
+            pack, route = _text(details.get('pack_size')), _text(details.get('manner_of_administration'))
+            # Fields that keep two groups apart are shown, so no two lines read the same.
+            entry['label'] = ' | '.join(filter(None, [key[3], form, 'pack ' + pack if pack else None, route.lower() if route else None]))
             entry['generic_name'], entry['brand_name'] = key[2], key[3]
             index[key] = len(groups)
         else:

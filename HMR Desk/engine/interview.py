@@ -67,7 +67,11 @@ def valid_reference(ref):
 
 def reference_text(meta):
     ref = (meta or {}).get('reference')
-    return 'Reference: ' + ref['display'] + ' (' + ref['source'].upper() + ' ' + ref['code'] + ', release ' + ref['release'] + ')' if valid_reference(ref) else ''
+    if not valid_reference(ref): return ''
+    # PBS listing codes are billing identifiers with no use to the pharmacist or patient: they stay in the stored
+    # reference (provenance) but are not printed. Other sources keep their concept code.
+    ident = 'PBS' if ref['source'] == 'pbs' else ref['source'].upper() + ' ' + ref['code']
+    return 'Reference: ' + ref['display'] + ' (' + ident + ', release ' + ref['release'] + ')'
 
 PROPOSAL_CANDIDATE_KEYS = {'source', 'code', 'display', 'kind', 'generic_name', 'brand_name', 'dose_form', 'release'}
 

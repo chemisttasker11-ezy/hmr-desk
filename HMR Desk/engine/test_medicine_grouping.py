@@ -34,7 +34,7 @@ def test_same_product_different_pbs_codes_share_one_group_and_keep_listings():
     assert len(groups) == 1 and not more and groups[0]['grouped']
     assert [l['pbs_code'] for l in groups[0]['listings']] == ['1001A', '1002B', '1003C']
     assert [l['program_code'] for l in groups[0]['listings']] == ['GE', 'GE', 'S100']
-    assert groups[0]['label'] == 'Brandex | 20 mg tablet, 30'
+    assert groups[0]['label'] == 'Brandex | 20 mg tablet, 30 | pack 30'
 
 
 def test_strength_form_pack_brand_and_generic_differences_stay_separate():
@@ -120,7 +120,7 @@ def test_search_route_grouped_flag_is_opt_in():
 
 def test_labels_never_carry_the_pbs_code_and_uncertain_twins_say_so():
     g, _ = mg.group_rows([pbs('1001A'), pbs('1002B')], 15)
-    assert mg.finish(g)[0]['label'] == 'Brandex | 20 mg tablet, 30'
+    assert mg.finish(g)[0]['label'] == 'Brandex | 20 mg tablet, 30 | pack 30'
     twin = lambda code: {**pbs(code), 'details': {'pbs_listed': True, 'pbs_code': code}}
     g, _ = mg.group_rows([twin('1'), twin('2')], 15)
     labels = [x['label'] for x in mg.finish(g)]
