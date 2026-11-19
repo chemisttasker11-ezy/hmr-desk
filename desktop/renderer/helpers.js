@@ -220,6 +220,11 @@ const H = (() => {
       signReason: canBuild ? reason : 'This report is not awaiting sign-off.',
     };
   }
+  // The report editor greys both Build buttons when there are no findings. Say so beside them: a disabled button with no reason
+  // looks broken. This only explains the existing rule; it does not change which reports can be built.
+  function buildDisabledReason(findingCount) {
+    return Number(findingCount) > 0 ? '' : 'Build is off until the report has at least one finding. Add a finding to turn it on.';
+  }
   // A medicine linked to a catalogue line carries the catalogue label (brand, strength, form) as its text. The medicines panel
   // copies that text into Generic name and cannot split it without guessing, so say so beside the field. Text only.
   const LINKED_CATALOGUE_NOTE = 'Linked catalogue line (brand, strength and form), not a generic name. Enter the generic name and brand before the eMIMS check.';
@@ -811,6 +816,7 @@ const H = (() => {
     runStatusText,
     reportWorkflowStatus,
     linkedCatalogueNote,
+    buildDisabledReason,
     reportStatusHtml,
     commonStep,
     suburb,
