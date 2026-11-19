@@ -31,6 +31,7 @@ const config = loadedConfig.config;
 let engineOwner = null;
 const { start: startEngine } = require('./src/engine-owner');
 const { verifyWorkspace } = require('./src/storage-choice');
+const { listFolder } = require('./src/referral-listing');
 const { makeVault } = require('./src/draft-vault');
 // First-launch guard: Electron stores the DPAPI-wrapped key in "Local State" lazily. Until it is on disk the
 // vault refuses drafts, so a hard kill in the first session cannot leave a draft nobody can decrypt later.
@@ -219,15 +220,17 @@ ipcMain.handle('referral-pick', async (e, kind) => {
     ? { properties: ['openDirectory'] }
     : { properties: ['openFile', 'multiSelections'], filters: [{ name: 'PDF documents', extensions: ['pdf'] }] });
   if (picked.canceled) return null;
-  let paths = picked.filePaths;
-  if (kind !== 'files') paths = (await fsp.readdir(paths[0], { withFileTypes: true }))
-    .filter(entry => entry.isFile() && entry.name.toLowerCase().endsWith('.pdf'))
-    .map(entry => path.join(picked.filePaths[0], entry.name));
-  if (!paths.length) return { rows: [{ file: 'Folder', status: 'rejected', message: 'No PDFs found in this folder.' }] };
+  let paths = picked.filePaths, listing = null;
+  if (kind !== 'files') {
+    const found = await listFolder(picked.filePaths[0], fsp, path);
+    paths = found.paths;
+    listing = { found: found.found, pdfs: found.paths.length, skipped: found.skipped, skippedTotal: found.skippedTotal };
+  }
+  if (!paths.length) return { rows: [{ file: 'Folder', status: 'rejected', message: 'No PDFs found in this folder.' }], listing };
   if (paths.length > 100) throw Error(`Folder contains ${paths.length} PDFs. Choose up to 100 files at a time.`);
   const response = await api('POST', '/api/referrals/review', { paths });
   reviewedReferrals.remember(paths, response);
-  return response;
+  return listing ? { ...response, listing } : response;
 });
 ipcMain.handle('referral-drop', async (e, paths) => {
   if (e.sender !== win.webContents || !Array.isArray(paths) || !paths.length || paths.length > 100 || paths.some(p => typeof p !== 'string' || !p)) throw Error('Invalid files');
