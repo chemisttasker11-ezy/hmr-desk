@@ -296,14 +296,15 @@ async function showPatient(id, action, background = false) {
     if (a === 'edit_report') return `<button data-report-open="${esc(p.id)}">Edit report</button>`;
     if (a === 'build_report') {
       const ready = !!steps.report_build?.ready || !!steps.report_build?.done;
-      return `<button data-report-open="${esc(p.id)}" data-build="build" ${ready ? '' : `disabled title="${esc(steps.report_build?.reason || 'Prerequisites not met')}"`}>Build</button>`;
+      const why = steps.report_build?.reason || 'Prerequisites not met';
+      return `<button data-report-open="${esc(p.id)}" data-build="build" ${ready ? '' : `disabled title="${esc(why)}"`}>Build</button>${ready ? '' : `<small class="action-reason">${esc(why)}</small>`}`;
     }
     if (a === 'signed_off') {
       const ready = buildDone || isSigned;
-      return `<button data-sign-off="${esc(p.id)}" ${ready && !isSigned ? '' : 'disabled'}${!ready ? ' title="Word report must be built first"' : ''}>${isSigned ? 'Signed off &#10003; Done' : 'Signed off'}</button>`;
+      return `<button data-sign-off="${esc(p.id)}" ${ready && !isSigned ? '' : 'disabled'}${!ready ? ' title="Word report must be built first"' : ''}>${isSigned ? 'Signed off &#10003; Done' : 'Signed off'}</button>${ready ? '' : '<small class="action-reason">Word report must be built first</small>'}`;
     }
     if (a === 'report_sent') {
-      return `<button data-action="report_sent" ${isSigned ? '' : 'disabled title="Report must be signed off first"'}>${actionLabels.report_sent}</button>`;
+      return `<button data-action="report_sent" ${isSigned ? '' : 'disabled title="Report must be signed off first"'}>${actionLabels.report_sent}</button>${isSigned ? '' : '<small class="action-reason">Report must be signed off first</small>'}`;
     }
     if (a === 'claim') return `<button data-claim-run="${esc(p.id)}">Open claim</button>`;
     return actionButton(a);
