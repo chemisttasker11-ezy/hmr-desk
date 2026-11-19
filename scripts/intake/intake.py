@@ -16,6 +16,21 @@ FIELDS = ('name', 'sex', 'dob', 'medicare', 'irn', 'address', 'suburb', 'phone',
 DATE = r'\d{1,2}[/.\-]\d{1,2}[/.\-]\d{4}'
 
 
+def _completed_report(text):
+    """A report date label plus Findings and Recommendations headings. Single words like Assessment or Plan never count:
+    genuine referral forms use them as headings."""
+    lines = [re.sub(r'\s+', ' ', line).strip().lower() for line in text.splitlines() if line.strip()]
+    dated = any(re.match(r'^(?:report date|date of report|date report completed|date of review report)\s*[:\-]', line) for line in lines)
+    head = lambda word: any(re.fullmatch(r'(?:\d+[.)]\s*)?(?:summary of |key )?' + word + r'\s*:?', line) for line in lines)
+    combined = any(re.fullmatch(r'(?:\d+[.)]\s*)?(?:findings and recommendations|recommendations and findings)\s*:?', line) for line in lines)
+    return dated and ((head('findings') and head('recommendations')) or combined)
+
+
+def _gp_reply_markers(lower):
+    return any(x in lower for x in ('gp comments', 'gp response', 'gp feedback', 'feedback on recommendations')) or bool(
+        re.search(r'\b(?:your pharmacist|your practice)\b', lower) and re.search(r'\b(?:gp notes|gp comments|feedback)\b', lower))
+
+
 def classify(text):
     lower = text.lower()
     response = [x for x in ('medication management plan', 'gp feedback', 'gp comments', 'gp response', 'feedback on recommendations') if x in lower]
@@ -28,6 +43,10 @@ def classify(text):
         if match:
             response.append(match.group())
     referral = [x for x in ('referral', 'request', 'home medicines review', 'medication management review', 'hmr') if x in lower]
+    if _completed_report(text) and not _gp_reply_markers(lower):
+        # The pharmacist's own finished report quotes the referral reason and lists medicines, so it matches the referral
+        # test below. It is neither a referral nor a GP reply: send it to manual review with a plain flag.
+        return 'other', referral, ['Looks like a completed HMR report (report date with findings and recommendations), not a referral. Inspect the original PDF']
     if response:
         return 'gp_response', response + referral, []
     if referral and re.search(r'\b(?:patient|dob|date of birth)\b', lower) and re.search(r'\b(?:medications?|medicines?|prescriptions?)\b', lower):
