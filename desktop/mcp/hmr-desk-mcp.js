@@ -232,6 +232,27 @@ function valid(value, schema) {
   if (schema.type === 'string') return typeof value === 'string' && value.length >= (schema.minLength ?? 0) && (!schema.pattern || new RegExp(schema.pattern).test(value));
   return typeof value === schema.type;
 }
+let endpointFileUsed = false;
+// Engine address: HMR_API wins; else the live endpoint the packaged app records beside its token; else the
+// development default. A recorded endpoint whose engine process is gone fails loudly instead of guessing.
+async function resolveBase(app, root, read) {
+  endpointFileUsed = false;
+  const env = process.env[app ? 'HMR_CONTROL' : 'HMR_API'];
+  if (env) return { base: env.replace(/\/$/, '') };
+  if (!app) {
+    let rec = null;
+    try { rec = JSON.parse(await read(path.join(root, 'engine_endpoint.json'), 'utf8')); } catch {}
+    if (rec && typeof rec === 'object') {
+      if (typeof rec.url !== 'string' || !/^http:\/\/127\.0\.0\.1:\d{2,5}$/.test(rec.url)) throw Error('engine_endpoint.json is invalid; relaunch the app or set HMR_API');
+      if (Number.isInteger(rec.pid)) {
+        try { process.kill(rec.pid, 0); } catch (error) { if (error.code === 'ESRCH') throw Error('engine_endpoint.json is stale: its engine process is not running; relaunch the app or set HMR_API'); }
+      }
+      endpointFileUsed = true;
+      return { base: rec.url };
+    }
+  }
+  return { base: `http://127.0.0.1:${app ? 8768 : 8767}` };
+}
 async function call(name, args, fetcher = fetch, read = fs.readFile) {
   const index = defs.findIndex((d) => d[0] === name);
   if (index < 0) throw Error('Unknown tool');
@@ -317,17 +338,22 @@ async function call(name, args, fetcher = fetch, read = fs.readFile) {
   if (name === 'hmr_report_get' && args.ai) route += '?ai=1';
   const root = path.join(process.env.USERPROFILE || require('node:os').homedir(), 'HMR-Desk-data');
   let response;
+  const target = await resolveBase(app, root, read);
   try {
     const token = (await read(path.join(root, app ? 'app_control_token' : 'api_token'), 'utf8')).trim();
-    const base = (process.env[app ? 'HMR_CONTROL' : 'HMR_API'] || `http://127.0.0.1:${app ? 8768 : 8767}`).replace(/\/$/, '');
+    const base = target.base;
+    if (!app && endpointFileUsed) {
+      // A live process id is not proof: the id may be reused, or the record may belong to another profile.
+      const probe = await fetcher(base + '/api/health', {method:'GET', headers:{'X-HMR-Token':token}});
+      if (!probe.ok) throw Error('endpoint probe rejected');
+    }
     if (name === 'hmr_message_approve' || name === 'hmr_messages_check') {
       const status = await fetcher(base + '/api/status', {method:'GET', headers:{'X-HMR-Token':token, 'Content-Type':'application/json'}});
       const state = await status.json();
       if (!status.ok || state.outbox_mode !== 'test') throw Error('Messaging actions require test outbox mode');
     }
     response = await fetcher(
-      (process.env[app ? 'HMR_CONTROL' : 'HMR_API'] || `http://127.0.0.1:${app ? 8768 : 8767}`).replace(/\/$/, '') +
-        route,
+      base + route,
       {
         method,
         headers: { [app ? 'X-HMR-Control' : 'X-HMR-Token']: token, 'Content-Type': 'application/json' },
@@ -336,6 +362,7 @@ async function call(name, args, fetcher = fetch, read = fs.readFile) {
     );
   } catch (error) {
     if (error.message === 'Messaging actions require test outbox mode') throw error;
+    if (!app && endpointFileUsed) throw Error('engine is not responding at the endpoint recorded in engine_endpoint.json (stale file, reused process id, another profile, or app closed); relaunch the app or set HMR_API');
     throw Error(app ? 'HMR Desk app is not open' : 'engine is not running');
   }
   const data = await response.json();
