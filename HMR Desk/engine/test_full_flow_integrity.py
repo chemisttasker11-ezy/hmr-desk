@@ -133,14 +133,14 @@ def test_referral_to_report_flow_stays_consistent(tmp_path, monkeypatch):
     doc = Document(str(out))
     headings = [p.text for p in doc.paragraphs if p.style.name.startswith('Heading')]
     paragraphs = [p.text for p in doc.paragraphs]
-    assert 'Home Medicines Review' in [c.text for c in doc.tables[0]._cells]  # title table (spec'd layout)
-    assert 'Profile' in headings
-    assert 'Current medicines' in headings, headings
+    assert 'Home Medication Review' in [c.text for c in doc.tables[0]._cells]  # title table (spec'd layout)
+    assert 'Patient Profile' in headings
+    assert 'Current medication as per the patient' in headings, headings
     assert 'Pathology' in headings, headings
-    assert 'Findings' in headings
+    assert 'Review Findings' in headings
     # Table content matches the saved synthetic evidence exactly.
     tables = [[cell.text for row in t.rows for cell in row.cells] for t in doc.tables]
-    meds_table = next(t for t in tables if 'Actual use' in t)
+    meds_table = next(t for t in tables if 'Drug Regimen' in t and 'Recommendation' in t)
     assert 'Synthetic Jardiance 25 mg tablet' in meds_table
     assert any('one daily' in cell for cell in meds_table), meds_table
     path_table = next(t for t in tables if 'Reference range' in t)
@@ -184,7 +184,7 @@ def test_referral_to_report_flow_stays_consistent(tmp_path, monkeypatch):
     assert built.exists() and built.stat().st_size > 0
     doc2 = Document(str(built))
     headings2 = [p.text for p in doc2.paragraphs if p.style.name.startswith('Heading')]
-    assert 'Current medicines' in headings2 and 'Pathology' in headings2, headings2
+    assert 'Current medication as per the patient' in headings2 and 'Pathology' in headings2, headings2
     cells2 = [cell.text for t in doc2.tables for row in t.rows for cell in row.cells]
     assert 'Synthetic Jardiance 25 mg tablet' in cells2
     assert 'eGFR' in cells2 and '28' in cells2

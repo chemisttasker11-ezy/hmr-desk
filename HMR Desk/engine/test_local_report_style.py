@@ -64,8 +64,8 @@ def test_title_table_is_white_with_black_text_and_single_half_point_borders(tmp_
     doc = render(tmp_path)
     table = doc.tables[0]
     assert not fills(table._tbl)
-    assert table.cell(0, 0).text == "Home Medicines Review"
-    assert table.cell(0, 1).text == "Assessment: 17/11/2026    Report: 17/11/2026"
+    assert table.cell(0, 0).text == "Home Medication Review"
+    assert table.cell(0, 1).text == "Assessment date: 17/11/2026    Report date: 17/11/2026"
     for t in doc.tables[:3]:
         for side in t._tbl.tblPr.find(qn('w:tblBorders')):
             assert side.get(qn('w:val')) == 'single' and side.get(qn('w:sz')) == '4' and side.get(qn('w:color')) == '000000'
@@ -73,27 +73,29 @@ def test_title_table_is_white_with_black_text_and_single_half_point_borders(tmp_
 
 def test_details_table_has_patient_doctor_pharmacist_columns(tmp_path):
     table = render(tmp_path).tables[1]
-    assert [c.text for c in table.rows[0].cells] == ["Patient", "Doctor", "Accredited pharmacist"]
+    assert [c.text for c in table.rows[0].cells] == ["Patient Details", "Doctor Details", "Accredited Pharmacist Details"]
     assert table.rows[1].cells[0].text == "Synthetic Patient" and table.rows[1].cells[1].text == "Dr Example GP"
     assert "Not supplied" in table.rows[1].cells[2].text
 
 
 def test_heading_order_and_colours(tmp_path):
     colours = heading_colors(render(tmp_path))
-    assert list(colours)[:1] == ["Profile"] and list(colours)[-2:] == ["Findings", "Follow-up"]
-    order = [h for h in colours if h in ("Current medicines", "OTC and additional interview medicines",
-                                         "Ceased or not-used referral medicines", "Findings")]
-    assert order == ["Current medicines", "OTC and additional interview medicines",
-                     "Ceased or not-used referral medicines", "Findings"]
-    assert colours["Profile"] == colours["Findings"] == "01A1DD"
-    assert colours["Current medicines"] == colours["OTC and additional interview medicines"] == "00B050"
-    assert colours["Ceased or not-used referral medicines"] == "C00000"
+    assert list(colours)[:1] == ["Patient Profile"] and list(colours)[-2:] == ["Review Findings", "Follow-up"]
+    order = [h for h in colours if h in ("Current medication as per the patient", "OTC medications / Additional medications (Identified During Interview)",
+                                         "Medication as per the referral ceased or not used", "Review Findings")]
+    assert order == ["Current medication as per the patient", "OTC medications / Additional medications (Identified During Interview)",
+                     "Medication as per the referral ceased or not used", "Review Findings"]
+    assert colours["Patient Profile"] == colours["Review Findings"] == "01A1DD"
+    assert colours["Current medication as per the patient"] == colours["OTC medications / Additional medications (Identified During Interview)"] == "00B050"
+    assert colours["Medication as per the referral ceased or not used"] == "C00000"
 
 
 def test_medicine_tables_have_17365d_repeating_header_and_spec_column_counts(tmp_path):
     doc = render(tmp_path)
     meds, otc, ceased = doc.tables[2], doc.tables[3], doc.tables[4]
     assert [len(t.columns) for t in (meds, otc, ceased)] == [4, 3, 3]
+    assert [c.text for c in meds.rows[0].cells] == ["Drug Regimen", "Directions", "Comments", "Recommendation"]
+    assert [c.text for c in otc.rows[0].cells] == [c.text for c in ceased.rows[0].cells] == ["Drug Regimen", "Directions", "Comments"]
     for t in (meds, otc, ceased, doc.tables[5]):
         assert fills(t.rows[0]._tr) == {"17365D"}
         assert t.rows[0]._tr.trPr.find(qn('w:tblHeader')) is not None
@@ -113,7 +115,17 @@ def test_findings_have_orange_leadin_and_borderless_b8cce4_single_column_block(t
     assert len(block.columns) == 1 and fills(block._tbl) == {"B8CCE4"}
     assert all(s.get(qn('w:val')) == 'nil' for s in block._tbl.tblPr.find(qn('w:tblBorders')))
     label = block.rows[0].cells[0].paragraphs[0].runs[0]
-    assert label.text == "Recommendation: " and label.bold and label.font.size.pt == 10
+    assert label.text == "Plan/Feedback" and label.bold and label.font.size.pt == 10
+
+
+def test_reference_range_header_column_is_wide_enough(tmp_path):
+    table = render(tmp_path).tables[5]
+    assert table.rows[0].cells[3].width >= Cm(3.5)
+
+
+def test_signoff_states_missing_pharmacist_data(tmp_path):
+    text = "\n".join(p.text for p in render(tmp_path).paragraphs)
+    assert "Yours Sincerely," in text and "not supplied in the report data" in text
 
 
 def test_footer_table_has_page_field(tmp_path):

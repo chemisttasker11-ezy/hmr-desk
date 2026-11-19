@@ -17,7 +17,7 @@ def _display_date(value):
 
 # Pathology provenance text (verified-by, sample date, source) is sentence-length; equal-width
 # autofit squeezed it into one-word lines. Fixed widths give the notes column room to read.
-_PATHOLOGY_WIDTHS_CM = (2.0, 3.6, 3.6, 3.2, 5.1)  # sums to the 17.5cm usable width (A4, 993/991 twip side margins)
+_PATHOLOGY_WIDTHS_CM = (1.9, 3.3, 3.5, 3.9, 4.9)  # sums to the 17.5cm usable width (A4, 993/991 twip side margins)
 _TEXT_WIDTH_CM = 17.5
 
 
@@ -39,7 +39,8 @@ def _fixed_layout(table, widths_cm):
 # columns (patient, doctor, accredited pharmacist); heading colours blue 01A1DD (profile, findings), green 00B050
 # (current and OTC medicines), red C00000 (ceased); table header fill 17365D; findings have a bold 10 pt orange
 # E97132 lead-in then a borderless full-width block filled B8CCE4 with bold 10 pt black labels; table-based header
-# and footer with a PAGE field. Heading wording, body size and colour of the conditions section are not confirmed.
+# and footer with a PAGE field. Wording and colours follow the operator's 16:06 spec. Not confirmed: body size, run colours of
+# the conditions, allergies and observations headings, field-row arrangement of the details table, pathology heading.
 # The output stays labelled provisional.
 FONT = "Montserrat"
 NAVY = "17365D"
@@ -127,7 +128,7 @@ def _title_table(doc, date_text):
     table = doc.add_table(rows=1, cols=2)
     table.style = "Table Grid"
     _borders(table)
-    _cell_text(table.cell(0, 0), "Home Medicines Review", 18, True, BLACK)
+    _cell_text(table.cell(0, 0), "Home Medication Review", 18, True, BLACK)
     _cell_text(table.cell(0, 1), date_text, 9, True, BLACK)
     _fixed_layout(table, (11.0, 6.5))
     return table
@@ -138,7 +139,7 @@ def _details_table(doc, patient, doctor):
     table = doc.add_table(rows=2, cols=3)
     table.style = "Table Grid"
     _borders(table)
-    for cell, label, value in zip(table.rows[0].cells, ("Patient", "Doctor", "Accredited pharmacist"),
+    for cell, label, value in zip(table.rows[0].cells, ("Patient Details", "Doctor Details", "Accredited Pharmacist Details"),
                                   (None, None, None)):
         _cell_text(cell, label, 9, True)
     for cell, value in zip(table.rows[1].cells, (patient, doctor, "Not supplied in the report data")):
@@ -179,7 +180,8 @@ def _plan_block(doc, rows):
         paragraph = cell.paragraphs[0]
         paragraph.paragraph_format.space_after = Pt(3)
         _run(paragraph, label, 10, True, BLACK)
-        _run(paragraph, text, BODY_PT)
+        if text:
+            _run(paragraph, text, BODY_PT)
     _fixed_layout(table, (_TEXT_WIDTH_CM,))
     doc.add_paragraph().paragraph_format.space_after = Pt(2)
     return table
@@ -234,28 +236,29 @@ def render(data, target):
     footer = sec.footer
     ftable = footer.add_table(1, 2, Cm(_TEXT_WIDTH_CM))
     _borders(ftable)
-    _cell_text(ftable.cell(0, 0), "Home Medicines Review - draft for pharmacist review", 9, True)
+    _cell_text(ftable.cell(0, 0), PROVISIONAL_LABEL, 9, True)
     ftable.cell(0, 1).paragraphs[0].add_run("Page ")
     _page_field(ftable.cell(0, 1).paragraphs[0])
-    _title_table(doc, "Assessment: " + _display_date(data["assess_date"]) + "    Report: " + _display_date(data["report_date"]))
+    _title_table(doc, "Assessment date: " + _display_date(data["assess_date"]) + "    Report date: " + _display_date(data["report_date"]))
     marker = doc.add_paragraph()
     _run(marker, PROVISIONAL_LABEL, 9, True)
     marker.paragraph_format.space_before = Pt(6)
-    _heading(doc, "Profile", HEAD_BLUE)
+    _heading(doc, "Patient Profile", HEAD_BLUE)
     _details_table(doc, data["patient"], data["doctor"])
     doc.add_paragraph(data["dear"])
     for field in ("thanks", "reason", "intro"):
         if data[field].strip():
             doc.add_paragraph(data[field])
-    for heading, key in (("Current conditions", "conditions"), ("Allergies and adverse reactions", "allergies"),
-                         ("Interview observations", "obs")):
+    # Run colours of these three headings are not in the host spec: left at the default text colour.
+    for heading, key in (("Current Conditions:", "conditions"), ("Allergies", "allergies"),
+                         ("Obs from interview", "obs")):
         if data[key].strip():
-            _heading(doc, heading, HEAD_BLUE)
+            _heading(doc, heading, BLACK)
             doc.add_paragraph(data[key])
     for heading, key, labels, color in (
-        ("Current medicines", "meds", ("Medicine", "Actual use", "Notes", "Review"), HEAD_GREEN),
-        ("OTC and additional interview medicines", "otc", ("Medicine", "Use", "Notes"), HEAD_GREEN),
-        ("Ceased or not-used referral medicines", "ceased", ("Medicine", "Referral directions", "Notes"), HEAD_RED),
+        ("Current medication as per the patient", "meds", ("Drug Regimen", "Directions", "Comments", "Recommendation"), HEAD_GREEN),
+        ("OTC medications / Additional medications (Identified During Interview)", "otc", ("Drug Regimen", "Directions", "Comments"), HEAD_GREEN),
+        ("Medication as per the referral ceased or not used", "ceased", ("Drug Regimen", "Directions", "Comments"), HEAD_RED),
         ("Pathology", "path", ("Test", "Result", "Unit", "Reference range", "Source / notes"), HEAD_BLUE),
     ):
         if not data[key]:
@@ -272,16 +275,17 @@ def render(data, target):
         _header_row(table)
         widths = _PATHOLOGY_WIDTHS_CM if key == "path" else tuple(_TEXT_WIDTH_CM / len(labels) for _ in labels)
         _fixed_layout(table, widths)
-    _heading(doc, "Findings", HEAD_BLUE)
+    _heading(doc, "Review Findings", HEAD_BLUE)
     for index, finding in enumerate(data["issues"], 1):
         lead = doc.add_paragraph()
         _run(lead, str(index) + ". " + finding["title"], 10, True, LEAD_ORANGE)
         lead.paragraph_format.keep_with_next = True
-        _plan_block(doc, (("Recommendation: ", finding["rec"]), ("Rationale: ", finding["rationale"])))
+        _plan_block(doc, (("Plan/Feedback", ""), ("Recommendation: ", finding["rec"]), ("Rationale: ", finding["rationale"])))
     if data["followup"].strip():
-        _heading(doc, "Follow-up", HEAD_BLUE)
+        _heading(doc, "Follow-up", BLACK)
         _plan_block(doc, (("Follow-up: ", data["followup"]),))
+    _run(doc.add_paragraph(), "Yours Sincerely,", 10)
     signoff = doc.add_paragraph()
-    _run(signoff, "Accredited pharmacist name, contact and credentials: not supplied in the report data (provisional).", 9, True)
+    _run(signoff, "Pharmacist name, credentials, phone and email: not supplied in the report data (provisional).", 9, True)
     doc.save(target)
     return target
