@@ -256,7 +256,7 @@ def _derived(conn, patient):
                  if result['verified'] else 'UNVERIFIED — check original source'),
                 'Sample: ' + result['sample_date'] if result['sample_date'] else '',
                 'Source: ' + result['source'] if result['source'] else '',
-                result['comment'],
+                '' if result['verified'] and result['id'] in verification and result['comment'] == UNVERIFIED_DEFAULT_NOTE else result['comment'],
             )))
         ])
     dates = list(dict.fromkeys(
@@ -274,7 +274,7 @@ def _demographics(conn, patient, record):
     doctor_lines = [gp, p.get('clinic') or '', 'Request date: ' + _dmy(p.get('referral_date') or '')]
     import steps
     visit = steps.event_date(conn, patient, 'visited') or p.get('visit_date') or h['visit'].split(' ')[0]
-    return dict(name=name, assess_date=visit, patient='\n'.join(patient_lines), doctor='\n'.join(filter(None, doctor_lines)), dear='Dear ' + gp + ',')
+    return dict(name=name, assess_date=visit, patient='\n'.join(patient_lines), doctor='\n'.join(filter(None, doctor_lines)), dear='Dear ' + (gp or 'Doctor') + ',')
 
 def start(conn, patient):
     folder = jobs.patient_folder(patient)
@@ -297,6 +297,9 @@ def start(conn, patient):
     conn.commit()
     return data
 
+# The placeholder note the Interview page puts on a result linked to a source page. Once the pharmacist verifies the row
+# it is no longer true, so the report omits exactly this text for verified rows; any other note is printed unchanged.
+UNVERIFIED_DEFAULT_NOTE = 'UNVERIFIED — compare source PDF before confirming'
 DEMOGRAPHIC_LABELS = {'name': 'patient name', 'assess_date': 'assessment date', 'patient': 'patient details block', 'doctor': 'GP details block', 'dear': 'salutation'}
 
 def _merge_demographics(data, new, replace=()):
