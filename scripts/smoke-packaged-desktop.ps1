@@ -39,6 +39,7 @@ try {
   $token = (Get-Content -Raw (Join-Path $data 'api_token')).Trim()
   $result = Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/health" -Headers @{ 'X-HMR-Token' = $token } -TimeoutSec 5
   if (-not $result.ready -or -not $result.capabilities.manual_hmr) { throw 'Packaged engine health rejected' }
+  if (-not $result.capabilities.pdf_converter_available) { throw 'Packaged app did not give its engine the bundled PDF converter' }
   if (-not (Test-Path (Join-Path $data 'workspace'))) { throw 'Patient workspace not created' }
   # Deliberately terminate the owned clinical engine. Electron must start a
   # fresh authenticated instance without asking the user to install Python.
@@ -63,6 +64,7 @@ try {
   $token = (Get-Content -Raw (Join-Path $data 'api_token')).Trim()
   $result = Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/health" -Headers @{ 'X-HMR-Token' = $token } -TimeoutSec 5
   if (-not $result.ready) { throw 'Recovered engine failed authenticated health' }
+  if (-not $result.capabilities.pdf_converter_available) { throw 'Recovered engine lost the bundled PDF converter' }
   Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;

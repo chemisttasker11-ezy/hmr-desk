@@ -246,7 +246,11 @@ async function agentClick(b) {
   if (b.dataset.medicineReferenceInstall !== undefined) {
     const output = $('medicine-reference-status');
     b.disabled = true;
+    // A large file takes a minute or two (copy, check, search index). Keep a visible, ticking status the whole time.
+    const started = Date.now();
+    const busy = () => { if (output) output.textContent = 'Installing medicine reference... ' + Math.round((Date.now() - started) / 1000) + ' s. A large file takes a minute or two (checking, copying, building the search index). Keep this window open. Search keeps using the current reference until this finishes.'; };
     if (output) output.textContent = 'Checking reference file structure and integrity before any change...';
+    const ticker = setInterval(busy, 1000);
     try {
       const response = await hmr.installMedicineReference();
       if (response.cancelled) {
@@ -265,7 +269,7 @@ async function agentClick(b) {
       }
     } catch(error) {
       if (output) output.textContent = errorText(error) + ' Current reference unchanged.';
-    } finally { b.disabled = false; }
+    } finally { clearInterval(ticker); b.disabled = false; }
     return true;
   }
   if (b.dataset.restoredActivate !== undefined) {

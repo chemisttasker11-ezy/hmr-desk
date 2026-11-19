@@ -1,20 +1,33 @@
 let medicinePatient = null;
 let medicineData = null;
+// Runs at most `limit` patients at once so a long Reports list does not fire every request together.
+// Results keep the input order, in the same {status, value|reason} shape as Promise.allSettled.
+async function settledPool(items, limit, work) {
+  const out = new Array(items.length);
+  let next = 0;
+  const lane = async () => {
+    while (next < items.length) {
+      const i = next++;
+      try { out[i] = { status: 'fulfilled', value: await work(items[i]) }; } catch (reason) { out[i] = { status: 'rejected', reason }; }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, lane));
+  return out;
+}
 async function reports() {
   const [list, agents] = await Promise.all([hmr.api('GET', '/api/patients'), hmr.api('GET', '/api/agents')]);
   if (page !== 'reports') return;
   patients = list.patients;
   const agent = agents.per_step.report_draft || agents.default || 'No agent selected';
   const rows = patients.filter((p) => ['visited', 'report_drafted', 'signed_off'].includes(p.state));
-  const details = await Promise.allSettled(
-    rows.map(async (p) => {
-      const [detail, spec] = await Promise.all([
+  const details = await settledPool(rows, 3, async (p) => {
+      const [detail, spec, currency] = await Promise.all([
         hmr.api('GET', `/api/patients/${encodeURIComponent(p.id)}`),
         hmr.api('GET', `/api/patients/${encodeURIComponent(p.id)}/report`),
+        hmr.api('GET', `/api/patients/${encodeURIComponent(p.id)}/report-status`).catch(() => null),
       ]);
-      return { ...detail, reportSpec: spec };
-    }),
-  );
+      return { ...detail, reportSpec: spec, reportCurrency: currency };
+  });
   if (page !== 'reports') return;
   $('screen').innerHTML = `<p id="report-message" role="status">${esc(runMessage)}</p>
     <h2>Reports to write (${rows.length})</h2>${rows.map((p, i) => (details[i].status === 'fulfilled' ? reportRow(p, details[i].value, agent) : reportError(p, details[i].reason))).join('') || '<p class="empty">No reports waiting</p>'}<div id="detail" class="detail drawer" role="dialog" aria-label="Patient" hidden></div>`;
@@ -36,11 +49,12 @@ function reportRow(p, detail, agent) {
     done: visited && confirmation?.done === true,
     reason: visited ? '' : 'Visit not recorded',
   };
-  const build = steps.report_build;
+  const workflow = H.reportWorkflowStatus(p.state, steps.report_build, detail.reportCurrency);
+  const build = workflow.build;
   const sign = {
     done: ['signed_off', 'sent', 'claimed'].includes(p.state),
-    ready: ['visited', 'report_drafted'].includes(p.state) && !!build?.done,
-    reason: 'Word report must be built first',
+    ready: workflow.canSign,
+    reason: workflow.signReason,
   };
   const start = steps.report_start;
   const edit = {
@@ -60,7 +74,9 @@ function reportRow(p, detail, agent) {
     ['sign', 'Signed off', sign],
   ];
   const next = String(p.next_step || '').toLowerCase();
-  const target = ({ 'confirm medicines': 'medicines', 'check interactions': 'interactions', 'start report': 'report_start', 'add findings': 'edit', 'build report': 'build', 'sign off': 'sign' })[next];
+  const target = next === 'sign off' && !workflow.canSign && ['visited', 'report_drafted'].includes(p.state)
+    ? 'build'
+    : ({ 'confirm medicines': 'medicines', 'check interactions': 'interactions', 'start report': 'report_start', 'add findings': 'edit', 'build report': 'build', 'sign off': 'sign' })[next];
   const primary = target ? buttons.findIndex(([step]) => step === target) : (next ? -1 : buttons.findIndex(([, , status]) => status?.ready && !status?.done));
   const renderButton = ([step, label, status], index) => {
     const attr = step === 'medicines' ? `data-medicines="${esc(p.id)}"`
@@ -73,6 +89,7 @@ function reportRow(p, detail, agent) {
   const main = next === 'send report' ? `<button class="primary" data-claim-action="report_sent" data-id="${esc(p.id)}">Mark report sent</button>`
     : primary >= 0 ? renderButton(buttons[primary], primary) : `<p>${esc(p.next_step || 'Review the report')}</p>`;
   return `<div class="card"><div class="card-head"><h3>${esc(p.name)}</h3><span class="status-chip stage-${H.stageClass(p.stage)}">${esc(p.status_text || p.state)}</span></div>
+    ${H.reportStatusHtml(detail.reportCurrency) || '<p class="muted" role="status">Report currency could not be verified. Do not sign off until checked.</p>'}
     <div class="report-steps"><strong>Next action</strong>${main}<details><summary>Other report steps</summary><div class="report-steps">${buttons.map((item, i) => i === primary ? '' : renderButton(item, i)).join('')}<button data-report-folder="${esc(p.id)}">Open folder</button></div></details></div>
     <div id="medicines-${esc(p.id)}"></div></div>`;
 }
@@ -85,17 +102,19 @@ function renderMedicines() {
     ${medicineData.proposed && (medicineData.meds.length || medicineData.allergies.length) ? `<p>Copied from the interview &#8212; ${medicineData.meds.length} medicines, ${medicineData.allergies.length} allergies</p>` : ''}
     ${(medicineData.interview_usage || []).length ? `<p>Review interview medicine use below. Confirm only medicines currently used; a different strength or formulation may still be used when another has stopped.</p><ul>${medicineData.interview_usage.map(item => `<li>${esc(item.source)} — ${esc(item.name)}: ${esc(item.detail)} ${esc((item.directions || []).filter(Boolean).join(" | "))}</li>`).join('')}</ul>` : ''}
     ${medicineData.medicine_snapshot_changed ? '<p class="error" role="alert">The interview medicine identity, directions, use or allergies changed since this list was confirmed. Review the current interview list below before saving; previous interaction results are not current.</p>' : ''}
-    ${medicineData.medicine_snapshot?.items?.length ? `<details open><summary>Current interview medicine identities and use</summary><ul>${medicineData.medicine_snapshot.items.map(item => { const ref = item.metadata?.reference; return `<li>${esc(item.values[0])}${ref ? ` | ${esc(ref.display)} (${esc(ref.source.toUpperCase())} ${esc(ref.code)}, release ${esc(ref.release)})` : ' | Free text, no catalogue identity'} | ${esc(item.metadata?.use_status || 'Use not confirmed')}</li>`; }).join('')}</ul><p>These are interview source identities, not proof of an eMIMS mapping. Keep any mapping changes explicit.</p></details>` : ''}
+    ${medicineData.medicine_snapshot?.items?.length ? `<details open><summary>Current interview medicine identities and use</summary><ul>${medicineData.medicine_snapshot.items.map(item => { const ref = item.metadata?.reference; return `<li>${esc(item.values[0])}${ref ? ` | ${esc(ref.display)} (${ref.source === 'pbs' ? 'PBS' : esc(ref.source.toUpperCase()) + ' ' + esc(ref.code)}, release ${esc(ref.release)})` : ' | Free text, no catalogue identity'} | ${esc(item.metadata?.use_status || 'Use not confirmed')}</li>`; }).join('')}</ul><p>These are interview source identities, not proof of an eMIMS mapping. Keep any mapping changes explicit.</p></details>` : ''}
     <div id="medicine-rows">${medicineData.meds
       .map(
         (med, i) => `<div class="medicine-row">
     <label>Generic name<input name="generic" value="${esc(med[0] || '')}"></label>
     <label>Brand<input name="brand" value="${esc(med[1] || '')}"></label>
-    ${(medicineData.interview_usage || []).some(item => item.status === 'not_using') ? `<label>If a stopped medicine shares an ingredient, enter the exact name of the different medicine currently taken above and select it below<select name="alternative"><option value="">Choose if needed</option>${(medicineData.interview_usage || []).map((item, index) => item.status === 'taking' ? `<option value="${index}" ${JSON.stringify(medicineData.alternatives?.[i]) === JSON.stringify(item) ? 'selected' : ''}>${esc(item.name)} — ${esc(item.source)} — ${esc((item.directions || []).filter(Boolean).join(' | '))}</option>` : '').join('')}</select></label>` : ''}
+    ${H.linkedCatalogueNote(med[0], medicineData.medicine_snapshot?.items) ? `<p class="muted" role="note">${esc(H.linkedCatalogueNote(med[0], medicineData.medicine_snapshot?.items))}</p>` : ''}
+    ${(medicineData.interview_usage || []).some(item => item.status === 'not_using') ? `<label>Only needed if saving asks for it. If this medicine shares an ingredient with one recorded as not using in the interview, enter the different medicine currently taken above and select it here<select name="alternative"><option value="">Choose if needed</option>${(medicineData.interview_usage || []).map((item, index) => item.status === 'taking' ? `<option value="${index}" ${JSON.stringify(medicineData.alternatives?.[i]) === JSON.stringify(item) ? 'selected' : ''}>${esc(item.name)} — ${esc(item.source)} — ${esc((item.directions || []).filter(Boolean).join(' | '))}</option>` : '').join('')}</select></label>` : ''}
     <button type="button" data-remove-medicine="${i}">Remove</button></div>`,
       )
       .join('')}</div>
     <button type="button" data-add-medicine>Add medicine</button>
+    ${medicineData.allergies_confirmed_earlier && medicineData.allergies_confirmed_earlier.join('\n') !== medicineData.allergies.join('\n') ? `<p class="error" role="alert">The interview now lists ${medicineData.allergies.length} allergy line(s); the list you confirmed earlier had ${medicineData.allergies_confirmed_earlier.length}. The box below shows the current interview text. Check it, then save.</p>` : ''}
     <label>Allergies, one per line<textarea name="allergies">${esc(medicineData.allergies.join('\n'))}</textarea>
     </label><p class="error" role="alert"></p><button class="primary">Save medicines</button>
     <button type="button" data-close-medicines>Cancel</button></form>`;
@@ -239,3 +258,4 @@ async function pharmacistReportSignoff(patientId) {
     dialog.showModal();
   });
       }
+

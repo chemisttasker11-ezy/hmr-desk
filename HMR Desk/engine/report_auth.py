@@ -142,6 +142,10 @@ def check_approval(conn, patient, body):
         raise ValueError('Interview changed after report; refresh and rebuild')
     if pathology_records.revision(conn, patient) != detail.get('pathology_revision'):
         raise ValueError('Pathology changed after report; refresh and rebuild')
+    import report
+    open_blocks = report.unresolved_demographics(conn, patient, json.loads(spec_bytes.decode('utf-8-sig')))
+    if open_blocks:
+        raise ValueError('Report ' + ', '.join(sorted(open_blocks)) + ' differs from the patient record; replace it or keep it as written before sign-off')
     import reconciliation
     saved_review = records.get_json(conn, patient['id'], 'reconciliation_review.json') or {}
     current_interview = interview.load(conn, patient)

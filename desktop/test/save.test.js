@@ -87,3 +87,21 @@ test('binds generated output to the queued medicine revision without replacing o
     assert.equal(await fs.readFile(path.join(root, current.filename), 'utf8'), 'new result');
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });
+
+test('pathology is never filed on a name alone: the carried date of birth must match', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'hmr-save-id-'));
+  try {
+    const queue = [{ id: 1, folder: 'Alex Example', folder_path: path.join(root, 'p1'), dob: '12/03/1950' }];
+    const wrong = await save('HMR Pathology/Alex Example (13-Mar-1951)/r.pdf', Buffer.from('a'), queue, root);
+    assert.equal(wrong.unfiled, true, 'same name, different DOB is not filed to the patient');
+    const missing = await save('HMR Pathology/Alex Q Example/r.pdf', Buffer.from('b'), queue, root);
+    assert.equal(missing.unfiled, true, 'a download without a DOB is not filed');
+    const right = await save('HMR Pathology/Alex Q Example (12-Mar-1950)/r.pdf', Buffer.from('c'), queue, root);
+    assert.equal(right.unfiled, false);
+    assert.equal(right.patient.id, 1);
+    const noDob = await save('HMR Pathology/Alex Q Example (12-Mar-1950)/s.pdf', Buffer.from('d'), [{ id: 2, folder: 'Alex Example', folder_path: path.join(root, 'p2') }], root);
+    assert.equal(noDob.unfiled, true, 'a patient record with no DOB cannot confirm identity');
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});

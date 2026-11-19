@@ -39,7 +39,7 @@ function patientShell() {
   $('screen').innerHTML =
     `<div class="patient-layout"><div class="patient-list-pane"><label class="search">Search patients<input id="search" placeholder="Name, suburb, GP or phone"></label>
     <div class="actions"><label>Sort by <select id="patient-sort"><option value="urgency">Priority</option><option value="first">First name</option><option value="last">Last name</option><option value="referral">Referral date (newest)</option><option value="appointment">Appointment date</option></select></label><label>Appointments <select id="appointment-range"><option value="all">All appointments</option><option value="today">Today</option><option value="week">This week</option><option value="month">This month</option></select></label></div>
-    <div id="chips" class="chips"></div><div id="bulk"></div><div id="queue-message" role="status" aria-live="polite">${esc(runMessage)}</div><p id="patient-selection-error" class="error" role="alert" hidden></p><div class="actions patient-layout-actions"><button data-patient-layout="list">Maximise list</button><button data-patient-layout="patient">Maximise patient</button><button data-patient-layout="split">Restore split</button></div><div id="patient-list"></div></div>
+    <div id="chips" class="chips"></div><div id="bulk"></div><div id="queue-message" role="status" aria-live="polite">${esc(H.runStatusText(runMessage, runTasks))}</div><p id="patient-selection-error" class="error" role="alert" hidden></p><div class="actions patient-layout-actions"><button data-patient-layout="list">Maximise list</button><button data-patient-layout="patient">Maximise patient</button><button data-patient-layout="split">Restore split</button></div><div id="patient-list"></div></div>
     <div id="patient-divider" role="separator" tabindex="0" aria-label="Resize patient list" aria-orientation="vertical" aria-valuemin="25" aria-valuemax="75"></div><div id="detail" class="detail" hidden></div></div>`;
   const divider = $('patient-divider');
   divider.addEventListener('keydown', e => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); resizePatientPane(patientWidth + (e.key === 'ArrowLeft' ? -5 : 5)); } });
@@ -216,20 +216,30 @@ async function showPatient(id, action, background = false) {
   const timeline = await hmr.api('GET', `/api/patients/${encodeURIComponent(id)}/timeline`);
   if (!$('detail') || selected !== String(id) || request !== patientRequest || (typeof page !== 'undefined' && page !== startedPage) || (typeof navToken !== 'undefined' && navToken !== startedNav)) return false;
   if (offerPatient !== String(id)) { offerPatient = String(id); offerDraft = null; offerStatus = ''; }
-  const [board, agents] = await Promise.all([hmr.api('GET', '/api/messages/board').catch(() => ({})), hmr.api('GET', '/api/agents').catch(() => ({}))]);
+  const [board, agents, reportCurrency] = await Promise.all([
+    hmr.api('GET', '/api/messages/board').catch(() => ({})),
+    hmr.api('GET', '/api/agents').catch(() => ({})),
+    ['visited', 'report_drafted', 'signed_off', 'sent', 'claimed'].includes(p.state)
+      ? hmr.api('GET', `/api/patients/${encodeURIComponent(id)}/report-status`).catch(() => null)
+      : Promise.resolve(null),
+  ]);
   if (!$('detail') || selected !== String(id) || request !== patientRequest || (typeof page !== 'undefined' && page !== startedPage) || (typeof navToken !== 'undefined' && navToken !== startedNav) || formOpen || (background && $('detail').querySelector?.('details[open]'))) return false;
   const milestones = timeline.milestones || {};
   const canChange = action !== 'offer_new' && !!p.change_kinds?.length;
   const phone = String(p.phone || '').replace(/[^\d+]/g, '');
-  const pathway = H.patientPathway ? H.patientPathway(p, milestones, p.steps) : [];
+  const reportWorkflow = H.reportWorkflowStatus(p.state, (p.steps || []).find((step) => step.name === 'report_build'), reportCurrency);
+  const visibleSteps = (p.steps || []).map((step) => step.name === 'report_build' ? { ...step, ...reportWorkflow.build } : step);
+  const pathway = H.patientPathway ? H.patientPathway(p, milestones, visibleSteps) : [];
   const files = (list) => (list?.length ? list.map((x) => `<li>${esc(x)}</li>`).join('') : '<li>None</li>');
 
   const actions = availableActions(p, milestones);
   const more = ['note', 'update', ...(p.can_undo ? ['undo_stage'] : [])];
   const shownActions = actions.filter(a => !followupActions.includes(a));
   const listPatient = typeof patients !== 'undefined' ? patients.find(item => String(item.id) === String(p.id)) : null;
-  const next = String(p.next_step || listPatient?.next_step || p.stage_step || '').toLowerCase().replaceAll('_', ' ');
+  const proposedNext = String(p.next_step || listPatient?.next_step || p.stage_step || '').toLowerCase().replaceAll('_', ' ');
   const followupNext = p.followups?.next_action;
+  const next = proposedNext === 'sign off' && !reportWorkflow.canSign && ['visited', 'report_drafted'].includes(p.state)
+    ? 'build report' : proposedNext;
   const aliases = {
     'collect pathology': 'pathology',
     'read reply': 'conversation',
@@ -260,7 +270,8 @@ async function showPatient(id, action, background = false) {
     'report sent': 'report_sent',
   };
   let primaryAction = aliases[next] || null;
-  if (primaryAction && !['pathology', 'conversation', 'waiting', 'followups', ...followupActions].includes(primaryAction) && !shownActions.includes(primaryAction)) primaryAction = null;
+  if (primaryAction && !['pathology', 'conversation', 'waiting', 'followups', ...followupActions].includes(primaryAction) && !shownActions.includes(primaryAction)
+    && !(primaryAction === 'build_report' && ['visited', 'report_drafted'].includes(p.state))) primaryAction = null;
   if (!primaryAction && !next) {
     if (p.visit_date && shownActions.includes('visited')) primaryAction = 'visited';
     else if (shownActions.includes('medicines')) primaryAction = 'medicines';
@@ -277,7 +288,7 @@ async function showPatient(id, action, background = false) {
     return { enabled: !!agent && !!step && !step.ai_off && (step.ready || step.done), label: agent ? `Agent: ${agent.name}` : 'No enabled agent selected', reason: step?.ai_off ? 'AI is off in settings' : !agent ? 'No enabled agent selected' : step?.reason || 'Not ready' };
   };
   const interviewAI = aiInfo('interview_assist'), reportAI = aiInfo('report_draft');
-  const buildDone = !!steps.report_build?.done;
+  const buildDone = reportWorkflow.build.done;
   const isSigned = ['signed_off', 'sent', 'claimed'].includes(p.state);
   const stageButton = (a) => {
     if (a === 'pathology') return `<button data-run-task="pathology" data-patient-id="${esc(p.id)}">Collect pathology</button>`;
@@ -295,15 +306,18 @@ async function showPatient(id, action, background = false) {
     }
     if (a === 'edit_report') return `<button data-report-open="${esc(p.id)}">Edit report</button>`;
     if (a === 'build_report') {
-      const ready = !!steps.report_build?.ready || !!steps.report_build?.done;
-      return `<button data-report-open="${esc(p.id)}" data-build="build" ${ready ? '' : `disabled title="${esc(steps.report_build?.reason || 'Prerequisites not met')}"`}>Build</button>`;
+      const ready = reportWorkflow.build.ready;
+      const why = reportWorkflow.build.reason || 'Prerequisites not met';
+      return `<span class="action-with-reason"><button data-report-open="${esc(p.id)}" data-build="build" ${ready ? '' : `disabled title="${esc(why)}"`}>Build</button>${ready ? '' : `<small class="action-reason">${esc(why)}</small>`}</span>`;
     }
     if (a === 'signed_off') {
-      const ready = buildDone || isSigned;
-      return `<button data-sign-off="${esc(p.id)}" ${ready && !isSigned ? '' : 'disabled'}${!ready ? ' title="Word report must be built first"' : ''}>${isSigned ? 'Signed off &#10003; Done' : 'Signed off'}</button>`;
+      const ready = reportWorkflow.canSign;
+      const why = reportWorkflow.signReason || 'Word report must be built first';
+      const blocked = !ready && !isSigned;
+      return `<span class="action-with-reason"><button data-sign-off="${esc(p.id)}" ${ready && !isSigned ? '' : 'disabled'}${blocked ? ` title="${esc(why)}"` : ''}>${isSigned ? 'Signed off &#10003; Done' : 'Signed off'}</button>${blocked ? `<small class="action-reason">${esc(why)}</small>` : ''}</span>`;
     }
     if (a === 'report_sent') {
-      return `<button data-action="report_sent" ${isSigned ? '' : 'disabled title="Report must be signed off first"'}>${actionLabels.report_sent}</button>`;
+      return `<span class="action-with-reason"><button data-action="report_sent" ${isSigned ? '' : 'disabled title="Report must be signed off first"'}>${actionLabels.report_sent}</button>${isSigned ? '' : '<small class="action-reason">Report must be signed off first</small>'}</span>`;
     }
     if (a === 'claim') return `<button data-claim-run="${esc(p.id)}">Open claim</button>`;
     return actionButton(a);
@@ -363,7 +377,7 @@ async function showPatient(id, action, background = false) {
     `<div class="detail-head"><div>${fullPatientView ? `<button data-back-to-patients class="btn-back">&larr; Back to patients</button>` : ''}<h2>${esc(p.name)}</h2><span class="status-chip stage-${H.stageClass(p.stage)}">${status}</span><div class="chips">${H.flagWords(p).map(word => `<span class="status-chip">${esc(word)}</span>`).join('')}</div></div><div class="head-actions"><button data-patient-layout="patient">Maximise patient</button><button data-patient-layout="list">Maximise list</button><button data-patient-layout="split">Restore split</button><button class="detail-close" data-close-patient>Close</button></div></div>
     <dl class="detail-facts"><dt>Visit</dt><dd>${p.visit_date ? `${esc(date(p.visit_date))} ${esc(p.visit_time || '')}` : 'Not booked'}</dd>
     <dt>Address</dt><dd>${esc(H.displayAddress(p.address, p.suburb)) || '&ndash;'}</dd><dt>Phone</dt><dd>${phone ? `<a href="tel:${esc(phone)}">${esc(p.phone)}</a>` : '&ndash;'}</dd></dl>
-    <section id="patient-next-action" class="panel-section" ${isOverviewTab ? '' : 'hidden'}><h3>Next action</h3>${next ? `<p>${esc(next)}</p>` : ''}<div class="actions">${primaryAction ? stageButton(primaryAction).replace('<button ', '<button class="primary" ') : '<span class="muted">Review this patient before continuing.</span>'}${shownActions.filter(a => a !== primaryAction).length ? `<details><summary>Other actions</summary><div class="actions">${shownActions.filter(a => a !== primaryAction).map(stageButton).join('')}</div></details>` : ''}</div>
+    <section id="patient-next-action" class="panel-section" ${isOverviewTab ? '' : 'hidden'}><h3>Next action</h3>${next ? `<p>${esc(next)}</p>` : ''}<div class="actions">${primaryAction ? stageButton(primaryAction).replace('<button ', '<button class="primary" ') : `<span class="muted">${esc(H.nextActionHint(primaryAction, shownActions.length).text)}</span>`}${shownActions.filter(a => a !== primaryAction).length ? `<details${H.nextActionHint(primaryAction, shownActions.length).openOthers ? ' open' : ''}><summary>Other actions</summary><div class="actions">${shownActions.filter(a => a !== primaryAction).map(stageButton).join('')}</div></details>` : ''}</div>
     ${more.length ? `<details class="more-actions"><summary>More actions (${more.length})</summary><div class="actions">${more.map((a) => a === 'undo_stage' ? `<button data-action="undo_stage">Undo: ${esc(p.undo_label || 'last stage')}</button>` : actionButton(a)).join('')}</div></details>` : ''}
     <div id="action-area"></div><div id="medicines-${esc(p.id)}"></div><p id="report-message" role="status"></p></section>
     <div class="tabs" role="tablist">
@@ -374,6 +388,7 @@ async function showPatient(id, action, background = false) {
     </div>
     <div class="overview-view" ${isOverviewTab ? '' : 'hidden'}>
       ${pathway.length ? `<div class="patient-pathway card"><h4>HMR Pathway</h4><div class="pathway-steps">${pathway.map((s) => `<div class="pathway-step ${s.completed ? 'is-completed' : s.current ? 'is-current' : ''}"><strong>${esc(s.title)}</strong><br><small>${s.completed ? '&#10003; Done' : esc(s.detail)}</small></div>`).join('')}</div></div>` : ''}
+      ${reportCurrency ? H.reportStatusHtml(reportCurrency) : ['visited', 'report_drafted', 'signed_off', 'sent', 'claimed'].includes(p.state) ? '<p class="muted" role="status">Report currency could not be verified. Do not sign off until checked.</p>' : ''}
       <section class="panel-section"><h3>Automation & manual steps</h3>
         <div class="path-options">
           ${['ready', 'booking', 'intake'].includes(p.stage) ? `
@@ -395,10 +410,10 @@ async function showPatient(id, action, background = false) {
         })()}
       </section>
       ${['report', 'claim', 'followup', 'done'].includes(p.stage) ? `<section class="panel-section"><h3>Report steps</h3><ul class="step-list">${
-        (p.steps || [])
+        visibleSteps
           .map(
             (step) =>
-              `<li><span>${esc(H.steps[step.name] || step.name.replaceAll('_', ' '))}</span><span class="step-state ${step.done ? 'is-done' : step.ready ? 'is-ready' : ''}">${step.done ? 'Done' : step.ready ? 'Ready' : 'Not ready'}</span>${!step.done && !step.ready && step.reason ? `<small>${esc(step.reason)}</small>` : ''}</li>`,
+              `<li><span>${esc(H.steps[step.name] || step.name.replaceAll('_', ' '))}</span><span class="step-state ${step.done ? 'is-done' : step.ready ? 'is-ready' : ''}">${step.done ? 'Done' : step.ready ? 'Ready' : 'Not ready'}</span>${step.name === 'report_build' && !step.done && reportWorkflow.build.reason ? `<small>${esc(reportWorkflow.build.reason)}</small>` : (!step.done && !step.ready && step.reason ? `<small>${esc(step.reason)}</small>` : '')}</li>`,
           )
           .join('') || '<li class="muted">No steps from the engine.</li>'
       }</ul></section>` : ''}
@@ -526,6 +541,7 @@ function openForm(action, patient) {
     const saveButton = event.target.querySelector?.('button.primary') || event.submitter || $('action-form')?.querySelector?.('button.primary');
     if (saveButton) saveButton.disabled = true;
     const fields = Object.fromEntries(new FormData(event.target));
+    const staleError = $('action-error'); if (staleError) staleError.textContent = '';
     try {
       await hmr.api(
         'POST',
@@ -544,13 +560,16 @@ function openForm(action, patient) {
     formOpen = false;
     try {
       await refresh();
-      if (action === 'visited' && page === 'patients' && selected === String(patient.id) && !formOpen) {
-        detailTab = 'Overview';
+      // refresh() leaves the open patient alone while a field has focus, so a saved action must redraw the patient
+      // itself; otherwise the old form, its old error and its disabled Save button stay on screen after the save.
+      if (typeof page !== 'undefined' && page === 'patients' && selected === String(patient.id) && !formOpen) {
+        if (action === 'visited') detailTab = 'Overview';
         if (!await showPatient(patient.id)) throw Error('patient view unavailable');
-        setPatientLayout('patient');
+        if (action === 'visited') setPatientLayout('patient');
       }
     } catch (error) {
       alert(action === 'visited' ? `Visit recorded, but the patient view could not be refreshed: ${errorText(error)}` : `Saved, but the view could not be refreshed: ${errorText(error)}`);
     }
   });
                }
+

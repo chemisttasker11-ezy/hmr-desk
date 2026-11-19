@@ -13,6 +13,12 @@ import db
 import jobs
 
 
+# The reference is the Brainstorm writing guide, not the patient's referral. It is registered in the report editor,
+# under 'Private local reference'. Search results and the reference panels show this text when it is missing or unreadable.
+UNAVAILABLE_MESSAGE = ('Brainstorm reference unavailable: the PDF is not registered or cannot be read. To see reference passages, register your own copy '
+                       'in the report editor under Private local reference.')
+
+
 class ReferenceUnavailable(ValueError):
     pass
 
@@ -71,7 +77,7 @@ def current():
         return data
     except (OSError,KeyError,TypeError,ValueError,fitz.FileDataError) as e:
         if isinstance(e,ReferenceUnavailable): raise
-        raise ReferenceUnavailable('Local reference unavailable; choose the original PDF') from None
+        raise ReferenceUnavailable(UNAVAILABLE_MESSAGE) from None
 
 
 def search(query):

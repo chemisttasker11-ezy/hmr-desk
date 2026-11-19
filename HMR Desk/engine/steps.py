@@ -63,20 +63,20 @@ def interactions_result_current(conn, p, name):
     if not match: return False
     confirmed = records.get(conn, p['id'], 'confirmed_meds.json')
     result = records.get(conn, p['id'], name)
-    import api
-    return (confirmed is not None and result is not None and api.confirmed_medicines_current(conn, p)
+    import medicine_review
+    return (confirmed is not None and result is not None and medicine_review.confirmed_medicines_current(conn, p)
             and hashlib.sha256(confirmed).hexdigest() == match[1]
             and hashlib.sha256(result).hexdigest() == match[2])
 
 def medicines_current(conn, p):
-    import api
-    return api.confirmed_medicines_current(conn, p)
+    import medicine_review
+    return medicine_review.confirmed_medicines_current(conn, p)
 
 def interactions_done(conn, p):
     confirmed = records.get(conn, p['id'], 'confirmed_meds.json')
     if confirmed is not None:
-        import api
-        if not api.confirmed_medicines_current(conn, p): return False
+        import medicine_review
+        if not medicine_review.confirmed_medicines_current(conn, p): return False
     confirmed_stamp = records.stamp(conn, p['id'], 'confirmed_meds.json')
     for name in records.names_like(conn, p['id'], 'mims interactions'):
         if not name.lower().endswith('.txt'): continue

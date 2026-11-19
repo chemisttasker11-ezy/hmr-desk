@@ -241,6 +241,26 @@ def _wipe_and_remove(path):
 _MIGRATION_LOCK_STALE = 600
 
 
+_LOCK_DENIED_TRIES = 20
+_LOCK_DENIED_PAUSE = 0.025
+
+
+def _create_lock_file(path):
+    """Create a lock file exclusively (FileExistsError when it is held).
+
+    On Windows, creating a file another request is deleting fails briefly with PermissionError (delete pending), not
+    FileExistsError. Retry that case a bounded number of times (about half a second); a lasting denial is a real
+    permission problem and is raised unchanged. Never treats a denial as having acquired the lock."""
+    for attempt in range(_LOCK_DENIED_TRIES):
+        try:
+            os.close(os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+            return
+        except PermissionError:
+            if attempt == _LOCK_DENIED_TRIES - 1:
+                raise
+            time.sleep(_LOCK_DENIED_PAUSE)
+
+
 class _migration_lock:
     def __init__(self, path):
         self.path = path + '.migrating'
@@ -249,7 +269,7 @@ class _migration_lock:
         deadline = time.time() + 120
         while True:
             try:
-                os.close(os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+                _create_lock_file(self.path)
                 return self
             except FileExistsError:
                 try:
@@ -267,6 +287,36 @@ class _migration_lock:
             os.unlink(self.path)
         except OSError:
             pass
+
+
+class _rotation_lock(_migration_lock):
+    """One key rotation at a time, and no start-up cleanup of a pending key while one is running."""
+    def __init__(self, path, wait=True):
+        self.path = path + '.rotating'
+        self.wait = wait
+        self.held = False
+
+    def __enter__(self):
+        if self.wait:
+            super().__enter__()
+            self.held = True
+            return self
+        try:
+            _create_lock_file(self.path)
+            self.held = True
+        except FileExistsError:
+            try:
+                if time.time() - os.path.getmtime(self.path) > _MIGRATION_LOCK_STALE:
+                    os.unlink(self.path)
+                    _create_lock_file(self.path)
+                    self.held = True
+            except OSError:
+                pass
+        return self
+
+    def __exit__(self, *exc):
+        if self.held:
+            super().__exit__(*exc)
 
 
 def _user_tables(conn):
@@ -317,6 +367,7 @@ def encrypt_plain_file(path, key, keep_original=False):
                 os.unlink(leftover)
         raise
     src.close()
+    old = path + '.plain-old'
     try:
         with closing(open_encrypted(tmp, key=key)) as check:
             if check.execute('PRAGMA integrity_check').fetchone()[0] != 'ok':
@@ -325,16 +376,25 @@ def encrypt_plain_file(path, key, keep_original=False):
                 raise ValueError('Encrypted copy has a different schema version')
             if {t: check.execute('SELECT count(*) FROM "%s"' % t).fetchone()[0] for t in _user_tables(check)} != counts:
                 raise ValueError('Encrypted copy does not match the original')
-        old = path + '.plain-old'
         for suffix in ('-wal', '-shm', '-journal'):
             if os.path.exists(path + suffix):
                 os.unlink(path + suffix)
         _replace_retry(path, old)
         _replace_retry(tmp, path)
     except Exception:
-        for leftover in (tmp, tmp + '-wal', tmp + '-shm', tmp + '-journal'):
-            if os.path.exists(leftover):
-                os.unlink(leftover)
+        # If the original was already moved aside, put it back before anything is deleted. When that
+        # fails too, keep both files: the records sit in the .plain-old copy and the verified encrypted
+        # copy stays, so nothing is lost and no fresh empty database may replace them.
+        if os.path.exists(old) and not os.path.exists(path):
+            try:
+                _replace_retry(old, path)
+            except Exception:
+                raise RuntimeError('Encryption could not finish and the original could not be restored automatically. '
+                                   'Your records are kept in the file ending .plain-old next to the database; do not delete it.')
+        if os.path.exists(path):
+            for leftover in (tmp, tmp + '-wal', tmp + '-shm', tmp + '-journal'):
+                if os.path.exists(leftover):
+                    os.unlink(leftover)
         raise
     if not keep_original:
         _wipe_and_remove(old)
@@ -372,6 +432,9 @@ def ensure_encrypted(path):
         kind = dbkey.file_kind(path)
         if kind == 'encrypted':
             return 'encrypted'
+        if kind == 'missing' and (os.path.exists(path + '.plain-old') or os.path.exists(path + '.encrypting')):
+            raise RuntimeError('An unfinished encryption left your records in a file ending .plain-old or .encrypting '
+                               'next to the database. A new empty database was not created. Keep those files and get help to recover them.')
         keys = dbkey.candidates(path) if dbkey.has_key_file(path) else []
         key = keys[0] if keys else dbkey.create_key(path)
         if kind == 'plain':
@@ -387,17 +450,18 @@ def rotate_key(conn):
     Other open connections still hold the old key and stop working, so callers must restart the engine.
     """
     path = next(r[2] for r in conn.execute('PRAGMA database_list') if r[1] == 'main')
-    new = dbkey.begin_rotation(path)
-    try:
-        conn.commit()
-        conn.execute('PRAGMA wal_checkpoint(TRUNCATE)')
-        conn.execute('PRAGMA rekey = "%s"' % _sql_key(new))
-    except Exception:
-        dbkey.abort_rotation(path)
-        raise
-    dbkey.finish_rotation(path)
-    conn.hmr_key = new
-    return dbkey.recovery_text(new)
+    with _rotation_lock(path):
+        new = dbkey.begin_rotation(path)
+        try:
+            conn.commit()
+            conn.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+            conn.execute('PRAGMA rekey = "%s"' % _sql_key(new))
+        except Exception:
+            dbkey.abort_rotation(path)
+            raise
+        dbkey.finish_rotation(path)
+        conn.hmr_key = new
+        return dbkey.recovery_text(new)
 
 
 def storage_status(path=None):
@@ -429,7 +493,9 @@ def connect(path=None):
     conn = open_encrypted(path)
     conn.row_factory = sqlite3.Row
     try:
-        dbkey.settle_pending(path, conn.hmr_key)
+        with _rotation_lock(path, wait=False) as rotation:
+            if rotation.held:  # a running rotation owns the pending key; do not clean it up underneath it
+                dbkey.settle_pending(path, conn.hmr_key)
         conn.execute('PRAGMA journal_mode=WAL')
         # executescript has its own transaction boundary; never start a schema
         # migration transaction until the historical base tables exist.
@@ -542,12 +608,23 @@ def backup(conn=None):
     """Copy the database next to itself as hmr-backup-<weekday>.db (7 rolling copies)."""
     own = conn is None
     conn = conn or connect()
-    target = os.path.join(os.path.dirname(db_path()), f'hmr-backup-{datetime.date.today():%a}.db')
-    out = open_encrypted(target, key=conn.hmr_key)
+    main = next((r[2] for r in conn.execute('PRAGMA database_list') if r[1] == 'main' and r[2]), None) or db_path()
+    target = os.path.join(os.path.dirname(os.path.abspath(main)), f'hmr-backup-{datetime.date.today():%a}.db')
+    # Write a new file and swap it in: an older copy may still be encrypted with a previous key,
+    # so it is never opened with the current one.
+    fresh = target + '.new'
+    for leftover in (fresh, fresh + '-wal', fresh + '-shm', fresh + '-journal'):
+        if os.path.exists(leftover):
+            os.unlink(leftover)
+    out = open_encrypted(fresh, key=conn.hmr_key)
     try:
         conn.backup(out)
     finally:
         out.close()
+    for stale in (target + '-wal', target + '-shm', target + '-journal'):
+        if os.path.exists(stale):
+            os.unlink(stale)
+    _replace_retry(fresh, target)
     if own:
         conn.close()
     return target

@@ -10,8 +10,8 @@ import os
 import datetime as dt
 from pathlib import Path
 
-import api
 import db
+import patient_actions
 
 ENV_FLAG = 'HMR_DEV_TOOLS'
 
@@ -38,7 +38,7 @@ def seed_visit(conn):
     require_enabled()
     n = conn.execute("SELECT COUNT(*) FROM patients WHERE key LIKE 'dev-seed-%'").fetchone()[0] + 1
     name = 'DEV SEED Synthetic Patient %d' % n
-    folder = 'DEV SEED Synthetic Patient %d' % n
+    folder = 'Visited/DEV SEED Synthetic Patient %d' % n  # stage folder, as for real visited patients
     path = Path(db.BASE) / folder
     path.mkdir(parents=True, exist_ok=True)
     today = dt.date.today().isoformat()
@@ -56,7 +56,7 @@ def seed_visit(conn):
         'meds': [['Synthetic medicine A 10 mg tablet', 'Brand A'], ['Synthetic medicine B 5 mg tablet', '']],
         'allergies': ['No known allergies (synthetic)']})
     conn.commit()
-    api.action(conn, patient, {'action': 'interactions_manual', 'text': 'Synthetic dev seed: no interactions reviewed.'})
+    patient_actions.action(conn, patient, {'action': 'interactions_manual', 'text': 'Synthetic dev seed: no interactions reviewed.'})
     db.log(conn, patient['id'], 'dev_seed', {'synthetic': True}, 'dev')
     conn.commit()
     return {'patient_id': patient['id'], 'name': name, 'folder': str(path), 'next_step': 'start report'}

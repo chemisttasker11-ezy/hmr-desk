@@ -5,6 +5,8 @@ import db, inbox, messaging, outbox, settings
 with tempfile.TemporaryDirectory() as tmp:
     db.BASE = tmp
     conn = db.connect(os.path.join(tmp, 'db.sqlite'))
+    # The product has no default pharmacist name or phone (messages refuse to render without them), so the fixture sets both.
+    settings.update(conn, {'pharmacist_name': 'Consultant Pharmacist', 'pharmacist_phone': '0400000000'})
     outbox.config = lambda: {'test_number': '0412345678'}
     conn.execute("INSERT INTO meta VALUES ('autopilot_since','2026-01-01T00:00:00+10:00')")
     settings.update(conn, {'auto_reminder':'off', 'auto_follow_up':'off'})
@@ -78,7 +80,7 @@ def resolution_tests():
     with tempfile.TemporaryDirectory() as tmp:
         db.BASE = tmp
         conn = db.connect(os.path.join(tmp, 'test.db'))
-        settings.update(conn, {'ai_reply_reading': 'off', 'auto_confirmation': 'ask', 'auto_thanks_decline': 'ask',
+        settings.update(conn, {'pharmacist_name': 'Consultant Pharmacist', 'pharmacist_phone': '0400000000', 'ai_reply_reading': 'off', 'auto_confirmation': 'ask', 'auto_thanks_decline': 'ask',
                                'auto_reminder': 'off', 'auto_follow_up': 'off'})
         conn.execute("INSERT INTO meta VALUES ('autopilot_since','2026-01-01T00:00:00+10:00')")
         outbox.config = lambda: {'test_number': '0412345678'}

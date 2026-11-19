@@ -61,13 +61,27 @@ def use_text(meta):
     return text
 
 REFERENCE_KEYS = {'source', 'code', 'display', 'release'}
+# Optional, catalogue-owned identity names copied from the chosen listing when every listing in the chosen group
+# agrees. Never derived from the display text. Saved references without them stay valid (nothing is migrated).
+REFERENCE_OPTIONAL_KEYS = {'generic_name', 'brand_name'}
 
 def valid_reference(ref):
-    return isinstance(ref, dict) and set(ref) == REFERENCE_KEYS and all(isinstance(v, str) and 0 < len(v) <= 400 for v in ref.values())
+    return (isinstance(ref, dict) and REFERENCE_KEYS <= set(ref) <= REFERENCE_KEYS | REFERENCE_OPTIONAL_KEYS
+            and all(isinstance(v, str) and 0 < len(v) <= 400 for v in ref.values()))
+
+def reference_identity(meta):
+    # The catalogue's own generic/brand for a linked row, or None for a part it did not record or could not settle.
+    ref = (meta or {}).get('reference')
+    if not valid_reference(ref): return {'generic_name': None, 'brand_name': None}
+    return {k: ref.get(k) for k in ('generic_name', 'brand_name')}
 
 def reference_text(meta):
     ref = (meta or {}).get('reference')
-    return 'Reference: ' + ref['display'] + ' (' + ref['source'].upper() + ' ' + ref['code'] + ', release ' + ref['release'] + ')' if valid_reference(ref) else ''
+    if not valid_reference(ref): return ''
+    # PBS listing codes are billing identifiers with no use to the pharmacist or patient: they stay in the stored
+    # reference (provenance) but are not printed. Other sources keep their concept code.
+    ident = 'PBS' if ref['source'] == 'pbs' else ref['source'].upper() + ' ' + ref['code']
+    return 'Reference: ' + ref['display'] + ' (' + ident + ', release ' + ref['release'] + ')'
 
 PROPOSAL_CANDIDATE_KEYS = {'source', 'code', 'display', 'kind', 'generic_name', 'brand_name', 'dose_form', 'release'}
 
@@ -225,6 +239,30 @@ def blank(conn, patient):
                 origin = clinical_review.origin(reviewed, 'medicines')
                 record['clarify'].append('Confirmed prescribed referral list from ' + origin +
                                          ' (actual use still to reconcile): ' + reviewed['medicines'][:9000])
+                # Reuse the pharmacist's confirmed list so it is not typed twice. Only when the referral text gave no
+                # medicine rows. Each non-empty line becomes one row exactly as entered: no name or directions are
+                # split out, use is left unconfirmed (so nothing counts as Taking until the pharmacist says so).
+                lines = [line.strip() for line in str(reviewed['medicines']).splitlines() if line.strip()]
+                fresh = stored_spec is None and not spec.is_file()
+                replaced = False
+                if fresh and record['meds'] and 0 < len(lines) <= 60 and all(len(line) <= 400 for line in lines):
+                    # First preparation only: the pharmacist's confirmed list outranks parser rows. Parser rows are not
+                    # merged or appended; they are kept as text in Clarify. Ceased-per-referral rows are kept.
+                    keep = {i for i, meta in enumerate(record['details']['meds']) if meta.get('use_status') == 'not_using'}
+                    parsed = [r for i, r in enumerate(record['meds']) if i not in keep]
+                    norm = lambda t: ' '.join(str(t).split()).casefold()
+                    same = {norm(' '.join(x for x in r[:2] if x)) for r in parsed} == {norm(x) for x in lines}
+                    if parsed and not same:
+                        kept_rows = [(r, record['details']['meds'][i]) for i, r in enumerate(record['meds']) if i in keep and r[0].strip().casefold() not in {x.casefold() for x in lines}]
+                        record['meds'] = [r for r, _ in kept_rows]; record['details']['meds'] = [m for _, m in kept_rows]
+                        record['clarify'].append('Referral parser read different medicine rows; replaced by the confirmed list. Parser read: ' + '; '.join(' '.join(x for x in r[:2] if x) for r in parsed)[:3000])
+                        record['sources'] = [x for x in record['sources'] if x != 'meds from referral - check']
+                        replaced = True
+                if (replaced or not record['meds']) and 0 < len(lines) <= 60 and all(len(line) <= 400 for line in lines):
+                    for line in lines:
+                        record['meds'].append([line, '', '', '', ''])
+                        record['details']['meds'].append({'packed': '', 'as_instructed': False})
+                    record['sources'].append('Medicine rows made from the confirmed intake list (' + origin + '); text exactly as entered, edit name and directions; use not confirmed - check')
             if reviewed.get('observations'):
                 origin = clinical_review.origin(reviewed, 'observations')
                 record['obs'].append(['Referral observation', reviewed['observations'], origin])

@@ -33,14 +33,14 @@ test('action reachability: pathology_outcome, hold/decline, expired, claim_now, 
 
 test('report sign-off: supports built report in visited state and respects prerequisites', () => {
   const reportsSource = fs.readFileSync(path.join(__dirname, '../renderer/reports.js'), 'utf8');
-  const context = { esc: String, H: { stageClass: () => 'report' } };
+  const context = { esc: H.esc, H };
   vm.createContext(context);
   vm.runInContext(reportsSource, context);
 
-  // 1. Word report built in visited state -> sign off enabled
+  // 1. Verified current Word+PDF report in visited state -> sign off UI enabled
   const visitedBuilt = context.reportRow(
     { id: 1, name: 'Alex', state: 'visited', stage: 'report' },
-    { steps: [{ name: 'report_build', done: true, ready: true }], reportSpec: { issues: [{ title: 'Finding' }] } },
+    { steps: [{ name: 'report_build', done: true, ready: true }], reportCurrency: { status: 'current', reasons: [], signed_off: false, readiness: { items: [] } }, reportSpec: { issues: [{ title: 'Finding' }] } },
     'Agent'
   );
   assert.match(visitedBuilt, /data-sign-off="1"/);
@@ -49,7 +49,7 @@ test('report sign-off: supports built report in visited state and respects prere
   // 2. Word report not built in visited state -> sign off disabled
   const visitedUnbuilt = context.reportRow(
     { id: 2, name: 'Sam', state: 'visited', stage: 'report' },
-    { steps: [{ name: 'report_build', done: false, ready: false, reason: 'unbuilt' }], reportSpec: { issues: [{ title: 'Finding' }] } },
+    { steps: [{ name: 'report_build', done: false, ready: false, reason: 'unbuilt' }], reportCurrency: { status: 'not_generated', reasons: [], signed_off: false, readiness: { items: [] } }, reportSpec: { issues: [{ title: 'Finding' }] } },
     'Agent'
   );
   assert.match(visitedUnbuilt, /data-sign-off="2"\s+disabled/);
@@ -232,3 +232,4 @@ test('followup screen: distinguishes waiting, due, and awaiting claim', () => {
   assert.deepEqual(waiting.map(p => p.id), [1]);
   assert.deepEqual(due.map(p => p.id), [2]);
 });
+

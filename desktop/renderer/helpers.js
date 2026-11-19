@@ -105,7 +105,8 @@ const H = (() => {
     claim: 'Claim',
     register_xlsx: 'Export register',
   };
-  const plainSteps = { 'confirm medicines': 'Check medicines for interaction check' };
+  // Today rows and buttons do not load report currency, so plain 'sign off' would imply the report is current.
+  const plainSteps = { 'confirm medicines': 'Check medicines for interaction check', 'sign off': 'Check report, then sign off' };
   function sectionOf(page) {
     return ({ messages: 'book', intake: 'book', to_book: 'book', calendar: 'visit', interview: 'visit',
       reports: 'report', report_editor: 'report', followup_editor: 'followup', run: 'activity' })[page] || page;
@@ -135,6 +136,13 @@ const H = (() => {
     if (p.stage === 'hold' && !words.includes('On hold')) words.push('On hold');
     if (p.stage === 'archived' && !words.includes('Archived')) words.push('Archived');
     return words;
+  }
+  // When no single next action is offered, say where the real choices are and open them.
+  function nextActionHint(primaryAction, otherCount) {
+    if (primaryAction) return { text: '', openOthers: false };
+    return otherCount > 0
+      ? { text: 'Check the details, then choose what happened next below.', openOthers: true }
+      : { text: 'Review this patient before continuing.', openOthers: false };
   }
   function stageActions(p, milestones = {}) {
     const actions = {
@@ -187,6 +195,85 @@ const H = (() => {
     'report_build',
     'claim',
   ];
+  // A historical 'report_build: done' step can be true even after the clinical record changes.
+  // Keep backend workflow and pharmacist approval separate from the status shown on screens.
+  function reportWorkflowStatus(patientState, buildStep, currency) {
+    const canBuild = ['visited', 'report_drafted'].includes(patientState);
+    const current = currency?.status === 'current';
+    const reason = current ? '' : currency?.status === 'outdated'
+      ? 'The generated report is outdated. Rebuild Word and PDF before sign-off.'
+      : currency?.status === 'not_generated'
+        ? 'No current generated report. Build Word and PDF before sign-off.'
+        : 'Report currency could not be verified. Reload before sign-off.';
+    return {
+      build: {
+        ...(buildStep || {}),
+        // A previous build is not evidence that the current clinical record matches it.
+        done: current,
+        // Rebuilding remains available in editable stages; this never enables sign-off.
+        ready: canBuild && Boolean(buildStep?.ready || buildStep?.done),
+        // The engine's own prerequisite (for example "confirm the medicine list first") is the real reason a Build
+        // button is grey. Report currency explains the sign-off block, so it only fills in when the engine gave no reason.
+        reason: (!buildStep?.ready && !buildStep?.done && buildStep?.reason) || reason || buildStep?.reason || '',
+      },
+      canSign: canBuild && current,
+      signReason: canBuild ? reason : 'This report is not awaiting sign-off.',
+    };
+  }
+  // The report editor greys both Build buttons when there are no findings. Say so beside them: a disabled button with no reason
+  // looks broken. This only explains the existing rule; it does not change which reports can be built.
+  function buildDisabledReason(findingCount) {
+    return Number(findingCount) > 0 ? '' : 'Build is off until the report has at least one finding. Add a finding to turn it on.';
+  }
+  // A medicine linked to a catalogue line carries the catalogue label (brand, strength, form) as its text. The medicines panel
+  // copies that text into Generic name and cannot split it without guessing, so say so beside the field. Text only.
+  const LINKED_CATALOGUE_NOTE = 'Linked catalogue line (brand, strength and form), not a generic name. Enter the generic name and brand before the eMIMS check.';
+  function linkedCatalogueNote(name, snapshotItems) {
+    const text = String(name || '').trim();
+    if (!text) return '';
+    const linked = (snapshotItems || []).some((item) => item?.metadata?.reference && String(item.values?.[0] || '').trim() === text);
+    return linked ? LINKED_CATALOGUE_NOTE : '';
+  }
+  // Freshness and recorded-state checklist from GET /api/patients/<id>/report-status. Display only: it never
+  // says approved or ready, and unknown or unverifiable stays visibly uncertain.
+  function reportStatusHtml(status) {
+    if (!status || typeof status !== 'object') return '';
+    const reasonText = {
+      document_changed: 'the Word file changed', pdf_changed: 'the PDF changed or is missing', report_content_changed: 'the report content changed since it was built',
+      interview_changed: 'the interview changed', pathology_changed: 'the pathology changed', source_files_changed: 'the original referral or pathology files changed',
+      clinical_record_changed: 'the clinical record changed', cannot_verify: 'the report could not be checked',
+    };
+    const reasons = (Array.isArray(status.reasons) ? status.reasons : []).map((r) => reasonText[r] || 'a change was detected');
+    let line;
+    if (status.status === 'current') line = 'Matches the saved interview and pathology.';
+    else if (status.status === 'outdated') line = `Outdated: ${reasons.join('; ') || 'a change was detected'}. Rebuild before sign-off.`;
+    else if (status.status === 'not_generated') line = 'No report has been built yet.';
+    else line = 'Report status could not be checked.';
+    if (status.reasons && status.reasons.includes('cannot_verify')) line += ' Treat it as unverified.';
+    const head = status.status === 'current' ? 'Built report' : 'Report status';
+    let sign = status.signed_off ? 'A signed version exists.' : 'Not signed off.';
+    if (status.signed_off && status.signed_version_intact === false) sign = 'A signed version exists, but the signed version has changed or is no longer intact.';
+    const words = { met: 'Done', not_met: 'Not done', unknown: 'Unknown' };
+    const items = (status.readiness && Array.isArray(status.readiness.items) ? status.readiness.items : [])
+      .map((i) => `<li>${esc(String(i.label || ''))}: <strong>${esc(words[i.state] || 'Unknown')}</strong></li>`).join('');
+    return `<div class="report-status"><p><strong>${esc(head)}.</strong> ${esc(line)} ${esc(sign)}</p>${items ? `<ul>${items}</ul>` : ''}<p class="muted">Recorded state only. This is not clinical sign-off.</p></div>`;
+  }
+  // The submission note "N task(s) queued (...)" is written once. Shown later it would still say
+  // queued after the tasks finished, so describe the current state of the task list instead.
+  function runStatusText(message, tasks) {
+    const text = String(message || '');
+    const m = /^(\d+) task\(s\) queued( \([^\n]*\))?\./.exec(text);
+    if (!m || !Array.isArray(tasks)) return text;
+    const active = tasks.filter((t) => ['queued', 'running', 'waiting'].includes(t && t.state)).length;
+    const detail = m[2] || '';
+    const head = active ? `${m[1]} task(s) submitted${detail}. ${active} still queued, running or waiting.` : `${m[1]} task(s) submitted${detail}. None still queued, running or waiting.`;
+    return head + text.slice(m[0].length);
+  }
+  function buildOutcomeText(result, pdf) {
+    const first = String((result && result.output) || '').split(/\r?\n/).map((line) => line.trim()).find(Boolean) || '';
+    if (result && result.state === 'done') return `${pdf ? 'Word and PDF built' : 'Word built'}${first ? ': ' + first : ''}. The files are in the patient folder.`;
+    return `Build did not finish${first ? ': ' + first : ''}`;
+  }
   function patientPathway(p, milestones = {}, stepsList = []) {
     const stepsMap = Object.fromEntries((stepsList || p.steps || []).map((s) => [s.name, s]));
     const stage = p.stage;
@@ -209,7 +296,7 @@ const H = (() => {
         title: 'Visit & interview',
         completed: isVisited,
         current: !isVisited && (stage === 'ready' || (stage === 'booking' && p.visit_date && p.visit_date <= localDate())),
-        detail: isVisited ? 'Visit recorded' : (stage === 'ready' ? 'Ready for visit' : 'Awaiting booking'),
+        detail: isVisited ? 'Visit recorded' : (stage === 'ready' ? 'Ready for visit' : (p.visit_date ? (p.visit_date <= localDate() ? 'Visit due' : 'Booked, awaiting visit day') : 'Awaiting booking')),
       },
       {
         id: 'report',
@@ -319,6 +406,15 @@ const H = (() => {
   function showInterviewRefresh(record, detail) {
     return record?.interview_newer === true && !['sent', 'claimed'].includes(detail?.state) && !detail?.report_sent && !detail?.visits?.[0]?.report_sent;
   }
+  // A typed date such as 01102026 (no separators) can be read as 1 Oct or 10 Jan. The text is never
+  // rewritten; the pharmacist is only told to write it unambiguously.
+  function dateTextHint(value) {
+    const text = String(value ?? '').trim();
+    return /^\d{6,8}$/.test(text) ? `"${text}" has no separators. Write it as DD/MM/YYYY so the day and month cannot be misread.` : '';
+  }
+  function pathologyDateHints(rows) {
+    return (rows || []).map((row, i) => (dateTextHint(Array.isArray(row) ? row[2] : '') ? `Row ${i + 1}: ${dateTextHint(row[2])}` : '')).filter(Boolean);
+  }
   function tableInput(key, title, columns, rows, prefix) {
     return `<div class="interview-table"><table><thead><tr>${columns.map((c) => `<th scope="col">${esc(c)}</th>`).join('')}<th>Remove</th></tr></thead><tbody>${(rows || []).map((row, i) => `<tr>${columns.map((c, j) => `<td>${prefix === 'report' && !(key === 'meds' && j >= 2) ? `<input data-field="${esc(key)}" data-row="${i}" data-col="${j}" aria-label="${esc(c)} row ${i + 1}" value="${esc(row[j] || '')}">` : `<textarea data-field="${esc(key)}" data-row="${i}" data-col="${j}" aria-label="${esc(c)} row ${i + 1}">${esc(row[j] || '')}</textarea>`}${j === 0 && (key === 'meds' || (prefix === 'interview' && key === 'other_meds')) ? `<button type="button" data-amh-row aria-label="Search AMH for ${esc(c)} row ${i + 1}">AMH</button>` : ''}</td>`).join('')}<td><button type="button" data-${prefix}-remove="${esc(key)}" data-row="${i}" aria-label="Remove ${esc(title)} row ${i + 1}">Remove</button></td></tr>`).join('')}</tbody></table></div><button type="button" data-${prefix}-add="${esc(key)}">Add row</button>`;
   }
@@ -377,6 +473,13 @@ const H = (() => {
       }
     } catch (_) { return []; }
     return drafts;
+  }
+  // The engine answered and refused the content (for example a finding that is still blank): that is a reason the
+  // pharmacist can act on, not an unreachable store. A dropped or unreachable connection keeps the storage wording.
+  const TRANSPORT_FAILURE = /fetch failed|UND_ERR|ECONN|EPIPE|socket|other side closed|network|timed? ?out|offline|ENOTFOUND/i;
+  function isRefusal(e) {
+    const message = String((e && e.message) || e || '');
+    return !!message && message.length < 300 && !TRANSPORT_FAILURE.test(message);
   }
   function autosaver({ getRecord, getId, endpoint, status, errorText, draftKey, loadCurrent, onReconcile, equivalent }) {
     let saved = '', timer, saving = null, error = '', generation = 0, key = '', conflicts = [], storageError = false, unreadable = false, retries = 0, offline = false, verifying = null;
@@ -492,7 +595,7 @@ const H = (() => {
               await verifyCurrent();
               return false;
             }
-            error = draftKey ? 'Unable to reach storage; retrying' : errorText(e);
+            error = draftKey && !isRefusal(e) ? 'Unable to reach storage; retrying' : errorText(e);
             status(storageError ? storageMessage : `Not saved - ${error}`);
             scheduleRetry();
           }
@@ -573,6 +676,23 @@ const H = (() => {
           if (!conflicts.length) timer = setTimeout(save, 500);
           return true;
         } catch (_) { status(storageMessage); return false; }
+      },
+      // Take server-derived fields into both the record and the saved baseline without
+      // touching edits made while the request was in flight. A field the user has
+      // changed since the last save is left alone and stays dirty.
+      adopt(patch) {
+        const record = getRecord();
+        if (!record || !patch || conflicts.length) return false;
+        let base;
+        try { base = JSON.parse(saved); } catch (_) { return false; }
+        let adopted = true;
+        for (const [field, value] of Object.entries(patch)) {
+          if (JSON.stringify(record[field]) !== JSON.stringify(base[field])) { adopted = false; continue; }
+          record[field] = JSON.parse(JSON.stringify(value));
+          base[field] = JSON.parse(JSON.stringify(value));
+        }
+        saved = JSON.stringify(base);
+        return adopted;
       },
       dirty,
       hasConflict: () => conflicts.length > 0,
@@ -672,7 +792,7 @@ const H = (() => {
       const days = Number(item.days_left);
       if (Number.isFinite(days)) parts.push(days < 0 ? `Expired ${-days} days ago` : `${days} days left`);
     }
-    if (!parts.filter(Boolean).length) parts.push(item.detail);
+    if (!parts.filter(Boolean).length) parts.push(String(item.detail || '').toLowerCase() === 'sign off' ? stepLabel('sign off') : item.detail);
     return parts.filter(Boolean).map(esc).join(' &middot; ');
   }
   function medicineItemId() { return globalThis.crypto.randomUUID().replaceAll('-', ''); }
@@ -691,7 +811,7 @@ const H = (() => {
     group,
     sentence,
     steps,
-    sectionOf, toBook, stepLabel, stageText, stageClass, hasNextStep, flagWords, stageActions, urgencySort,
+    sectionOf, toBook, stepLabel, stageText, stageClass, hasNextStep, flagWords, stageActions, nextActionHint, urgencySort,
     plainSteps,
     stepName,
     taskGroups,
@@ -699,6 +819,12 @@ const H = (() => {
     defaultInterviewId,
     bulkSteps,
     patientPathway,
+    buildOutcomeText,
+    runStatusText,
+    reportWorkflowStatus,
+    linkedCatalogueNote,
+    buildDisabledReason,
+    reportStatusHtml,
     commonStep,
     suburb,
     displayAddress,
@@ -713,6 +839,8 @@ const H = (() => {
     genericName,
     settingsDiff,
     consentValidation,
+    dateTextHint,
+    pathologyDateHints,
     tableInput,
     showInterviewRefresh,
     interviewDrafts,
@@ -720,3 +848,4 @@ const H = (() => {
   };
 })();
 if (typeof module !== 'undefined') module.exports = H;
+

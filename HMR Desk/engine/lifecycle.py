@@ -4,7 +4,10 @@ import json
 import sqlite3
 from pathlib import Path
 import db
+import followup_schedule
+import medicine_review
 import messaging
+import patient_actions
 import records
 import settings
 import steps
@@ -14,7 +17,6 @@ BOOKED = ('confirmed', 'pathology_ready', 'sheet_ready')
 
 
 def auto_visit(conn, today=None, dry_run=False):
-    import api
     today = today or dt.date.today()
     patients = conn.execute("SELECT * FROM patients WHERE is_test=0 AND archived_at IS NULL AND state IN ('confirmed','pathology_ready','sheet_ready') AND visit_date < ? ORDER BY visit_date,id", (str(today),)).fetchall()
     result = []
@@ -29,12 +31,11 @@ def auto_visit(conn, today=None, dry_run=False):
     if result and not dry_run:
         db.backup(conn)
         for p, item in zip(patients, result):
-            api.action(conn, p, {'action': 'visited', 'date': item['date'], 'auto': True, 'notes': item['notes']})
+            patient_actions.action(conn, p, {'action': 'visited', 'date': item['date'], 'auto': True, 'notes': item['notes']})
     return result
 
 
 def stage(conn, p, today=None):
-    import api
     state = p['state']
     mapping = {'new': ('intake', 'new referral'), 'pooled': ('booking', 'to offer'),
                'offered': ('booking', 'offered'), 'visited': ('report', 'to write'),
@@ -48,7 +49,7 @@ def stage(conn, p, today=None):
     elif state in BOOKED:
         value = ('ready', 'ready') if steps.done('pathology', conn, p) and steps.done('interview_sheet', conn, p) else ('booking', 'confirmed')
     elif state == 'claimed':
-        follow = api.patient_followups(conn, p['id'], today)
+        follow = followup_schedule.patient_followups(conn, p['id'], today)
         if follow and follow['next_action']:
             action = follow['next_action']
             if action.endswith('_document'): step = action.replace('_document', '').replace('followup', 'follow-up ') + ' documentation incomplete'
@@ -68,6 +69,8 @@ def folder_check(p):
     expected = {'visited': 'Visited', 'report_drafted': 'Visited', 'signed_off': 'Visited',
                 'sent': 'To CLAIM', 'claimed': 'Completed & Claimed',
                 'declined': 'Declined-Exp', 'expired': 'Declined-Exp'}.get(p['state'], 'Scheduled')
+    # Referrals imported but not yet booked legitimately sit in TO SORT (referral_entry puts them there).
+    also_ok = ('TO SORT',) if p['state'] in ('new', 'pooled', 'offered', 'hold') else ()
     base = Path(db.BASE).resolve()
     actual = None
     try:
@@ -76,10 +79,9 @@ def folder_check(p):
             actual = path.relative_to(base).parts[0]
     except (OSError, ValueError):
         pass
-    return {'actual': actual, 'expected': expected, 'ok': actual is None or actual == expected}
+    return {'actual': actual, 'expected': expected, 'ok': actual is None or actual == expected or actual in also_ok}
 
 def flags(conn, p, today=None, now=None):
-    import api
     today = today or dt.date.today()
     now = now or dt.datetime.now()
     result = []
@@ -96,7 +98,7 @@ def flags(conn, p, today=None, now=None):
         if suggested: result.append('archive_suggested')
     if p['call_list']: result.append('needs_call')
     if conn and p['state'] in db._PRE:
-        expiry = api.referral_expiry(conn, p['referral_date'])
+        expiry = patient_actions.referral_expiry(conn, p['referral_date'])
         if expiry:
             days = (expiry - today).days
             if days <= settings.get(conn, 'referral_warn_days'):
@@ -114,17 +116,15 @@ def flags(conn, p, today=None, now=None):
 
 
 def next_step(conn, p):
-    import api
     if conn:
         found = flags(conn, p)
         for flag, label in [('reply_waiting', 'read reply'), ('offer_passed', 'offer a new time'), ('visit_passed', 'record the visit')]:
             # an old reply must not hide the report or claim step once the visit is done
             if flag in found and (flag != 'reply_waiting' or p['state'] in db._PRE): return label
-    return api._next_step(p, conn)
+    return workflow_step(p, conn)
 
 
 def attention(conn, today=None, now=None):
-    import api
     today = today or dt.date.today()
     now = now or dt.datetime.now()
     titles = [('today_visits', "Today's visits"), ('visits_to_check', 'Visits to check'),
@@ -156,14 +156,14 @@ def attention(conn, today=None, now=None):
                     add('prep', p, step, visit_date=date, **note)
         if p['state'] in ('visited', 'report_drafted', 'signed_off'): add('reports', p, 'open_report', next_step(conn, p))
         if p['state'] == 'sent': add('claims', p, 'claim')
-        follow = api.patient_followups(conn, p['id'], today)
+        follow = followup_schedule.patient_followups(conn, p['id'], today)
         if follow:
             for alert in follow['alerts']:
                 if alert.startswith('follow-up '):
                     number = '1' if '1' in alert else '2'
                     add('followups', p, 'followup' + number + ('_claimed' if 'to claim' in alert else ''), alert, window_end=follow['window_end'])
         if p['state'] != 'hold' and ('referral_expired' in f or 'referral_expiring' in f):
-            expiry = api.referral_expiry(conn, p['referral_date'])
+            expiry = patient_actions.referral_expiry(conn, p['referral_date'])
             add('referrals', p, 'expired' if 'referral_expired' in f else 'offer', expiry=str(expiry), days_left=(expiry-today).days)
     groups['today_visits']['items'].sort(key=lambda x: x['time'])
     for m in messaging.waiting_replies(conn):
@@ -177,7 +177,7 @@ def attention(conn, today=None, now=None):
         if task['patient_id'] in by_id: add('stuck', by_id[task['patient_id']], 'retry', task_id=task['id'], step=task['step'], **({'manual': True} if task['step'] in ('interview_assist', 'report_draft', 'report_assist') else {}))
     for m in conn.execute("SELECT * FROM messages WHERE direction='out' AND state='Failed' AND datetime(COALESCE(sent_at,created_at)) >= datetime(?)", (cutoff,)):
         if m['patient_id'] in by_id: add('stuck', by_id[m['patient_id']], 'open_messages', message_id=m['id'])
-    if api.meta(conn, 'gateway_online', '') == 'false': add('stuck', None, 'check_phone', 'Phone gateway offline')
+    if followup_schedule.meta(conn, 'gateway_online', '') == 'false': add('stuck', None, 'check_phone', 'Phone gateway offline')
     return {'generated_at': now.isoformat(timespec='seconds'), 'groups': list(groups.values())}
 
 
@@ -195,3 +195,18 @@ if __name__ == '__main__':
         for item in visits: print(item['date'])
     finally:
         conn.close()
+
+
+def workflow_step(p, conn=None):
+    """The next step for a patient from the workflow state alone (moved from api._next_step; lifecycle.next_step adds flags)."""
+    state = p['state']
+    if state in ('confirmed', 'pathology_ready', 'sheet_ready'):
+        name = 'pathology' if not steps.done('pathology', conn, p) else 'interview_sheet' if not steps.done('interview_sheet', None, p) else None
+        return steps.BY_NAME[name].label if name else 'visit'
+    if state == 'visited':
+        if not medicine_review.confirmed_medicines_current(conn, p): return 'confirm medicines'
+        if medicine_review.report_data(conn, p) is not None: return 'build report' if medicine_review.report_data(conn, p).get('issues') else 'add findings'
+        if not steps.interactions_done(conn, p): return 'check interactions'
+        return 'start report'
+    if state == 'sent': return steps.BY_NAME['claim'].label
+    return {'new': steps.BY_NAME['intake_dry'].label, 'pooled': 'offer a time', 'offered': 'wait for reply', 'report_drafted': 'sign off', 'signed_off': 'send report'}.get(state, '')

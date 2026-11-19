@@ -210,3 +210,43 @@ test('online conflict retains both versions and never replaces newer consent', a
   assert.equal(JSON.parse(history[0].remote).notes, 'remote');
   assert.equal(remote.consent.signed, true);
 });
+
+test('adopting server-derived text keeps edits made while the request ran and still saves them', async () => {
+  const posts = [];
+  const env = setup(new Map(), async (_, record) => { posts.push(JSON.parse(JSON.stringify(record))); });
+  env.record = { followup: '', followup_decision: '', followup_text_reviewed: false };
+  env.saver.reset(env.record);
+  env.record.followup_decision = 'yes'; env.saver.changed();
+  assert.equal(await env.saver.save(true), true);
+  // user ticks the reviewed box while the follow-up wording is being re-read
+  env.record.followup_text_reviewed = true; env.saver.changed();
+  env.saver.adopt({ followup: 'generated wording' });
+  assert.equal(env.record.followup, 'generated wording');
+  assert.equal(env.saver.dirty(), true, 'the tick made during the re-read must stay unsaved until it is posted');
+  assert.equal(await env.saver.save(), true);
+  assert.equal(posts.at(-1).followup_text_reviewed, true);
+  assert.equal(posts.at(-1).followup, 'generated wording');
+  assert.equal(env.saver.dirty(), false);
+});
+
+test('adopt does not overwrite wording the user edited in the meantime', async () => {
+  const env = setup(new Map(), async () => {});
+  env.record = { followup: '', followup_decision: '' };
+  env.saver.reset(env.record);
+  env.record.followup = 'my words'; env.saver.changed();
+  assert.equal(env.saver.adopt({ followup: 'generated wording' }), false);
+  assert.equal(env.record.followup, 'my words');
+  assert.equal(env.saver.dirty(), true);
+});
+
+test('reset() after a re-read marks an in-flight edit saved (the failure mode adopt avoids)', async () => {
+  const posts = [];
+  const env = setup(new Map(), async (_, r) => { posts.push(JSON.parse(JSON.stringify(r))); });
+  env.record = { followup: '', followup_text_reviewed: false };
+  env.saver.reset(env.record);
+  env.record.followup_text_reviewed = true; env.saver.changed();
+  env.saver.reset(env.record);
+  assert.equal(env.saver.dirty(), false);
+  await env.saver.save();
+  assert.equal(posts.length, 0, 'edit was never posted');
+});

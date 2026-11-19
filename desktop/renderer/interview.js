@@ -36,6 +36,8 @@ let interviewId = '',
   interviewRecord = null;
 let interviewSaveStatus = 'Ready', interviewConflict = false, interviewProgressFilter = 'all';
 let interviewReconciliation = null;
+// A stale review (acknowledged for earlier medicines) must be re-acknowledgeable; the engine still binds each acknowledgement to the current digest.
+function canAcknowledgeReconciliation(status) { return !!status && !status.reviewed; }
 let interviewPathology = null, interviewPathologyDirty = false, interviewPathologyError = '';
 let interviewCandidateChecks = null, interviewCandidateChecksError = '', interviewCandidateChecksStale = false;
 // Monotonic epoch for the observation layer. Every load start, relevant edit
@@ -100,6 +102,7 @@ async function leaveInterview() {
 async function openInterview(id) {
   const target = String(id), previous = interviewId;
   if (page === 'interview' && interviewId !== target && !(await leaveInterview())) return { cancelled: true };
+  if (previous !== target) interviewProgressFilter = 'all';  // a filter chosen for one patient must not hide another patient's checked rows
   interviewId = target;
   if (page !== 'interview') await navigate('interview');
   else await interviewScreen();
@@ -312,7 +315,7 @@ function interviewOtherMedicineTable(rows) {
   rows ||= [];
   const meta = interviewRecord.details.other_meds, checked = meta.filter(m => m.checked).length;
   const order = rows.map((row, i) => i).filter(i => interviewProgressFilter === 'all' || (interviewProgressFilter === 'checked') === meta[i].checked).sort((a, b) => Number(meta[a].checked) - Number(meta[b].checked) || Number(meta[a].use_status === 'not_using') - Number(meta[b].use_status === 'not_using') || meta[b].priority - meta[a].priority || Number(!!rows[b][3].trim()) - Number(!!rows[a][3].trim()));
-  return `<div class="interview-progress"><span>Other medicines found: ${rows.length - checked} remaining · ${checked} checked</span></div><div class="interview-table interview-medicines"><table><tbody>${order.map(i => interviewMedicineRow('other_meds', rows[i], meta[i], i)).join('')}</tbody></table></div><button type="button" data-interview-add="other_meds">Add row</button>`;
+  return `<div class="interview-progress"><span>Other medicines found: ${rows.length - checked} remaining · ${checked} checked</span><label>Show <select data-interview-progress-filter aria-label="Filter found medicine progress">${[['all','All'],['remaining','Remaining'],['checked','Checked']].map(([v,l]) => `<option value="${v}" ${interviewProgressFilter === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label></div><div class="interview-table interview-medicines"><table><tbody>${order.map(i => interviewMedicineRow('other_meds', rows[i], meta[i], i)).join('')}</tbody></table></div><button type="button" data-interview-add="other_meds">Add row</button>`;
 }
 function interviewMoveFocus(el, key, change) {
   const row = el.closest?.('tr'), sectionId = row?.closest('section')?.id, col = key === 'meds' ? 2 : 1;
@@ -390,6 +393,7 @@ function renderInterview() {
     } else if (interviewTables[key]) {
       const columns = interviewTables[key];
       input = key === 'meds' ? interviewMedicineTable(value) : key === 'other_meds' ? interviewOtherMedicineTable(value) : H.tableInput(key, title, columns, value, 'interview');
+      if (key === 'pathology') input += `<p class="field-hint" role="status" data-pathology-date-hint>${esc(H.pathologyDateHints(value).join(' '))}</p>`;
       if (key === 'obs') input += ['height', 'weight', 'bmi'].map(name => `<div class="interview-measure"><strong>${esc(name.toUpperCase())}</strong> Referral: ${esc(record.details[name + '_referral'] || 'Not separately listed')} <label><input type="checkbox" data-detail="${name}_as_listed" ${record.details[name + '_as_listed'] ? 'checked' : ''} ${record.details[name + '_referral'] ? '' : 'disabled'}> As listed</label> ${interviewDetailText(name + '_actual', 'At interview')}</div>`).join('') + interviewDetailText('home_bp', 'Home BP readings') + interviewDetailText('home_bgl', 'Home blood glucose readings');
     } else if (key === 'health_check') {
       input = `<button type="button" data-health-no>Mark all remaining as No</button><div class="interview-health">${interviewEntryChoices.filter(entry => entry.key.startsWith('sx_')).map(interviewEntry).join('')}</div>` + [['mobility','Mobility (aids, falls, driving)'],['exercise','Exercise']].map(([field, label]) => `<label id="section-${field}">${label}<textarea id="interview-${field}" data-field="${field}">${esc(record[field] || '')}</textarea></label>`).join('');
@@ -429,11 +433,11 @@ function renderInterview() {
     <h2>Medicine reconciliation</h2>
     <p>Compare prescribed and actual medicine use. Flags require pharmacist judgement; they are not treatment recommendations.</p>
     ${interviewReconciliation
-      ? `<p role="status">${esc(interviewReconciliation.reviewed ? 'Reviewed and acknowledged for the saved medicines' : interviewReconciliation.stale ? 'Review is stale: medicines changed' : reconciliationRows.length + ' discrepancies require review')}</p>
+      ? `<p role="status">${esc(interviewReconciliation.reviewed ? 'Reviewed and acknowledged for the saved medicines' : interviewReconciliation.stale ? 'Review is stale: medicines changed. Acknowledge again for the current medicines' : reconciliationRows.length + ' discrepancies require review')}</p>
          <ul>${reconciliationRows.map(f => `<li><strong>${esc(f.medicine_id)}</strong>: ${esc(f.message)} <button type="button" data-interview-jump="meds">Go to medicines</button></li>`).join('')}</ul>`
       : '<p>Save changes, then load the current reconciliation checklist.</p>'}
     <div class="actions"><button type="button" data-reconciliation-load>Save and refresh checklist</button>
-    ${interviewReconciliation && !interviewReconciliation.reviewed && !interviewReconciliation.stale
+    ${canAcknowledgeReconciliation(interviewReconciliation)
       ? '<button type="button" data-reconciliation-ack>Acknowledge reviewed discrepancies</button>' : ''}</div>
     </section>`;
 
@@ -674,6 +678,10 @@ document.addEventListener('input', (event) => {
       el.type === 'checkbox' ? el.checked : el.dataset.prop === 'relationship' ? Number(el.value) : el.value;
   else interviewRecord[key] = key === 'clarify' ? el.value.split('\n') : el.value;
   if ((key === 'meds' || key === 'other_meds') && el.dataset.col === '0' && typeof medicineNameEdited === 'function') medicineNameEdited(key, Number(el.dataset.row), el);
+  if (key === 'pathology' && el.dataset.col === '2') {
+    const hint = document.querySelector('[data-pathology-date-hint]');
+    if (hint) hint.textContent = H.pathologyDateHints(interviewRecord.pathology).join(' ');
+  }
   if (key === 'consent') {
     const consent = interviewRecord.consent;
     const incomplete = consent.by === 'authorised' && (!consent.relationship || !consent.authorised_name.trim());
@@ -754,12 +762,12 @@ async function savePathologyRecordsNow() {
       interviewInvalidateObservations();
       return true;
     }
-    // Same-patient edits landed while saving: keep them, adopt the newer
-    // server revision (never a lower one), and stay dirty. Report
+    // Same-patient edits landed while saving: keep them, adopt the server
+    // revision as an opaque token (saves are serialized, so the latest response
+    // is the newest; tokens are SHA-256 strings and are never compared as numbers), and stay dirty. Report
     // non-success so callers such as leaveInterview do not navigate away
     // or proceed as though everything was stored.
-    interviewPathology = { ...saved, revision: Math.max(saved.revision, interviewPathology.revision),
-                           records: interviewPathology.records };
+    interviewPathology = { ...saved, records: interviewPathology.records };
     interviewPathologyDirty = true;
     interviewPathologyError = 'Edits made while saving were kept; save again to store them.';
     interviewInvalidateObservations();

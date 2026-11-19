@@ -31,6 +31,7 @@ const config = loadedConfig.config;
 let engineOwner = null;
 const { start: startEngine } = require('./src/engine-owner');
 const { verifyWorkspace } = require('./src/storage-choice');
+const { listFolder } = require('./src/referral-listing');
 const { makeVault } = require('./src/draft-vault');
 // First-launch guard: Electron stores the DPAPI-wrapped key in "Local State" lazily. Until it is on disk the
 // vault refuses drafts, so a hard kill in the first session cannot leave a draft nobody can decrypt later.
@@ -101,10 +102,10 @@ const views = {},
   queues = {},
   saved = {};
 async function api(method, apiPath, body) {
-  if (!['GET', 'POST'].includes(method) || !/^\/api\/[a-zA-Z0-9_/?=&%.-]*$/.test(apiPath))
+  if (!['GET', 'POST'].includes(method) || !/^\/api\/[a-zA-Z0-9_/?=&%.-]*$/.test(apiPath) || !require('./src/api-route').isCanonicalApiRoute(apiPath))
     throw Error('Invalid API request');
   const token = process.env.HMR_TOKEN ?? (await fsp.readFile(config.tokenFile, 'utf8')).trim();
-  const response = await fetch((process.env.HMR_API || config.api).replace(/\/$/, '') + apiPath, {
+  const response = await require('./src/read-retry').fetchWithReadRetry(fetch, method, (process.env.HMR_API || config.api).replace(/\/$/, '') + apiPath, {
     method,
     headers: { 'X-HMR-Token': token, 'Content-Type': 'application/json' },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -197,7 +198,7 @@ prodaLogin = require('./src/proda-login')({
   getWindow: () => win,
 });
 ipcMain.handle('api', async (e, method, p, b) => {
-  if (e.sender !== win.webContents || p === '/api/referrals/review' || p.startsWith('/api/backups/') || (p.startsWith('/api/records/') && p !== '/api/records/status') || (p.startsWith('/api/storage/') && p !== '/api/storage/status') ||
+  if (e.sender !== win.webContents || !require('./src/api-route').isCanonicalApiRoute(p) || p === '/api/referrals/review' || p.startsWith('/api/backups/') || (p.startsWith('/api/records/') && p !== '/api/records/status') || (p.startsWith('/api/storage/') && p !== '/api/storage/status') ||
       (method === 'POST' && p.endsWith('/pathology/sources')) ||
       (method === 'POST' && p === '/api/templates/register') ||
       require('./src/control').isPrivateApiRoute(p)) throw Error('Forbidden');
@@ -219,15 +220,17 @@ ipcMain.handle('referral-pick', async (e, kind) => {
     ? { properties: ['openDirectory'] }
     : { properties: ['openFile', 'multiSelections'], filters: [{ name: 'PDF documents', extensions: ['pdf'] }] });
   if (picked.canceled) return null;
-  let paths = picked.filePaths;
-  if (kind !== 'files') paths = (await fsp.readdir(paths[0], { withFileTypes: true }))
-    .filter(entry => entry.isFile() && entry.name.toLowerCase().endsWith('.pdf'))
-    .map(entry => path.join(picked.filePaths[0], entry.name));
-  if (!paths.length) return { rows: [{ file: 'Folder', status: 'rejected', message: 'No PDFs found in this folder.' }] };
+  let paths = picked.filePaths, listing = null;
+  if (kind !== 'files') {
+    const found = await listFolder(picked.filePaths[0], fsp, path);
+    paths = found.paths;
+    listing = { found: found.found, pdfs: found.paths.length, skipped: found.skipped, skippedTotal: found.skippedTotal };
+  }
+  if (!paths.length) return { rows: [{ file: 'Folder', status: 'rejected', message: 'No PDFs found in this folder.' }], listing };
   if (paths.length > 100) throw Error(`Folder contains ${paths.length} PDFs. Choose up to 100 files at a time.`);
   const response = await api('POST', '/api/referrals/review', { paths });
   reviewedReferrals.remember(paths, response);
-  return response;
+  return listing ? { ...response, listing } : response;
 });
 ipcMain.handle('referral-drop', async (e, paths) => {
   if (e.sender !== win.webContents || !Array.isArray(paths) || !paths.length || paths.length > 100 || paths.some(p => typeof p !== 'string' || !p)) throw Error('Invalid files');
@@ -540,59 +543,7 @@ ipcMain.on('draft-store', (e, action, key, value) => {
     e.returnValue = { error: 'Protected draft storage failed (' + error.constructor.name + ')' };
   }
 });
-// Removing plain copies requires an explicit native confirmation, never page-supplied consent.
-ipcMain.handle('records-retire', async (e) => {
-  if (e.sender !== win.webContents) throw Error('Invalid request');
-  const choice = await dialog.showMessageBox(win, { type: 'warning',
-    title: 'Remove verified plain record copies?',
-    message: 'Remove only plain record files whose exact bytes are already saved in the encrypted database?',
-    detail: 'Stop other apps or editors changing the workspace first. Different or unreadable files stay in place for review. Word, PDF and source/import documents stay unchanged. This is ordinary file deletion, not secure erasure: old copies may remain in backups, synced storage or disk recovery. Export a readable copy first if you need one.',
-    buttons: ['Cancel', 'Remove matching copies'], defaultId: 0, cancelId: 0 });
-  if (choice.response !== 1) return { cancelled: true };
-  return api('POST', '/api/records/retire', { confirmed: true });
-});
-// Record export gets its own channel: the folder is chosen in a native dialog here, never supplied by page code.
-ipcMain.handle('records-export', async (e, patientId) => {
-  if (e.sender !== win.webContents || !Number.isInteger(patientId) || patientId < 0) throw Error('Invalid export request');
-  const chosen = await dialog.showOpenDialog(win, { title: 'Choose a folder for the exported records (the copy will not be encrypted)',
-    properties: ['openDirectory', 'createDirectory'] });
-  if (chosen.canceled || !chosen.filePaths[0]) return { cancelled: true };
-  return api('POST', '/api/records/export', { patient_id: patientId,
-    destination: path.join(chosen.filePaths[0], (patientId === 0 ? 'HMR exported shared records' : 'HMR exported records - patient ' + patientId)) });
-});
-ipcMain.handle('encrypted-backup', async (e, action, passphrase) => {
-  if (e.sender !== win.webContents || !['create', 'restore', 'preview'].includes(action) ||
-      typeof passphrase !== 'string' || passphrase.length < 12 || passphrase.length > 512)
-    throw Error('Invalid backup request or passphrase (minimum 12 characters)');
-  if (action === 'create') {
-    const chosen = await dialog.showSaveDialog(win, { title: 'Save encrypted HMR backup',
-      defaultPath: path.join(documentsDir(), 'hmr-backup.hmrbak'),
-      filters: [{ name: 'Encrypted HMR backup', extensions: ['hmrbak'] }] });
-    if (chosen.canceled || !chosen.filePath) return { cancelled: true };
-    return api('POST', '/api/backups/create', { target: chosen.filePath, passphrase });
-  }
-  const chosen = await dialog.showOpenDialog(win, { title: 'Choose encrypted HMR backup',
-    properties: ['openFile'], filters: [{ name: 'Encrypted HMR backup', extensions: ['hmrbak'] }] });
-  if (chosen.canceled || !chosen.filePaths.length) return { cancelled: true };
-  const inspection = await api('POST', '/api/backups/preview',
-    { source: chosen.filePaths[0], passphrase });
-  if (action === 'preview') return inspection;
-  const confirmation = await dialog.showMessageBox(win, {
-    type: 'question',
-    title: 'Verified isolated restore',
-    message: 'Verified encrypted backup: ' + inspection.patients + ' patient records and ' +
-      inspection.workspace_files + ' patient workspace files.',
-    detail: 'Restore will create a separate, new folder. Your current database and workspace will NOT be replaced. Continue?',
-    buttons: ['Continue isolated restore', 'Cancel'], defaultId: 1, cancelId: 1, noLink: true,
-  });
-  if (confirmation.response !== 0) return { cancelled: true };
-  const folder = await dialog.showOpenDialog(win, { title: 'Choose parent folder for isolated restore',
-    properties: ['openDirectory', 'createDirectory'] });
-  if (folder.canceled || !folder.filePaths.length) return { cancelled: true };
-  const dest = path.join(folder.filePaths[0], 'HMR-Restored-' + Date.now());
-  return api('POST', '/api/backups/restore',
-    { source: chosen.filePaths[0], destination: dest, passphrase });
-});
+require('./src/records-ipc')({ ipcMain, dialog, getWin: () => win, api, documentsDir });
 ipcMain.handle('activate-restored', async (e, passphrase) => {
   if (e.sender !== win.webContents || typeof passphrase !== 'string' ||
       passphrase.length < 12 || passphrase.length > 512 || !engineOwner || engineShutdownStarted)

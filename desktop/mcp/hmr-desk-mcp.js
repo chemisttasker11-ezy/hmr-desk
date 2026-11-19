@@ -171,6 +171,7 @@ const choice = (...values) => ({ type: 'string', enum: values });
 const number = { type: 'integer', enum: [1, 2] };
 const followFields = { date: {type:'string'}, method: choice('phone','in person'), spoke_with: {type:'string'}, med_changes: {type:'string'}, recommendations: {type:'array',items:{type:'array',items:{type:'string'},minItems:3,maxItems:3},maxItems:80}, issues: {type:'string'}, outcome: {type:'string'}, notes: {type:'string'} };
 const record = (properties, required = Object.keys(properties)) => ({type:'object', properties, required, additionalProperties:false});
+const demographicKey = choice('name','assess_date','patient','doctor','dear');
 const usageItem = record({name:{type:'string'}, status:choice('taking','not_using','unknown'), detail:{type:'string'}, source:choice('Referral medicine','Found during interview'), directions:{type:'array',items:{type:'string'},minItems:2,maxItems:2}});
 const referralFields = record(Object.fromEntries(['name','phone','address','suburb','gp','clinic','referral_date','dob','sex','medicare','irn','ihi'].map(key => [key,{type:'string'}])), ['name']);
 const kinds = choice('offer','change','change_request','follow_up','confirmation','thanks_decline','reminder');
@@ -184,7 +185,7 @@ defs.push(
   ['hmr_message_discard','Discard a message draft.',{id:string},['id'],'POST','/api/messages/:id/discard'],
   ['hmr_message_resolve','Resolve an inbound reply.',{id:string,as:choice('yes','decline','new_time','call','done')},['id','as'],'POST','/api/messages/:id/resolve'],
   ['hmr_medicines_get','Get medicines.',{id},['id'],'GET','/api/patients/:id/meds'],
-  ['hmr_medicines_save','Save confirmed medicines with reviewed interview use and explicit taking alternatives for stopped overlaps.',{id,meds:{type:'array',items:{type:'array',items:{type:'string'},minItems:2,maxItems:2},maxItems:60},allergies:{type:'array',items:{type:'string'},maxItems:60},interview_usage:{type:'array',items:usageItem},alternatives:{type:'array',items:{anyOf:[usageItem,{type:'null'}]},maxItems:60}},['id','meds','allergies'],'POST','/api/patients/:id/meds'],
+  ['hmr_medicines_save','Save confirmed medicines with reviewed interview use and explicit taking alternatives for stopped overlaps.',{id,meds:{type:'array',items:{type:'array',items:{type:'string'},minItems:2,maxItems:2},maxItems:60},allergies:{type:'array',items:{type:'string'},maxItems:60},medicine_snapshot_sha256:{type:'string',pattern:'^[0-9a-f]{64}$'},interview_usage:{type:'array',items:usageItem},alternatives:{type:'array',items:{anyOf:[usageItem,{type:'null'}]},maxItems:60}},['id','meds','allergies'],'POST','/api/patients/:id/meds'],
   ['hmr_consent_preview','Read the consent preview image and metadata including its revision.',{id},['id'],'GET','/api/patients/:id/consent/preview'],
   ['hmr_followup_get','Get a follow-up form.',{id,number},['id','number'],'GET','/api/patients/:id/followup/:number'],
   ['hmr_followup_save','Save a follow-up form.',{id,number,form:record(followFields)},['id','number','form'],'POST','/api/patients/:id/followup/:number'],
@@ -206,6 +207,8 @@ defs.push(
   ['hmr_referral_review','Review explicitly selected local referral PDFs; returns extracted fields, flags and duplicate or error feedback without creating patients.',{paths:{type:'array',items:string,minItems:1,maxItems:100}},['paths'],'POST','/api/referrals/review'],
   ['hmr_referral_commit','After deliberate review, add one referral patient using its review token and corrected fields.',{token:{type:'string',pattern:'^[0-9a-f]{32}$'},fields:referralFields,confirm:{type:'boolean',enum:[true]}},['token','fields','confirm'],'POST','/api/referrals/commit'],
   ['hmr_agent_select','Select configured agents by default and/or step.',{default:string,per_step:record({interview_assist:{anyOf:[string,{type:'null'}]},report_draft:{anyOf:[string,{type:'null'}]},report_assist:{anyOf:[string,{type:'null'}]}},[])},[],'POST','/api/agents/select'],
+  ['hmr_report_refresh','Refresh the report from current patient records; demographic blocks the pharmacist edited are kept and reported unless named in replace_demographics. Does not sign off or send.',{id,replace_demographics:{type:'array',items:demographicKey,maxItems:5}},['id'],'POST','/api/patients/:id/report/refresh'],
+  ['hmr_report_demographics','Resolve listed report demographic mismatches: replace writes the patient record value, keep records an acknowledgement bound to the text and record value. Does not sign off or send.',{id,action:choice('replace','keep'),keys:{type:'array',items:demographicKey,minItems:1,maxItems:5}},['id','action','keys'],'POST','/api/patients/:id/report/demographics'],
   ['app_patient_focus','Open a patient workspace, interview, report or follow-up.',{id,view:choice('patient','interview','report','followup'),number,tab:choice('Overview','Conversation','Activity','Files'),layout:choice('split','list','patient')},['id','view'],'POST','/patient/focus'],
 );
 // Extend existing read tools without changing their established arguments.
@@ -276,6 +279,7 @@ async function call(name, args, fetcher = fetch, read = fs.readFile) {
     if (args.action === 'pathology_outcome' && !['none','access_code','saved_by_hand'].includes(args.fields.outcome)) throw Error('Invalid action');
     if (args.action === 'call' && !['no_answer','left_message','spoke','booked','declined','other'].includes(args.fields.outcome)) throw Error('Invalid action');
   }
+  if (['hmr_report_refresh','hmr_report_demographics'].includes(name) && (args.replace_demographics ?? args.keys) && new Set(args.replace_demographics ?? args.keys).size !== (args.replace_demographics ?? args.keys).length) throw Error('Invalid arguments');
   if (name === 'hmr_agent_select' && (!Object.keys(args).length || (args.per_step && !Object.keys(args.per_step).length && !args.default))) throw Error('Invalid arguments');
   if (name === 'app_patient_focus' && (((args.view === 'followup') !== (args.number !== undefined)) || (args.view !== 'patient' && (args.tab !== undefined || args.layout !== undefined)))) throw Error('Invalid arguments');
   if (
@@ -302,6 +306,8 @@ async function call(name, args, fetcher = fetch, read = fs.readFile) {
   if (['hmr_job_start','hmr_appointment_save','hmr_intake_correction','hmr_agent_select'].includes(name)) body = args;
   if (name === 'hmr_interview_save') body = args.record;
   if (name === 'hmr_report_save') body = args.spec;
+  if (name === 'hmr_report_refresh') body = args.replace_demographics ? {replace_demographics: args.replace_demographics} : {};
+  if (name === 'hmr_report_demographics') body = {action: args.action, keys: args.keys};
   if (name === 'hmr_settings_set') body = args.values;
   if (['hmr_patients','hmr_library','hmr_tasks','hmr_days','hmr_summary','hmr_appointments','hmr_day_route'].includes(name)) {
     const params = {...args}; if (name === 'hmr_patients' && params.archived !== undefined) params.archived = params.archived ? '1' : '0'; if (name === 'hmr_day_route') delete params.date;

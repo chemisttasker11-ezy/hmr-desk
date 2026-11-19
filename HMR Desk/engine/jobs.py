@@ -255,6 +255,7 @@ def report_start(patient_id):
 def report_build(patient_id, pdf=False):
     import report
     with connection() as conn:
+        conn.execute('BEGIN')  # one read snapshot: the spec, the checks and the evidence below all see the same committed state
         p = get_patient(conn, patient_id)
         folder = patient_folder(p)
         spec_bytes = record_store.get(conn, p['id'], 'report_spec.json')
@@ -269,12 +270,28 @@ def report_build(patient_id, pdf=False):
         if not data['issues']: raise ValueError('add at least one finding')
         pending = report.placeholders(data)
         if pending: raise ValueError('Review placeholder fields: ' + ', '.join(pending))
-        target = Path(data['out'])
-        if not target.is_absolute(): target = folder / target
-        target = target.resolve()
+        unreviewed = report.template_reviews_pending(conn, p, data)
+        if unreviewed: raise ValueError('Review imported template findings: ' + ', '.join(str(n) for n in unreviewed))
+        import report_auth
+        # One snapshot, taken before rendering: build evidence records the sources the document is built from,
+        # so a source saved during rendering or PDF conversion leaves evidence that sign-off refuses.
+        snapshot = {
+            'interview_revision': interview.revision(conn, p),
+            'pathology_revision': pathology_records.revision(conn, p),
+            'source_files_sha256': report_auth.source_snapshot(conn, p),
+            'clinical_snapshot_sha256': report_auth.clinical_snapshot_hash(conn, p),
+            'demographics': report.demographic_status(conn, p, data),  # block name -> matches/kept/unresolved, no text
+        }
+        conn.rollback()  # end the read snapshot before rendering; later writes (events, state) must not be blocked by it
+        from pathlib import PureWindowsPath
+        raw = str(data['out'])
+        if not (Path(raw).is_absolute() or PureWindowsPath(raw).is_absolute()): raise ValueError('Report spec out must be an absolute path')
+        # A restored or moved workspace keeps the old root in the stored path. The output always lands in this patient's
+        # folder under the stored file name, whichever root the spec was written under.
+        name = PureWindowsPath(raw).name
+        target = (folder / name).resolve() if name not in ('', '.', '..') else folder
         if target.parent != folder or target.suffix.lower() != '.docx': raise ValueError('Report output must be a DOCX in patient folder')
         # Preserve every prior DOCX/PDF and any signed revision; never overwrite.
-        if not Path(data['out']).is_absolute(): raise ValueError('Report spec out must be an absolute path')
         original = target
         for revision in range(1, 1001):
             target = original if revision == 1 else original.with_name(original.stem + '-v' + str(revision) + original.suffix)
@@ -310,7 +327,9 @@ def report_build(patient_id, pdf=False):
                 left = getattr(exc, 'cleanup_pending', None)
                 if left:
                     db.log(conn, p['id'], 'pdf_cleanup_pending', {'folder': left, 'conversion': 'failed', 'error': exc.cleanup_error}, 'job'); conn.commit()
-                raise RuntimeError('Local PDF conversion failed; prior Word draft preserved' + ('; ' + pdf_export.pending_note(left) if left else '')) from exc
+                why = pdf_export.failure_text(exc)
+                db.log(conn, p['id'], 'pdf_conversion_failed', {'reason': why}, 'job'); conn.commit()
+                raise RuntimeError('Local PDF conversion failed; prior Word draft preserved. Reason: ' + why + ('; ' + pdf_export.pending_note(left) if left else '')) from exc
             if isinstance(converted, dict) and converted.get('cleanup_pending'):
                 left = Path(converted['cleanup_pending']).name
                 db.log(conn, p['id'], 'pdf_cleanup_pending', {'folder': left, 'conversion': 'ok', 'error': converted.get('cleanup_error', '')}, 'job')
@@ -318,19 +337,19 @@ def report_build(patient_id, pdf=False):
         if p['state'] == 'visited' and db.can_move(p['state'], 'report_drafted'):
             db.set_state(conn, patient_id, 'report_drafted', source='job')
         import hashlib
-        import report_auth
         evidence = {
             'file': target.name,
             'sha256': hashlib.sha256(target.read_bytes()).hexdigest(),
             'pdf_sha256': hashlib.sha256(pdf_target.read_bytes()).hexdigest() if pdf else '',
             'report_spec_sha256': hashlib.sha256(spec_bytes).hexdigest(),
-            'interview_revision': interview.revision(conn, p),
-            'pathology_revision': pathology_records.revision(conn, p),
+            'interview_revision': snapshot['interview_revision'],
+            'pathology_revision': snapshot['pathology_revision'],
             'template_version': approved[1]['version'] if approved else '',
             'template_sha256': approved[1]['sha256'] if approved else '',
             'template_approved': bool(approved),
-            'source_files_sha256': report_auth.source_snapshot(conn, p),
-            'clinical_snapshot_sha256': report_auth.clinical_snapshot_hash(conn, p),
+            'source_files_sha256': snapshot['source_files_sha256'],
+            'clinical_snapshot_sha256': snapshot['clinical_snapshot_sha256'],
+            'demographics': snapshot['demographics'],
         }
         db.log(conn, patient_id, 'report_build', evidence, 'job')
         return output

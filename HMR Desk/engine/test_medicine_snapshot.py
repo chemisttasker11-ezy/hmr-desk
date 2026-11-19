@@ -234,3 +234,30 @@ def test_stale_confirmation_blocks_readiness_done_and_next_action(setup, monkeyp
     monkeypatch.setattr(api, 'MIMS_PATH', helper)
     with pytest.raises(ValueError, match='Medicine use changed or needs reconciliation'):
         api.mims_lists(conn)
+
+
+def test_confirmation_made_before_an_interview_existed_is_not_current_once_one_is_saved(setup):
+    conn,p,data=setup
+    records.put_json(conn,p['id'],'confirmed_meds.json',{'meds':[['Referral only 10 mg tablet','']],'allergies':[],'confirmed_at':'x','interview_usage':[],'alternatives':[None]});conn.commit()
+    assert api.confirmed_medicines_current(conn,p)          # no interview yet: referral-only confirmation stands
+    records.put_json(conn,p['id'],'interview.json',data);conn.commit()
+    assert not api.confirmed_medicines_current(conn,p)      # an interview with its own medicines now exists: reconfirm against it
+    path=f"/api/patients/{p['id']}/meds"
+    status,proposal=api.handle(conn,'GET',path,{},None)
+    body={k:proposal[k] for k in ('meds','allergies','interview_usage','medicine_snapshot_sha256')}
+    assert api.handle(conn,'POST',path,{},body)[0]==200
+    assert api.confirmed_medicines_current(conn,p)          # reconfirmed against the interview digest
+
+
+def test_meds_read_flags_a_stale_confirmation_made_before_the_interview_and_never_presents_it_as_current(setup):
+    conn,p,data=setup
+    path=f"/api/patients/{p['id']}/meds"
+    old={'meds':[['Old referral-only 10 mg tablet','']],'allergies':[],'confirmed_at':'x','interview_usage':[],'alternatives':[None]}
+    records.put_json(conn,p['id'],'confirmed_meds.json',old);conn.commit()
+    assert api.handle(conn,'GET',path,{},None)[1]['medicine_snapshot_changed'] is False   # no interview yet
+    data['revision']='missing';interview.save(conn,p,data)
+    got=api.handle(conn,'GET',path,{},None)[1]
+    assert got['meds']==old['meds']                      # the stored list is shown as stored, never silently replaced
+    assert got['medicine_snapshot_changed'] is True      # and flagged: it was not reviewed against this interview
+    assert not api.confirmed_medicines_current(conn,p)
+    assert not api.confirmed_medicines_current(conn,p)

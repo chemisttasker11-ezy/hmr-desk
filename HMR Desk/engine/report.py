@@ -1,5 +1,7 @@
 """Local report editor data and reusable finding search."""
+import copy
 import datetime as dt
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -21,6 +23,13 @@ REVIEW = ['thanks', 'reason', 'intro', 'followup']
 _cache = {}
 _lock = threading.RLock()
 
+def _dmy(value):
+    """Display an ISO date as DD/MM/YYYY like the assessment and report dates; other text is unchanged."""
+    import re
+    match = re.fullmatch(r'(\d{4})-(\d{2})-(\d{2})', str(value).strip())
+    return match[3] + '/' + match[2] + '/' + match[1] if match else value
+
+
 def validate(data):
     if not isinstance(data, dict) or not jobs.REPORT_KEYS <= data.keys(): raise ValueError('report spec missing required keys')
     for key in jobs.REPORT_KEYS - set(WIDTHS) - {'issues'}:
@@ -38,6 +47,12 @@ def validate(data):
             any(not isinstance(e,dict) or not isinstance(e.get('id'),str) or not isinstance(e.get('text'),str) for e in origin['evidence']) or
             len(json.dumps(origin,ensure_ascii=False)) > 2000000):
             raise ValueError('invalid suggestion source evidence')
+        review = issue.get('template_review')
+        if review is not None and (not isinstance(review, dict) or set(review) != {'sha256', 'context_sha256'} or
+                                   any(not isinstance(review[k], str) or not re.fullmatch('[a-f0-9]{64}', review[k]) for k in review)):
+            raise ValueError('invalid template review')
+        if 'template_reviewed' in issue and not isinstance(issue['template_reviewed'], bool): raise ValueError('invalid template_reviewed')
+        if 'template_review_for' in issue and not (isinstance(issue['template_review_for'], str) and re.fullmatch('[a-f0-9]{64}', issue['template_review_for'])): raise ValueError('invalid template_review_for')
     if 'followup_decision' in data and data['followup_decision'] not in manual_defaults.DECISIONS: raise ValueError('invalid followup_decision')
     if 'followup_text_reviewed' in data and not isinstance(data['followup_text_reviewed'], bool): raise ValueError('invalid followup_text_reviewed')
     if 'followup_reviewed_sha256' in data and (not isinstance(data['followup_reviewed_sha256'], str) or (data['followup_reviewed_sha256'] and not re.fullmatch('[a-f0-9]{64}', data['followup_reviewed_sha256']))): raise ValueError('invalid followup_reviewed_sha256')
@@ -51,6 +66,9 @@ def load(conn, patient, ai=False):
     validate(data)
     if not ai: data = with_trusted_policy(conn, patient, data)
     if not ai: data['followup_text_reviewed'] = manual_defaults.review_valid(data)
+    if not ai: data['revision'] = records.revision(conn, patient['id'], 'report_spec.json')
+    if not ai: data = _expose_template_review(conn, patient, data)
+    if not ai: data['demographic_mismatches'] = demographic_mismatches(conn, patient, data)
     if not ai: data['interview_newer'] = 'interview_revision' in data and interview.revision(conn, patient) != data['interview_revision']
     if not ai:
         import pathology_records
@@ -76,29 +94,121 @@ def with_trusted_policy(conn, patient, data):
     return {**data, 'followup_policy': policy} if policy else data
 
 
+def template_review_sha(issue, context_sha256):
+    """Review of an imported past-case template covers the exact wording and the saved patient sources it was reviewed against.
+    Only a hash is stored, never the template text."""
+    parts = ['template-review-v1'] + [str(issue.get(k, '')).strip() for k in ('title', 'rec', 'rationale')] + [context_sha256]
+    return hashlib.sha256('\n'.join(parts).encode('utf-8')).hexdigest()
+
+
+def _current_context_sha(conn, patient):
+    """Fingerprint of the saved sources the suggestion context is built from (interview, pathology, confirmed medicines,
+    interaction files), not of today's date, so a review does not lapse at midnight. '' when it cannot be established
+    (a review is then never valid)."""
+    try:
+        import suggest
+        revisions = suggest.context_for(conn, patient).get('source_revisions')
+        if not isinstance(revisions, dict) or not revisions: return ''
+        return hashlib.sha256(('template-context-v1\n' + json.dumps(revisions, sort_keys=True, ensure_ascii=False, separators=(',', ':'))).encode('utf-8')).hexdigest()
+    except Exception:
+        return ''
+
+
+def _review_is_valid(issue, current):
+    review = issue.get('template_review')
+    return bool(current and isinstance(review, dict) and review.get('context_sha256') == current and
+                review.get('sha256') == template_review_sha(issue, current))
+
+
+def template_reviews_pending(conn, patient, data):
+    """1-based numbers of findings that came from an imported suggestion template and have not been deliberately reviewed
+    for this exact wording and the current patient context. Manual findings are never listed. A suggestion-derived
+    finding saved before this review existed has no review record, so it is listed until the pharmacist reviews it."""
+    numbered = [(n, i) for n, i in enumerate(data.get('issues', []), 1) if isinstance(i, dict) and 'suggestion_source' in i]
+    if not numbered: return []
+    current = _current_context_sha(conn, patient)
+    return [n for n, i in numbered if not _review_is_valid(i, current)]
+
+
+def _bind_template_reviews(conn, patient, data, old):
+    """template_reviewed=True from the client means 'I reviewed this imported template wording for this patient now'.
+    It is honoured only when the finding text and its suggestion source are unchanged from the previous save and the
+    client saw the current patient context (template_review_for). Editing never creates a review, and a review is
+    dropped when the wording changes. Review state in the payload is never trusted: only the previous saved state is."""
+    issues = data.get('issues', [])
+    previous = old.get('issues', []) if isinstance(old, dict) else []
+    if not any(isinstance(i, dict) and ('suggestion_source' in i or 'template_review' in i or 'template_reviewed' in i) for i in list(issues) + list(previous)): return data
+    current = None
+    result = []
+    imported = {}
+    for before in previous:
+        if isinstance(before, dict) and 'suggestion_source' in before:
+            imported.setdefault(tuple(str(before.get(k, '')).strip() for k in ('title', 'rec', 'rationale')), before['suggestion_source'])
+    for index, issue in enumerate(issues):
+        clean = {k: v for k, v in issue.items() if k not in ('template_review', 'template_reviewed', 'template_review_for')}
+        if 'suggestion_source' not in issue:
+            # A save that drops the provenance of wording that is still exactly an imported template does not make it a
+            # manual finding: the source is restored and the review starts again. Rewritten wording is the pharmacist's own.
+            restored = imported.get(tuple(str(issue.get(k, '')).strip() for k in ('title', 'rec', 'rationale')))
+            if restored is not None:
+                result.append({**clean, 'suggestion_source': copy.deepcopy(restored)})
+                continue
+            result.append(clean)  # a manual finding carries no review state
+            continue
+        before = previous[index] if index < len(previous) and isinstance(previous[index], dict) else {}
+        same = ({k: str(before.get(k, '')).strip() for k in ('title', 'rec', 'rationale')} == {k: str(issue.get(k, '')).strip() for k in ('title', 'rec', 'rationale')}
+                and before.get('suggestion_source') == issue.get('suggestion_source'))
+        asked = issue.get('template_reviewed')
+        keep = before.get('template_review') if same else None
+        if asked is False: keep = None
+        elif asked and same:
+            if current is None: current = _current_context_sha(conn, patient)
+            if current and issue.get('template_review_for') == current: keep = {'sha256': template_review_sha(clean, current), 'context_sha256': current}
+        if isinstance(keep, dict) and keep.get('sha256') != template_review_sha(clean, keep.get('context_sha256', '')): keep = None
+        result.append({**clean, 'template_review': keep} if keep else clean)
+    return {**data, 'issues': result}
+
+
+def _expose_template_review(conn, patient, data):
+    """Read-only view for the editor: whether each suggestion-derived finding is reviewed now, and the context fingerprint
+    the pharmacist is looking at. Not stored."""
+    if not any(isinstance(i, dict) and 'suggestion_source' in i for i in data.get('issues', [])): return data
+    current = _current_context_sha(conn, patient)
+    return {**data, 'suggestion_context_sha256': current,
+            'issues': [({**i, 'template_reviewed': _review_is_valid(i, current)} if isinstance(i, dict) and 'suggestion_source' in i else i) for i in data['issues']]}
+
+
 def _bind_followup_review(data, old):
     """followup_text_reviewed=True from the client means 'I reviewed the follow-up text now saved'. It is stored as a hash
     of that exact text, and only when the text and the decision are unchanged from the previous save; otherwise it is dropped."""
-    asked = data.pop('followup_text_reviewed', False)
+    asked = data.pop('followup_text_reviewed', None)  # None = the client did not say; False = explicitly unticked
     text = data.get('followup', '').strip()
     unchanged = bool(old) and old.get('followup', '').strip() == text and old.get('followup_decision') == data.get('followup_decision')
     keep = old.get('followup_reviewed_sha256', '') if unchanged else ''
-    if asked and unchanged: keep = manual_defaults.text_sha(text, data.get('followup_decision', ''))
+    if asked is False: keep = ''
+    elif asked and unchanged: keep = manual_defaults.text_sha(text, data.get('followup_decision', ''))
     if keep != manual_defaults.text_sha(text, data.get('followup_decision', '')): keep = ''
     return {**data, 'followup_reviewed_sha256': keep} if (keep or old.get('followup_reviewed_sha256') or 'followup_decision' in data) else data
 
 
 def _save(conn, patient, data):
+    expected = data.get('expected_revision') if isinstance(data, dict) else None
+    if expected is not None and not isinstance(expected, str): raise ValueError('invalid expected_revision')
     data = with_trusted_policy(conn, patient, data)
     validate(data)
-    data = manual_defaults.apply_followup_decision({k: v for k, v in data.items() if k not in ('interview_newer', 'pathology_newer')})
+    data = manual_defaults.apply_followup_decision({k: v for k, v in data.items() if k not in ('interview_newer', 'pathology_newer', 'revision', 'expected_revision', 'demographic_mismatches', 'demographic_conflicts', 'suggestion_context_sha256')})
+    if expected is not None:
+        # Compare and write in one write transaction so two saves cannot both pass the check.
+        if not conn.in_transaction: conn.execute('BEGIN IMMEDIATE')
+        if records.revision(conn, patient['id'], 'report_spec.json') != expected: raise records.Conflict('report changed since it was read')
     previous = records.get(conn, patient['id'], 'report_spec.json')
     data = _bind_followup_review(data, json.loads(previous) if previous else {})
+    data = _bind_template_reviews(conn, patient, data, json.loads(previous) if previous else {})
     if previous is not None: records.put(conn, patient['id'], 'report_spec.json.bak', previous)
     records.put_json(conn, patient['id'], 'report_spec.json', data)
     db.log(conn, patient['id'], 'report_saved', {}, 'api')
     conn.commit()
-    return data
+    return dict(_expose_template_review(conn, patient, data), revision=records.revision(conn, patient['id'], 'report_spec.json'))  # the caller's next conditional save needs it
 
 def placeholders(data):
     return manual_defaults.unresolved(data)
@@ -179,11 +289,11 @@ def other_actual(r, m):
 
 def _derived(conn, patient):
     folder = jobs.patient_folder(patient)
-    import api
+    import medicine_review
     with interview.record_lock(patient):
         has_interview = records.exists(conn, patient['id'], 'interview.json')
         if not records.exists(conn, patient['id'], 'confirmed_meds.json'): raise ValueError('confirm the medicine list first')
-        if not api.confirmed_medicines_current(conn, patient): raise ValueError('Medicine use changed; review and confirm medicines first')
+        if not medicine_review.confirmed_medicines_current(conn, patient): raise ValueError('Medicine use changed; review and confirm medicines first')
         record = interview.load(conn, patient); p = dict(patient); h = record['header']
     if not has_interview:
         confirmed = records.get_json(conn, patient['id'], 'confirmed_meds.json')
@@ -239,7 +349,7 @@ def _derived(conn, patient):
                  if result['verified'] else 'UNVERIFIED — check original source'),
                 'Sample: ' + result['sample_date'] if result['sample_date'] else '',
                 'Source: ' + result['source'] if result['source'] else '',
-                result['comment'],
+                '' if result['verified'] and result['id'] in verification and result['comment'] == UNVERIFIED_DEFAULT_NOTE else result['comment'],
             )))
         ])
     dates = list(dict.fromkeys(
@@ -248,18 +358,25 @@ def _derived(conn, patient):
     ))
     return record, dict(conditions=record['conditions'], allergies=record['allergies'], obs=observations(record), meds=[[r[0], actual(r, m), referral_note(r, m), ''] for r, m in zip(referral_rows, referral_meta) if any(r) and m.get('use_status') != 'not_using'] + [[r[0], other_actual(r, m), ' | '.join(filter(None, r[2:])), ''] for r, m in zip(other_rows, other_meta) if any(r) and m.get('use_status') != 'not_using' and m.get('kind') not in ('otc', 'complementary')], otc=[[r[0], other_actual(r, m), ' | '.join(filter(None, r[2:]))] for r, m in zip(other_rows, other_meta) if any(r) and m.get('use_status') != 'not_using' and m.get('kind') in ('otc', 'complementary')], ceased=[[r[0], r[1], ' | '.join(filter(None, ['Referral medicine', r[2], '\n'.join(filter(None, (referral_note(r, m), interview.use_text(m))))]))] for r, m in zip(referral_rows, referral_meta) if any(r) and m.get('use_status') == 'not_using'] + [[r[0], r[1], ' | '.join(filter(None, ['Found during interview', other_note(r, m)]))] for r, m in zip(other_rows, other_meta) if any(r) and m.get('use_status') == 'not_using'], path=pathology_table), ', '.join(dates)
 
+def _demographics(conn, patient, record):
+    """Patient, GP and date blocks, built the same way at start and at refresh."""
+    p = dict(patient); h = record['header']
+    name = p['name']; gp = p.get('gp') or h['gp'] or ''
+    address = ', '.join(filter(None, (p.get('address'), p.get('suburb'))))
+    patient_lines = [name, 'DOB: ' + _dmy(p.get('dob') or h['dob']), 'Medicare No: ' + (p.get('medicare') or ''), 'Address: ' + address, 'Phone: ' + (p.get('phone') or '')]
+    doctor_lines = [gp, p.get('clinic') or '', 'Request date: ' + _dmy(p.get('referral_date') or '')]
+    import steps
+    visit = steps.event_date(conn, patient, 'visited') or p.get('visit_date') or h['visit'].split(' ')[0]
+    return dict(name=name, assess_date=visit, patient='\n'.join(patient_lines), doctor='\n'.join(filter(None, doctor_lines)), dear='Dear ' + (gp or 'Doctor') + ',')
+
 def start(conn, patient):
     folder = jobs.patient_folder(patient)
     if records.exists(conn, patient['id'], 'report_spec.json'): raise FileExistsError('report spec already exists')
     record, derived, dates = _derived(conn, patient); p = dict(patient); h = record['header']
     name = p['name']; gp = p.get('gp') or h['gp'] or ''
     data = manual_defaults.initial_text(name, gp)
-    address = ', '.join(filter(None, (p.get('address'), p.get('suburb'))))
-    patient_lines = [name, 'DOB: ' + (p.get('dob') or h['dob']), 'Medicare No: ' + (p.get('medicare') or ''), 'Address: ' + address, 'Phone: ' + (p.get('phone') or '')]
-    doctor_lines = [gp, p.get('clinic') or '', 'Request date: ' + (p.get('referral_date') or '')]
-    import steps
-    visit = steps.event_date(conn, patient, 'visited') or p.get('visit_date') or h['visit'].split(' ')[0]
-    data.update(out=str(folder / ('HMR ' + re.sub(r'[<>:"/\\|?*]', '', name).rstrip(' .') + '.docx')), name=name, assess_date=visit, report_date=dt.date.today().strftime('%d/%m/%Y'), patient='\n'.join(patient_lines), doctor='\n'.join(filter(None, doctor_lines)), dear='Dear ' + gp + ',', path_date=dates, issues=[], needs_review=REVIEW.copy())
+    demo = _demographics(conn, patient, record); name = demo['name']; visit = demo['assess_date']
+    data.update(out=str(folder / ('HMR ' + re.sub(r'[<>:"/\\|?*]', '', name).rstrip(' .') + '.docx')), report_date=dt.date.today().strftime('%d/%m/%Y'), path_date=dates, demographics_generated=demo, **demo, issues=[], needs_review=REVIEW.copy())
     data.update(derived, medicine_snapshot=medicine_snapshot.snapshot(record), medicine_snapshot_sha256=medicine_snapshot.digest(medicine_snapshot.snapshot(record)), interview_revision=record['revision'], interview_reason=record['details']['reason'], pathology_revision=__import__('pathology_records').revision(conn, patient))
     intro = intro_text(record, name, visit)
     if intro: data['intro'] = intro
@@ -273,20 +390,101 @@ def start(conn, patient):
     conn.commit()
     return data
 
-def refresh(conn, patient):
-    with _lock: return _refresh(conn, patient)
+# The placeholder note the Interview page puts on a result linked to a source page. Once the pharmacist verifies the row
+# it is no longer true, so the report omits exactly this text for verified rows; any other note is printed unchanged.
+UNVERIFIED_DEFAULT_NOTE = 'UNVERIFIED — compare source PDF before confirming'
+DEMOGRAPHIC_LABELS = {'name': 'patient name', 'assess_date': 'assessment date', 'patient': 'patient details block', 'doctor': 'GP details block', 'dear': 'salutation'}
 
-def _refresh(conn, patient):
+def _merge_demographics(data, new, replace=()):
+    """Refresh brings corrected record values into blocks the pharmacist has not touched. A block that differs from
+    what the app last generated was edited (or is from an older spec): it is kept, and returned as a conflict so
+    the pharmacist chooses. Only blocks named in `replace` are overwritten."""
+    if not isinstance(replace, (list, tuple)) or any(k not in DEMOGRAPHIC_LABELS for k in replace): raise ValueError('invalid replace_demographics')
+    generated = data.get('demographics_generated') if isinstance(data.get('demographics_generated'), dict) else {}
+    conflicts = []
+    for key in DEMOGRAPHIC_LABELS:
+        current = data.get(key, '')
+        if current == new[key]: continue
+        if key in replace or (key in generated and generated[key] == current): data[key] = new[key]
+        else: conflicts.append({'key': key, 'label': DEMOGRAPHIC_LABELS[key], 'report': current, 'record': new[key]})
+    data['demographics_generated'] = new
+    return conflicts
+
+ACK_RECORD = 'report_spec.demographics_ack.json'
+
+def _ack_hash(key, text, record_value):
+    """A keep decision is bound to this block's exact text and to what the patient record says now."""
+    return hashlib.sha256(json.dumps([key, text, record_value], ensure_ascii=False).encode('utf-8')).hexdigest()
+
+def demographic_mismatches(conn, patient, data):
+    """Blocks whose text differs from what the current patient record produces. Response-only. A block is
+    acknowledged only while the exact text and the exact record value are unchanged since the pharmacist kept it."""
+    record = interview.load(conn, patient)
+    new = _demographics(conn, patient, record)
+    acks = records.get_json(conn, patient['id'], ACK_RECORD)
+    acks = acks if isinstance(acks, dict) else {}
+    result = []
+    for key, label in DEMOGRAPHIC_LABELS.items():
+        text = data.get(key, '')
+        if text == new[key]: continue
+        result.append({'key': key, 'label': label, 'report': text, 'record': new[key],
+                       'acknowledged': acks.get(key) == _ack_hash(key, text, new[key])})
+    return result
+
+def unresolved_demographics(conn, patient, data):
+    return [m['key'] for m in demographic_mismatches(conn, patient, data) if not m['acknowledged']]
+
+def demographic_status(conn, patient, data):
+    """Key -> matches/kept/unresolved, for build evidence. Carries no patient text."""
+    status = {key: 'matches' for key in DEMOGRAPHIC_LABELS}
+    for m in demographic_mismatches(conn, patient, data): status[m['key']] = 'kept' if m['acknowledged'] else 'unresolved'
+    return status
+
+def resolve_demographics(conn, patient, action, keys):
+    """Per-block choice. 'replace' writes the record's value into the block; 'keep' records an acknowledgement bound to
+    the exact text and record value. Nothing else in the report changes."""
+    if action not in ('replace', 'keep') or not isinstance(keys, list) or not keys or any(k not in DEMOGRAPHIC_LABELS for k in keys):
+        raise ValueError('invalid demographic choice')
+    with _lock:
+        data = records.get_json(conn, patient['id'], 'report_spec.json')
+        if data is None: raise ValueError('report spec does not exist')
+        validate(data)
+        mismatches = {m['key']: m for m in demographic_mismatches(conn, patient, data)}
+        if any(k not in mismatches for k in keys): raise ValueError('That block already matches the patient record; reload the report')
+        if action == 'replace':
+            for k in keys: data[k] = mismatches[k]['record']
+            generated = dict(data.get('demographics_generated') or {})
+            generated.update({k: mismatches[k]['record'] for k in keys})
+            data['demographics_generated'] = generated
+            _save(conn, patient, data)
+        else:
+            acks = records.get_json(conn, patient['id'], ACK_RECORD)
+            acks = dict(acks) if isinstance(acks, dict) else {}
+            for k in keys: acks[k] = _ack_hash(k, mismatches[k]['report'], mismatches[k]['record'])
+            records.put_json(conn, patient['id'], ACK_RECORD, acks)
+            db.log(conn, patient['id'], 'report_demographics_kept', {'blocks': sorted(keys)}, 'api')  # block names only, no text
+            conn.commit()
+        return load(conn, patient)
+
+def refresh(conn, patient, replace=()):
+    with _lock: return _refresh(conn, patient, replace)
+
+def _refresh(conn, patient, replace=()):
     data = records.get_json(conn, patient['id'], 'report_spec.json')
     if data is None: raise ValueError('report spec does not exist')
     validate(data)
     record, derived, _ = _derived(conn, patient)
     import pathology_records
+    conflicts = _merge_demographics(data, _demographics(conn, patient, record), replace)
+    folder = jobs.patient_folder(patient)
+    stored = Path(str(data.get('out') or ''))
+    if stored.name and (not stored.is_absolute() or stored.parent.resolve() != folder):
+        data['out'] = str(folder / stored.name)  # a restored or moved workspace must not keep a path outside the patient folder
     data.update(derived, medicine_snapshot=medicine_snapshot.snapshot(record), medicine_snapshot_sha256=medicine_snapshot.digest(medicine_snapshot.snapshot(record)), interview_revision=record['revision'], interview_reason=record['details']['reason'],
                 pathology_revision=pathology_records.revision(conn, patient))
-    save(conn, patient, data)
+    saved = save(conn, patient, data)
     db.log(conn, patient['id'], 'report_refreshed', {}, 'job')
-    return data
+    return dict(saved, demographic_conflicts=conflicts)  # response only; never stored
 
 def _read(path):
     stamp = path.stat().st_mtime_ns

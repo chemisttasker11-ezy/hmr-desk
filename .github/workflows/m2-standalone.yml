@@ -84,6 +84,8 @@ jobs:
         run: ./scripts/bundle-libreoffice.ps1
       - name: Convert a real synthetic DOCX and verify offline PDF
         run: python scripts/smoke-pdf.py
+      - name: Frozen engine converts a synthetic DOCX detached with closed stdin
+        run: python scripts/smoke-frozen-pdf.py "HMR Desk/engine/dist/hmr-engine/hmr-engine.exe"
       - name: Synthetic short and long template-bound DOCX-to-PDF layout regression
         run: python scripts/smoke-template-pdf.py
       - name: Build NSIS installer with engine resources

@@ -76,7 +76,27 @@ def validate_layout(template):
             raise ValueError('Table placeholder must occur exactly once: ' + name)
     if occurrences[ISSUES_ANCHOR] != 1:
         raise ValueError('HMR_ISSUES placeholder must occur exactly once')
+    if ISSUES_END in occurrences:
+        _require_finding_fields(''.join(p.text + '\n' for p in _paragraphs_between(doc)))
     return True
+
+
+def _require_finding_fields(text):
+    missing = [m for m in ISSUE_FIELDS if m not in text]
+    if missing:
+        raise ValueError('The finding block must contain ' + ', '.join(ISSUE_FIELDS) + '; missing: ' + ', '.join(missing))
+
+
+def _paragraphs_between(doc):
+    inside = False
+    for paragraph in _paragraphs(doc):
+        text = paragraph.text.strip()
+        if text == ISSUES_ANCHOR:
+            inside = True
+        elif text == ISSUES_END:
+            return
+        elif inside:
+            yield paragraph
 
 
 def register(source_path, version, approved_by, owner_authorised):
@@ -355,6 +375,9 @@ def render(data, target, template):
             break
         block.append(sibling)
         sibling = sibling.getnext()
+    if end_anchor is not None and data['issues']:
+        block_text = ''.join(''.join(element.xpath('.//w:t/text()')) + '\n' for element in block)
+        _require_finding_fields(block_text)  # otherwise the findings would silently render as nothing
     if end_anchor is not None:
         # Approved layout supplies one prototype finding (title, recommendation, rationale,
         # Plan/Feedback box). Clone it per finding so every finding looks like the owner's.

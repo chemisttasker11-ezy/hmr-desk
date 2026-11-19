@@ -7,6 +7,7 @@ from urllib.parse import parse_qs, urlparse
 
 import api
 import db
+import settings
 
 with tempfile.TemporaryDirectory() as tmp:
     db.BASE = tmp
@@ -20,6 +21,9 @@ with tempfile.TemporaryDirectory() as tmp:
                                 [past, '08:00', '09:00', 'Past']]}, f)
     path = os.path.join(tmp, 'planner.db')
     conn = db.connect(path)
+    # Routes need a start place (home_address has no default now), so the fixture sets one; the end place falls back to it.
+    HOME = 'Test Home, Robina QLD 4226'
+    settings.update(conn, {'home_address': HOME}); conn.commit()
     assert conn.execute('SELECT count(*) FROM appointments').fetchone()[0] == 1
     meeting = conn.execute('SELECT * FROM appointments').fetchone()
     assert meeting['title'] == 'Estia Robina' and meeting['place'] == 'robina'
@@ -68,7 +72,7 @@ with tempfile.TemporaryDirectory() as tmp:
     assert len(result['urls']) == 2 and len(result['skipped']) == 2
     assert [s['time'] for s in result['stops']] == sorted(s['time'] for s in result['stops'])
     first, second = [parse_qs(urlparse(url).query) for url in result['urls']]
-    assert first['origin'] == [''] and second['destination'] == first['origin']
+    assert first['origin'] == [HOME] and second['destination'] == first['origin']
     assert first['destination'] == second['origin'] and len(first['waypoints'][0].split('|')) == 9
     assert first['waypoints'][0].split('|')[0] == 'A & B, Robina' and '%26' in result['urls'][0]
     confirmed = call('GET', '/api/days/' + day + '/route')[1]
