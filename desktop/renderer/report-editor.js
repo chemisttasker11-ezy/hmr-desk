@@ -358,9 +358,18 @@ async function buildReport(pdf) {
     alert('add at least one finding');
     return;
   }
-  if (reportBuildRunning) return;  // a build is already running: a second click must not start a second job
+  // Every early return says why. A refused or skipped build must never look like a dead button.
+  const say = (text) => { reportBuildStatus = text; const el = $('report-build-status'); if (el) el.textContent = text; };
+  if (reportBuildRunning) { say('A build is already running. Wait for it to finish before starting another.'); return; }  // a second click must not start a second job
   reportBuildRunning = true;
-  try { if (!await reportSaver.save(true)) return; await runBuild(pdf); } finally { reportBuildRunning = false; }
+  try {
+    if (!await reportSaver.save(true)) {
+      // A failed or conflicting save never proceeds to a build. Show the reason beside the button, not only in the save line.
+      say(`Build not started. The report could not be saved (${reportSaveStatus}). Nothing was built.`);
+      return;
+    }
+    await runBuild(pdf);
+  } finally { reportBuildRunning = false; }
 }
 async function runBuild(pdf) {
   const setStatus = (text) => { reportBuildStatus = text; const el = $('report-build-status'); if (el) el.textContent = text; };
