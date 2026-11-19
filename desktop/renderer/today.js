@@ -3,7 +3,9 @@ function nextButton(p) {
   if (['wait for reply', 'visit', 'offer a time'].includes(String(p.next_step).toLowerCase())) {
     return `<span class="muted nowrap">${esc(p.next_step)}</span>`;
   }
-  return `<button data-next="${esc(p.id)}" data-step="${esc(p.next_step)}">${esc(H.stepLabel(p.next_step))}</button>`;
+  // The Today list does not load report currency. "Sign off" here would imply the report is current, so name the check.
+  const label = String(p.next_step).toLowerCase() === 'sign off' ? 'Check report, then sign off' : H.stepLabel(p.next_step);
+  return `<button data-next="${esc(p.id)}" data-step="${esc(p.next_step)}">${esc(label)}</button>`;
 }
 function confirmed(p) {
   return ['confirmed', 'pathology_ready', 'sheet_ready'].includes(p.state);

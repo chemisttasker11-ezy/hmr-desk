@@ -1,21 +1,33 @@
 let medicinePatient = null;
 let medicineData = null;
+// Runs at most `limit` patients at once so a long Reports list does not fire every request together.
+// Results keep the input order, in the same {status, value|reason} shape as Promise.allSettled.
+async function settledPool(items, limit, work) {
+  const out = new Array(items.length);
+  let next = 0;
+  const lane = async () => {
+    while (next < items.length) {
+      const i = next++;
+      try { out[i] = { status: 'fulfilled', value: await work(items[i]) }; } catch (reason) { out[i] = { status: 'rejected', reason }; }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, lane));
+  return out;
+}
 async function reports() {
   const [list, agents] = await Promise.all([hmr.api('GET', '/api/patients'), hmr.api('GET', '/api/agents')]);
   if (page !== 'reports') return;
   patients = list.patients;
   const agent = agents.per_step.report_draft || agents.default || 'No agent selected';
   const rows = patients.filter((p) => ['visited', 'report_drafted', 'signed_off'].includes(p.state));
-  const details = await Promise.allSettled(
-    rows.map(async (p) => {
+  const details = await settledPool(rows, 3, async (p) => {
       const [detail, spec, currency] = await Promise.all([
         hmr.api('GET', `/api/patients/${encodeURIComponent(p.id)}`),
         hmr.api('GET', `/api/patients/${encodeURIComponent(p.id)}/report`),
         hmr.api('GET', `/api/patients/${encodeURIComponent(p.id)}/report-status`).catch(() => null),
       ]);
       return { ...detail, reportSpec: spec, reportCurrency: currency };
-    }),
-  );
+  });
   if (page !== 'reports') return;
   $('screen').innerHTML = `<p id="report-message" role="status">${esc(runMessage)}</p>
     <h2>Reports to write (${rows.length})</h2>${rows.map((p, i) => (details[i].status === 'fulfilled' ? reportRow(p, details[i].value, agent) : reportError(p, details[i].reason))).join('') || '<p class="empty">No reports waiting</p>'}<div id="detail" class="detail drawer" role="dialog" aria-label="Patient" hidden></div>`;
