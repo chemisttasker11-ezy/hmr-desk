@@ -17,7 +17,8 @@ def _display_date(value):
 
 # Pathology provenance text (verified-by, sample date, source) is sentence-length; equal-width
 # autofit squeezed it into one-word lines. Fixed widths give the notes column room to read.
-_PATHOLOGY_WIDTHS_CM = (1.8, 3.0, 3.0, 2.6, 4.2)  # sums to the 14.6cm usable width (A4, 1800 twip side margins)
+_PATHOLOGY_WIDTHS_CM = (2.0, 3.6, 3.6, 3.2, 5.1)  # sums to the 17.5cm usable width (A4, 993/991 twip side margins)
+_TEXT_WIDTH_CM = 17.5
 
 
 def _fixed_layout(table, widths_cm):
@@ -27,16 +28,28 @@ def _fixed_layout(table, widths_cm):
     # Word and LibreOffice size fixed-layout columns from the grid, so set it alongside cell widths.
     for col, width in zip(table._tbl.tblGrid.findall(qn('w:gridCol')), widths_cm):
         col.set(qn('w:w'), str(Cm(width).twips))
+    table.autofit = False
+    for row in table.rows:
+        for cell, width in zip(row.cells, widths_cm):
+            cell.width = Cm(width)
 
-# Style conventions taken from the pharmacist's recent completed reports (host comparison, non-identifying):
-# A4, Aptos throughout at 10 to 18 pt, margins 1400 top / 1440 bottom / 1800 sides (twips), a plain black title
-# with a small bordered date box, boxed profile blocks, navy table headers and light-blue plan and feedback blocks.
-# Exact navy and blue values are not confirmed from the reference. The output stays labelled provisional.
-FONT = "Aptos"
-NAVY = "1F3864"
-BLUE_FILL = "DEEAF6"
-BLUE_EDGE = "2E75B6"
+# Style conventions from the host's corroborated spec of the pharmacist's latest pair of reports (non-identifying):
+# A4; margins top 1985 / right 991 / bottom 1843 / left 993 twips; header 788 / footer 785; Montserrat runs, 9 pt bold
+# labels; white title table with black title and date text; all table borders single 0.5 pt black; three details
+# columns (patient, doctor, accredited pharmacist); heading colours blue 01A1DD (profile, findings), green 00B050
+# (current and OTC medicines), red C00000 (ceased); table header fill 17365D; findings have a bold 10 pt orange
+# E97132 lead-in then a borderless full-width block filled B8CCE4 with bold 10 pt black labels; table-based header
+# and footer with a PAGE field. Heading wording, body size and colour of the conditions section are not confirmed.
+# The output stays labelled provisional.
+FONT = "Montserrat"
+NAVY = "17365D"
+BLUE_FILL = "B8CCE4"
+HEAD_BLUE = "01A1DD"
+HEAD_GREEN = "00B050"
+HEAD_RED = "C00000"
+LEAD_ORANGE = "E97132"
 BLACK = "000000"
+BODY_PT = 10
 
 
 def _fonts(style_or_run_element, name=FONT):
@@ -76,44 +89,68 @@ def _shade(element_pr, fill):
     element_pr.append(shading)
 
 
-def _box(paragraph, fill=None, edge="808080", left_only=False, size=6):
-    ppr = paragraph._p.get_or_add_pPr()
-    borders = OxmlElement('w:pBdr')
-    for side in (('left',) if left_only else ('top', 'left', 'bottom', 'right')):
+def _borders(table, val='single', size=4):
+    tbl_pr = table._tbl.tblPr
+    old = tbl_pr.find(qn('w:tblBorders'))
+    if old is not None:
+        tbl_pr.remove(old)
+    borders = OxmlElement('w:tblBorders')
+    for side in ('top', 'left', 'bottom', 'right', 'insideH', 'insideV'):
         line = OxmlElement('w:' + side)
-        line.set(qn('w:val'), 'single')
-        line.set(qn('w:sz'), str(size * 2 if left_only else size))
-        line.set(qn('w:space'), '4')
-        line.set(qn('w:color'), edge)
+        line.set(qn('w:val'), val)
+        if val != 'nil':
+            line.set(qn('w:sz'), str(size))  # 4 eighths of a point = 0.5 pt
+            line.set(qn('w:space'), '0')
+            line.set(qn('w:color'), BLACK)
         borders.append(line)
-    ppr.append(borders)
-    if fill:
-        _shade(ppr, fill)
+    tbl_pr.append(borders)
 
 
-def _title(doc, text, size):
-    """Black text on the white page, as in the reference. No fill."""
-    paragraph = doc.add_paragraph()
+def _run(paragraph, text, size=BODY_PT, bold=False, color=None):
     run = paragraph.add_run(text)
-    run.bold = True
+    run.bold = bold
     run.font.size = Pt(size)
-    run.font.color.rgb = RGBColor(0, 0, 0)
+    if color:
+        run.font.color.rgb = RGBColor.from_string(color)
     _fonts(run._r.get_or_add_rPr())
-    paragraph.paragraph_format.space_after = Pt(4)
+    return run
+
+
+def _cell_text(cell, text, size=BODY_PT, bold=False, color=None):
+    paragraph = cell.paragraphs[0]
+    paragraph.paragraph_format.space_after = Pt(2)
+    _run(paragraph, text, size, bold, color)
+
+
+def _title_table(doc, date_text):
+    """White, unfilled title table: black title and date text, single black borders."""
+    table = doc.add_table(rows=1, cols=2)
+    table.style = "Table Grid"
+    _borders(table)
+    _cell_text(table.cell(0, 0), "Home Medicines Review", 18, True, BLACK)
+    _cell_text(table.cell(0, 1), date_text, 9, True, BLACK)
+    _fixed_layout(table, (11.0, 6.5))
+    return table
+
+
+def _details_table(doc, patient, doctor):
+    """Three columns: patient, doctor, accredited pharmacist. Pharmacist data is not in the report spec."""
+    table = doc.add_table(rows=2, cols=3)
+    table.style = "Table Grid"
+    _borders(table)
+    for cell, label, value in zip(table.rows[0].cells, ("Patient", "Doctor", "Accredited pharmacist"),
+                                  (None, None, None)):
+        _cell_text(cell, label, 9, True)
+    for cell, value in zip(table.rows[1].cells, (patient, doctor, "Not supplied in the report data")):
+        _cell_text(cell, value, 9)
+    _fixed_layout(table, (6.0, 6.0, 5.5))
+    return table
+
+
+def _heading(doc, text, color):
+    paragraph = doc.add_paragraph(style="Heading 2")
+    _run(paragraph, text, 14, True, color)
     paragraph.paragraph_format.keep_with_next = True
-    return paragraph
-
-
-def _date_box(doc, text):
-    """Small bordered box with black text. Not full width."""
-    paragraph = doc.add_paragraph()
-    run = paragraph.add_run(text)
-    run.bold = True
-    run.font.size = Pt(10)
-    _fonts(run._r.get_or_add_rPr())
-    _box(paragraph, edge=BLACK, size=8)
-    paragraph.paragraph_format.right_indent = Cm(3.0)
-    paragraph.paragraph_format.space_after = Pt(4)
     return paragraph
 
 
@@ -126,9 +163,41 @@ def _header_row(table):
         for paragraph in cell.paragraphs:
             for run in paragraph.runs:
                 run.bold = True
+                run.font.size = Pt(9)
                 run.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
     for row in table.rows:
         row._tr.get_or_add_trPr().append(OxmlElement('w:cantSplit'))
+
+
+def _plan_block(doc, rows):
+    """Full-width single-column block, B8CCE4 fill, no borders, bold 10 pt black labels."""
+    table = doc.add_table(rows=0, cols=1)
+    _borders(table, 'nil')
+    for label, text in rows:
+        cell = table.add_row().cells[0]
+        _shade(cell._tc.get_or_add_tcPr(), BLUE_FILL)
+        paragraph = cell.paragraphs[0]
+        paragraph.paragraph_format.space_after = Pt(3)
+        _run(paragraph, label, 10, True, BLACK)
+        _run(paragraph, text, BODY_PT)
+    _fixed_layout(table, (_TEXT_WIDTH_CM,))
+    doc.add_paragraph().paragraph_format.space_after = Pt(2)
+    return table
+
+
+def _page_field(paragraph):
+    for kind, text in (('begin', None), (None, ' PAGE '), ('end', None)):
+        run = paragraph.add_run()
+        _fonts(run._r.get_or_add_rPr())
+        run.font.size = Pt(9)
+        if kind:
+            el = OxmlElement('w:fldChar')
+            el.set(qn('w:fldCharType'), kind)
+        else:
+            el = OxmlElement('w:instrText')
+            el.set(qn('xml:space'), 'preserve')
+            el.text = text
+        run._r.append(el)
 
 
 # Visible provenance marker for every locally rendered report. It states layout provenance only:
@@ -146,72 +215,73 @@ def render(data, target):
     sec = doc.sections[0]
     sec.page_width = Cm(21.0)
     sec.page_height = Cm(29.7)
-    sec.top_margin = Twips(1400)
-    sec.bottom_margin = Twips(1440)
-    sec.left_margin = Twips(1800)
-    sec.right_margin = Twips(1800)
+    sec.top_margin = Twips(1985)
+    sec.right_margin = Twips(991)
+    sec.bottom_margin = Twips(1843)
+    sec.left_margin = Twips(993)
+    sec.header_distance = Twips(788)
+    sec.footer_distance = Twips(785)
     styles = doc.styles
-    _style(styles, "Normal", 10.5)
-    _style(styles, "Heading 2", 14, bold=True, color=NAVY, space_before=10, space_after=4)
-    _style(styles, "Heading 3", 12, bold=True, color=NAVY, space_before=8, space_after=3)
+    _style(styles, "Normal", BODY_PT)
+    _style(styles, "Heading 2", 14, bold=True, color=HEAD_BLUE, space_before=10, space_after=4)
     _style(styles, "Header", 9)
-    # Repeat the marker in the page header so every printed page carries it, then again in bold
-    # directly under the title where the reader starts. The LibreOffice PDF conversion keeps both.
-    header_run = sec.header.paragraphs[0].add_run(PROVISIONAL_LABEL)
-    header_run.bold = True
-    header_run.font.size = Pt(9)
-    _fonts(header_run._r.get_or_add_rPr())
-    _title(doc, "Home Medicines Review", 18)
-    _date_box(doc, "Assessment: " + _display_date(data["assess_date"]) + "    Report: " + _display_date(data["report_date"]))
+    _style(styles, "Footer", 9)
+    # Table-based header and footer. The marker repeats on every printed page, again in bold under the title.
+    header = sec.header
+    htable = header.add_table(1, 1, Cm(_TEXT_WIDTH_CM))
+    _borders(htable)
+    _cell_text(htable.cell(0, 0), PROVISIONAL_LABEL, 9, True)
+    footer = sec.footer
+    ftable = footer.add_table(1, 2, Cm(_TEXT_WIDTH_CM))
+    _borders(ftable)
+    _cell_text(ftable.cell(0, 0), "Home Medicines Review - draft for pharmacist review", 9, True)
+    ftable.cell(0, 1).paragraphs[0].add_run("Page ")
+    _page_field(ftable.cell(0, 1).paragraphs[0])
+    _title_table(doc, "Assessment: " + _display_date(data["assess_date"]) + "    Report: " + _display_date(data["report_date"]))
     marker = doc.add_paragraph()
-    marker_run = marker.add_run(PROVISIONAL_LABEL)
-    marker_run.bold = True
+    _run(marker, PROVISIONAL_LABEL, 9, True)
     marker.paragraph_format.space_before = Pt(6)
-    doc.add_heading("Patient details", level=2)
-    _box(doc.add_paragraph(data["patient"]))
-    doc.add_heading("Referring doctor", level=2)
-    _box(doc.add_paragraph(data["doctor"]))
+    _heading(doc, "Profile", HEAD_BLUE)
+    _details_table(doc, data["patient"], data["doctor"])
     doc.add_paragraph(data["dear"])
     for field in ("thanks", "reason", "intro"):
         if data[field].strip():
             doc.add_paragraph(data[field])
-    for heading, key in (("Medical conditions", "conditions"),
-                         ("Allergies and adverse reactions", "allergies"),
-                         ("Observations", "obs")):
+    for heading, key in (("Current conditions", "conditions"), ("Allergies and adverse reactions", "allergies"),
+                         ("Interview observations", "obs")):
         if data[key].strip():
-            doc.add_heading(heading, level=2)
+            _heading(doc, heading, HEAD_BLUE)
             doc.add_paragraph(data[key])
-    for heading, key, labels in (
-        ("Current medicines", "meds", ("Medicine", "Actual use", "Notes", "Review")),
-        ("Non-prescription medicines", "otc", ("Medicine", "Use", "Notes")),
-        ("Ceased medicines", "ceased", ("Medicine", "Referral directions", "Notes")),
-        ("Pathology", "path", ("Test", "Result", "Unit", "Reference range", "Source / notes")),
+    for heading, key, labels, color in (
+        ("Current medicines", "meds", ("Medicine", "Actual use", "Notes", "Review"), HEAD_GREEN),
+        ("OTC and additional interview medicines", "otc", ("Medicine", "Use", "Notes"), HEAD_GREEN),
+        ("Ceased or not-used referral medicines", "ceased", ("Medicine", "Referral directions", "Notes"), HEAD_RED),
+        ("Pathology", "path", ("Test", "Result", "Unit", "Reference range", "Source / notes"), HEAD_BLUE),
     ):
         if not data[key]:
             continue
-        doc.add_heading(heading, level=2)
+        _heading(doc, heading, color)
         table = doc.add_table(rows=1, cols=len(labels))
         table.style = "Table Grid"
+        _borders(table)
         for cell, label in zip(table.rows[0].cells, labels):
-            cell.text = label
+            _cell_text(cell, label, 9, True)
         for values in data[key]:
             for cell, value in zip(table.add_row().cells, values):
-                cell.text = value
+                _cell_text(cell, value, 9)
         _header_row(table)
-        if key == "path":
-            table.autofit = False
-            _fixed_layout(table, _PATHOLOGY_WIDTHS_CM)
-            for row in table.rows:
-                for cell, width in zip(row.cells, _PATHOLOGY_WIDTHS_CM):
-                    cell.width = Cm(width)
-    doc.add_heading("Medication-related findings and recommendations", level=2)
+        widths = _PATHOLOGY_WIDTHS_CM if key == "path" else tuple(_TEXT_WIDTH_CM / len(labels) for _ in labels)
+        _fixed_layout(table, widths)
+    _heading(doc, "Findings", HEAD_BLUE)
     for index, finding in enumerate(data["issues"], 1):
-        doc.add_heading(str(index) + ". " + finding["title"], level=3)
-        for label, key in (("Recommendation: ", "rec"), ("Rationale: ", "rationale")):
-            block = doc.add_paragraph(label + finding[key])
-            _box(block, fill=BLUE_FILL, edge=BLUE_EDGE, left_only=True)
+        lead = doc.add_paragraph()
+        _run(lead, str(index) + ". " + finding["title"], 10, True, LEAD_ORANGE)
+        lead.paragraph_format.keep_with_next = True
+        _plan_block(doc, (("Recommendation: ", finding["rec"]), ("Rationale: ", finding["rationale"])))
     if data["followup"].strip():
-        doc.add_heading("Follow-up", level=2)
-        _box(doc.add_paragraph(data["followup"]), fill=BLUE_FILL, edge=BLUE_EDGE, left_only=True)
+        _heading(doc, "Follow-up", HEAD_BLUE)
+        _plan_block(doc, (("Follow-up: ", data["followup"]),))
+    signoff = doc.add_paragraph()
+    _run(signoff, "Accredited pharmacist name, contact and credentials: not supplied in the report data (provisional).", 9, True)
     doc.save(target)
     return target

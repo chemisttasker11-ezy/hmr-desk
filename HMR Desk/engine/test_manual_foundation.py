@@ -63,8 +63,8 @@ def test_local_docx_build(tmp_path):
     doc = Document(target)
     text = "\n".join(p.text for p in doc.paragraphs)
     assert "Verify anticoagulant dose" in text
-    assert "Synthetic Patient" in text
-    assert len(doc.tables) == 1
+    assert "Synthetic Patient" in [c.text for c in doc.tables[1]._cells]
+    assert len(doc.tables) == 5  # title, details, medicines, finding block, follow-up block
     try:
         local_report_builder.render(data, target)
         assert False, "must not overwrite report"
@@ -87,7 +87,7 @@ def test_local_docx_visibly_marks_provisional_layout(tmp_path):
     local_report_builder.render(data, target)
     doc = Document(target)
     body = "\n".join(p.text for p in doc.paragraphs)
-    header = "\n".join(p.text for p in doc.sections[0].header.paragraphs)
+    header = "\n".join(c.text for t in doc.sections[0].header.tables for c in t._cells)
     # Body and repeating page header both carry the marker so no page reads as the approved layout.
     assert local_report_builder.PROVISIONAL_LABEL in body
     assert local_report_builder.PROVISIONAL_LABEL in header
@@ -116,14 +116,14 @@ def test_local_docx_readable_pathology_notes_and_consistent_dates(tmp_path):
     target = tmp_path / "report.docx"
     local_report_builder.render(data, target)
     doc = Document(target)
-    text = "\n".join(p.text for p in doc.paragraphs)
+    text = "\n".join([p.text for p in doc.paragraphs] + [c.text for c in doc.tables[0]._cells])
     # Both dates display in the same DD/MM/YYYY format; the stored values are not rewritten.
     assert "Assessment: 17/11/2026    Report: 17/11/2026" in text
     assert "2026-11-17    Report" not in text
     assert local_report_builder._display_date("not a date") == "not a date"
     # Provenance and value columns are wide enough to wrap readably without splitting
     # unit strings like "mL/min/1.73m2" mid-token.
-    table = doc.tables[0]
+    table = next(t for t in doc.tables if t.rows[0].cells[0].text == "Test")
     widths = [cell.width for cell in table.rows[0].cells]
     assert widths[-1] >= Cm(4.1)
     assert widths[1] >= Cm(3) and widths[2] >= Cm(3)

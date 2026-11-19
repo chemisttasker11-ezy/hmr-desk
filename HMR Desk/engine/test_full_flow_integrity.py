@@ -133,11 +133,11 @@ def test_referral_to_report_flow_stays_consistent(tmp_path, monkeypatch):
     doc = Document(str(out))
     headings = [p.text for p in doc.paragraphs if p.style.name.startswith('Heading')]
     paragraphs = [p.text for p in doc.paragraphs]
-    assert 'Home Medicines Review' in paragraphs
-    assert 'Patient details' in headings
+    assert 'Home Medicines Review' in [c.text for c in doc.tables[0]._cells]  # title table (spec'd layout)
+    assert 'Profile' in headings
     assert 'Current medicines' in headings, headings
     assert 'Pathology' in headings, headings
-    assert 'Medication-related findings and recommendations' in headings
+    assert 'Findings' in headings
     # Table content matches the saved synthetic evidence exactly.
     tables = [[cell.text for row in t.rows for cell in row.cells] for t in doc.tables]
     meds_table = next(t for t in tables if 'Actual use' in t)
