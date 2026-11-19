@@ -216,7 +216,7 @@ function renderReport() {
             ([key, label]) =>
               `<label>${label}${key === 'title' ? `<input data-issue="${i}" data-prop="${key}" value="${esc(issue[key] || '')}">` : `<textarea data-issue="${i}" data-prop="${key}">${esc(issue[key] || '')}</textarea>`}</label>`,
           )
-          .join('')}${issue.suggestion_source ? `<div class="template-review" data-template-review-state="${issue.template_reviewed ? 'reviewed' : 'pending'}"><p>${issue.template_reviewed ? 'Imported past-case wording reviewed for this patient.' : 'Imported from a past-case template and not yet reviewed for this patient. The report cannot be built until you review it. Editing the wording does not count as review.'}</p><label><input type="checkbox" data-template-reviewed="${i}" ${issue.template_reviewed ? 'checked' : ''}> I have reviewed this imported wording for this patient</label></div><details><summary>Evidence retained when selected (not automatically refreshed)</summary><p>Re-review if the interview, pathology or medicines change. Editing the finding does not update this retained evidence.</p>${suggestionEvidenceHtml(issue.suggestion_source)}</details>` : ''}</article>`,
+          .join('')}${issue.suggestion_source ? `<div class="template-review" data-template-review-state="${issue.template_reviewed ? 'reviewed' : 'pending'}"><p data-template-review-note="${i}">${templateReviewNote(issue.template_reviewed)}</p><label><input type="checkbox" data-template-reviewed="${i}" ${issue.template_reviewed ? 'checked' : ''}> I have reviewed this imported wording for this patient</label></div><details><summary>Evidence retained when selected (not automatically refreshed)</summary><p>Re-review if the interview, pathology or medicines change. Editing the finding does not update this retained evidence.</p>${suggestionEvidenceHtml(issue.suggestion_source)}</details>` : ''}</article>`,
     )
     .join('');
   const file = (reportDetail.files?.folder || []).find((f) => /^mims interactions.*\.txt$/i.test(f));
@@ -306,6 +306,7 @@ document.addEventListener('input', (event) => {
     };
     if (!el.checked) {
       issue.template_reviewed = false;
+      showTemplateReviewState(index, false);
       reportSaver.changed();
       (async () => { if (await reportSaver.save(true)) await refresh(); })().catch((e) => alert(errorText(e)));
       return;
@@ -344,8 +345,7 @@ document.addEventListener('input', (event) => {
     issue[el.dataset.prop] = el.value;
     if (issue.suggestion_source) {  // editing is never a review
       issue.template_reviewed = false;
-      const box = document.querySelector(`[data-template-reviewed="${Number(el.dataset.issue)}"]`);
-      if (box) box.checked = false;
+      showTemplateReviewState(Number(el.dataset.issue), false);  // checkbox, wording and state agree immediately
     }
   }
   else if (el.dataset.field) {
@@ -380,6 +380,17 @@ async function reportJob(job, extra = {}) {
     if ($('report-output')) $('report-output').textContent = reportOutput;
     return false;
   }
+}
+function templateReviewNote(reviewed) {
+  return reviewed ? 'Imported past-case wording reviewed for this patient.' : 'Imported from a past-case template and not yet reviewed for this patient. The report cannot be built until you review it. Editing the wording does not count as review.';
+}
+function showTemplateReviewState(index, reviewed) {
+  const box = document.querySelector(`[data-template-reviewed="${index}"]`);
+  if (box) box.checked = !!reviewed;
+  const note = document.querySelector(`[data-template-review-note="${index}"]`);
+  if (note) note.textContent = templateReviewNote(reviewed);
+  const holder = note?.closest?.('[data-template-review-state]');
+  if (holder) holder.dataset.templateReviewState = reviewed ? 'reviewed' : 'pending';
 }
 function showBuildError(message) {
   const template = String(message).match(/Review imported template findings:\s*([0-9, ]+)/i);

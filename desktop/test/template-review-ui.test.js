@@ -30,8 +30,33 @@ test('review is a separate deliberate tick, never an edit side effect, and the e
   assert.match(source, /not yet reviewed for this patient/);
   assert.match(source, /Editing the wording does not count as review/);
   // an edit clears the tick on the client; the engine also drops the review when wording changes
-  assert.match(source, /issue\.template_reviewed = false;\s*const box/);
+  assert.match(source, /issue\.template_reviewed = false;\s*showTemplateReviewState/);
   // the tick is cleared until the engine reports it recorded
   assert.match(source, /el\.checked = false; \/\/ becomes checked only when the engine confirms the review/);
   assert.match(source, /Review not recorded/);
+});
+
+test('an edit updates the explanatory line, the state marker and the checkbox together, without waiting for a re-render', () => {
+  const nodes = {
+    box: { checked: true },
+    note: { textContent: 'Imported past-case wording reviewed for this patient.', closest: () => holder },
+  };
+  const holder = { dataset: { templateReviewState: 'reviewed' } };
+  const alerts = [];
+  const c = vm.createContext({
+    H: { ...helpers, autosaver: () => ({ changed() {}, adopt() {}, save: async () => true }) }, esc: helpers.esc, page: 'report_editor',
+    hmr: { api: async () => ({}) }, $: () => ({ open: false }), errorText: (e) => e.message, alert: (m) => alerts.push(m),
+    document: { addEventListener() {}, querySelector: (q) => (q === '[data-template-reviewed="0"]' ? nodes.box : q === '[data-template-review-note="0"]' ? nodes.note : null) },
+  });
+  vm.runInContext(source, c);
+  c.showTemplateReviewState(0, false);
+  assert.equal(nodes.box.checked, false);
+  assert.match(nodes.note.textContent, /not yet reviewed for this patient/);
+  assert.equal(holder.dataset.templateReviewState, 'pending');
+  c.showTemplateReviewState(0, true);
+  assert.equal(nodes.box.checked, true);
+  assert.equal(nodes.note.textContent, 'Imported past-case wording reviewed for this patient.');
+  assert.equal(holder.dataset.templateReviewState, 'reviewed');
+  assert.match(source, /data-template-review-note="\$\{i\}"/);
+  assert.match(source, /showTemplateReviewState\(Number\(el\.dataset\.issue\), false\)/);
 });
