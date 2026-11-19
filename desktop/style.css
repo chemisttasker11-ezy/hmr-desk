@@ -750,6 +750,7 @@ main:has(.interview-context) > header { height: 96px; min-height: 96px; }
 .med-lookup{flex:1 1 100%;display:flex;flex-wrap:wrap;gap:8px;align-items:center}
 .med-lookup-results{flex:1 1 100%}
 .med-lookup-results p{margin:4px 0}
+.med-lookup-listings{margin:0 0 6px 16px}.med-lookup-listing{display:flex;gap:12px;align-items:center;justify-content:space-between;padding:3px 0;border-top:1px dotted #d9e0dd}
 .med-lookup-result{display:flex;gap:12px;align-items:center;justify-content:space-between;padding:4px 0;border-top:1px solid #d9e0dd}
 .med-ref{font-size:.95em}
 .interview-medicine-main > .med-field { flex: 1 1 125px; min-width: 100px; display: flex; flex-direction: column; gap: 2px; }

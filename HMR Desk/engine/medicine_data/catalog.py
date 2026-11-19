@@ -212,7 +212,7 @@ def _fts_usable(db):
         return False
 
 
-def search(db, text, limit=20):
+def search(db, text, limit=20, _max=100):
     """Contains match with bound SQL and escaped LIKE wildcards, not clinical matching.
 
     Caller displays source/release and requires human selection. No fuzzy merges.
@@ -222,7 +222,7 @@ def search(db, text, limit=20):
     query = normalise(text)
     if len(query) < 2:
         return []
-    if not 1 <= limit <= 100:
+    if not 1 <= limit <= _max:
         raise ValueError('limit must be 1..100')
     escaped = query.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
     db.row_factory = sqlite3.Row

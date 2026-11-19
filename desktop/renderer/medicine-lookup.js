@@ -52,23 +52,44 @@ async function medicineLookupClick(b) {
   const say = (t) => { const p = document.createElement('p'); p.textContent = t; out.append(p); };
   if (text.length < 2) { say('Type at least two letters of the medicine name, then look up.'); return true; }
   try {
-    const found = await hmr.api('GET', '/api/medicines/search?q=' + medicineQuery(text));
+    const found = await hmr.api('GET', '/api/medicines/search?grouped=1&q=' + medicineQuery(text));
     if (page !== 'interview' || interviewId !== patientId || interviewRecord !== record || record[key][i] !== medicine || medicine[0].trim() !== text || !out.isConnected) return true;
     if (!found.installed) { say('No medicine reference data is installed on this PC. Keep typing the name by hand; nothing is lost.'); return true; }
     if (!found.results.length) { say('No match in the reference data. Keep your typed name, or try another spelling.'); return true; }
     say('Pick the medicine you mean. Reference release ' + found.results[0].release + '. Check strength and form yourself.');
-    for (const r of found.results) {
+    const choose = (r) => {
+      if (page !== 'interview' || interviewId !== patientId || interviewRecord !== record || record[key][i] !== medicine || medicine[0].trim() !== text || !out.isConnected) return;
+      interviewRecord[key][i][0] = r.display;
+      interviewRecord.details[key][i].reference = { source: r.source, code: r.code, display: r.display, release: r.release };
+      interviewChanged(key); renderInterview();
+    };
+    // Identical PBS listings arrive as one group; each listing stays individually pickable. Older replies are flat.
+    const groups = Array.isArray(found.groups) ? found.groups : found.results.map((r) => ({ grouped: false, label: r.display, listings: [r], count: 1 }));
+    for (const g of groups) {
       const row = document.createElement('div'); row.className = 'med-lookup-result';
-      const label = document.createElement('span'); label.textContent = r.display + ' [' + r.kind + ']';
-      const use = document.createElement('button'); use.type = 'button'; use.textContent = 'Use this';
-      use.addEventListener('click', () => {
-        if (page !== 'interview' || interviewId !== patientId || interviewRecord !== record || record[key][i] !== medicine || medicine[0].trim() !== text || !out.isConnected) return;
-        interviewRecord[key][i][0] = r.display;
-        interviewRecord.details[key][i].reference = { source: r.source, code: r.code, display: r.display, release: r.release };
-        interviewChanged(key); renderInterview();
-      });
-      row.append(label, use); out.append(row);
+      const label = document.createElement('span');
+      const first = g.listings[0];
+      if (g.listings.length === 1) {
+        label.textContent = first.display + ' [' + first.kind + ']';
+        const use = document.createElement('button'); use.type = 'button'; use.textContent = 'Use this';
+        use.addEventListener('click', () => choose(first));
+        row.append(label, use); out.append(row); continue;
+      }
+      label.textContent = g.label + ' [' + first.kind + '] - ' + g.listings.length + ' PBS listings';
+      const toggle = document.createElement('button'); toggle.type = 'button'; toggle.textContent = 'Show listings';
+      const list = document.createElement('div'); list.className = 'med-lookup-listings'; list.hidden = true;
+      for (const r of g.listings) {
+        const item = document.createElement('div'); item.className = 'med-lookup-listing';
+        const name = document.createElement('span');
+        name.textContent = r.display + (r.program_code ? ' (program ' + r.program_code + ')' : '');
+        const use = document.createElement('button'); use.type = 'button'; use.textContent = 'Use this listing';
+        use.addEventListener('click', () => choose(r));
+        item.append(name, use); list.append(item);
+      }
+      toggle.addEventListener('click', () => { list.hidden = !list.hidden; toggle.textContent = list.hidden ? 'Show listings' : 'Hide listings'; });
+      row.append(label, toggle); out.append(row, list);
     }
+    if (found.more_available) say('More matches exist. Type more of the name to narrow the list.');
   } catch (error) { say('Lookup failed: ' + errorText(error) + '. Type the name by hand.'); }
   return true;
 }

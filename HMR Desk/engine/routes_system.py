@@ -45,6 +45,9 @@ def handle(conn, method, path, query, body):
     if path == '/api/medicines/search' and method == 'GET':
         q = query.get('q', ''); q = q[0] if isinstance(q, list) and q else q
         if not isinstance(q, str): raise ValueError('invalid search')
+        flag = query.get('grouped', ''); flag = flag[0] if isinstance(flag, list) and flag else flag
+        if flag == '1':
+            return 200, medicine_reference.search_grouped(q)
         return 200, medicine_reference.search(q)
     if path == '/api/records/status' and method == 'GET':
         return 200, records.status(conn, lambda row: jobs.patient_folder(row), jobs.outside_files)

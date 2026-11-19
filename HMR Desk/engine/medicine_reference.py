@@ -72,6 +72,31 @@ def search(text, limit=15):
         'release': r['release']} for r in found]}
 
 
+GROUP_FETCH = 400
+
+
+def search_grouped(text, max_groups=15):
+    """Search, then group identical PBS listings before limiting, so repeated listings
+    of one product cannot crowd other matches out. `results` is the flat first page as
+    before; `groups` is the display list. Nothing is chosen for the pharmacist."""
+    from medicine_grouping import group_rows, finish
+    conn = _open()
+    if conn is None:
+        return {'installed': False, 'results': [], 'groups': []}
+    _SCANS.acquire()
+    try:
+        found = catalog.search(conn, text, GROUP_FETCH, _max=GROUP_FETCH)
+    except sqlite3.Error:
+        return {'installed': False, 'results': [], 'groups': []}
+    finally:
+        _SCANS.release()
+        conn.close()
+    groups, more = group_rows(found, max_groups)
+    flat = [listing for group in groups for listing in group['listings']]
+    return {'installed': True, 'results': flat, 'groups': finish(groups),
+            'more_available': more or len(found) >= GROUP_FETCH}
+
+
 def pick(source, code):
     """Return the stored reference for one concept, or None. Used to validate a saved choice."""
     conn = _open()
