@@ -187,6 +187,29 @@ const H = (() => {
     'report_build',
     'claim',
   ];
+  // A historical 'report_build: done' step can be true even after the clinical record changes.
+  // Keep backend workflow and pharmacist approval separate from the status shown on screens.
+  function reportWorkflowStatus(patientState, buildStep, currency) {
+    const canBuild = ['visited', 'report_drafted'].includes(patientState);
+    const current = currency?.status === 'current';
+    const reason = current ? '' : currency?.status === 'outdated'
+      ? 'The generated report is outdated. Rebuild Word and PDF before sign-off.'
+      : currency?.status === 'not_generated'
+        ? 'No current generated report. Build Word and PDF before sign-off.'
+        : 'Report currency could not be verified. Reload before sign-off.';
+    return {
+      build: {
+        ...(buildStep || {}),
+        // A previous build is not evidence that the current clinical record matches it.
+        done: current,
+        // Rebuilding remains available in editable stages; this never enables sign-off.
+        ready: canBuild && Boolean(buildStep?.ready || buildStep?.done),
+        reason: reason || buildStep?.reason || '',
+      },
+      canSign: canBuild && current,
+      signReason: canBuild ? reason : 'This report is not awaiting sign-off.',
+    };
+  }
   // Freshness and recorded-state checklist from GET /api/patients/<id>/report-status. Display only: it never
   // says approved or ready, and unknown or unverifiable stays visibly uncertain.
   function reportStatusHtml(status) {
@@ -767,6 +790,7 @@ const H = (() => {
     patientPathway,
     buildOutcomeText,
     runStatusText,
+    reportWorkflowStatus,
     reportStatusHtml,
     commonStep,
     suburb,
@@ -791,3 +815,4 @@ const H = (() => {
   };
 })();
 if (typeof module !== 'undefined') module.exports = H;
+

@@ -1,20 +1,33 @@
 let medicinePatient = null;
 let medicineData = null;
+// Runs at most `limit` patients at once so a long Reports list does not fire every request together.
+// Results keep the input order, in the same {status, value|reason} shape as Promise.allSettled.
+async function settledPool(items, limit, work) {
+  const out = new Array(items.length);
+  let next = 0;
+  const lane = async () => {
+    while (next < items.length) {
+      const i = next++;
+      try { out[i] = { status: 'fulfilled', value: await work(items[i]) }; } catch (reason) { out[i] = { status: 'rejected', reason }; }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, lane));
+  return out;
+}
 async function reports() {
   const [list, agents] = await Promise.all([hmr.api('GET', '/api/patients'), hmr.api('GET', '/api/agents')]);
   if (page !== 'reports') return;
   patients = list.patients;
   const agent = agents.per_step.report_draft || agents.default || 'No agent selected';
   const rows = patients.filter((p) => ['visited', 'report_drafted', 'signed_off'].includes(p.state));
-  const details = await Promise.allSettled(
-    rows.map(async (p) => {
-      const [detail, spec] = await Promise.all([
+  const details = await settledPool(rows, 3, async (p) => {
+      const [detail, spec, currency] = await Promise.all([
         hmr.api('GET', `/api/patients/${encodeURIComponent(p.id)}`),
         hmr.api('GET', `/api/patients/${encodeURIComponent(p.id)}/report`),
+        hmr.api('GET', `/api/patients/${encodeURIComponent(p.id)}/report-status`).catch(() => null),
       ]);
-      return { ...detail, reportSpec: spec };
-    }),
-  );
+      return { ...detail, reportSpec: spec, reportCurrency: currency };
+  });
   if (page !== 'reports') return;
   $('screen').innerHTML = `<p id="report-message" role="status">${esc(runMessage)}</p>
     <h2>Reports to write (${rows.length})</h2>${rows.map((p, i) => (details[i].status === 'fulfilled' ? reportRow(p, details[i].value, agent) : reportError(p, details[i].reason))).join('') || '<p class="empty">No reports waiting</p>'}<div id="detail" class="detail drawer" role="dialog" aria-label="Patient" hidden></div>`;
@@ -36,11 +49,12 @@ function reportRow(p, detail, agent) {
     done: visited && confirmation?.done === true,
     reason: visited ? '' : 'Visit not recorded',
   };
-  const build = steps.report_build;
+  const workflow = H.reportWorkflowStatus(p.state, steps.report_build, detail.reportCurrency);
+  const build = workflow.build;
   const sign = {
     done: ['signed_off', 'sent', 'claimed'].includes(p.state),
-    ready: ['visited', 'report_drafted'].includes(p.state) && !!build?.done,
-    reason: 'Word report must be built first',
+    ready: workflow.canSign,
+    reason: workflow.signReason,
   };
   const start = steps.report_start;
   const edit = {
@@ -60,7 +74,9 @@ function reportRow(p, detail, agent) {
     ['sign', 'Signed off', sign],
   ];
   const next = String(p.next_step || '').toLowerCase();
-  const target = ({ 'confirm medicines': 'medicines', 'check interactions': 'interactions', 'start report': 'report_start', 'add findings': 'edit', 'build report': 'build', 'sign off': 'sign' })[next];
+  const target = next === 'sign off' && !workflow.canSign && ['visited', 'report_drafted'].includes(p.state)
+    ? 'build'
+    : ({ 'confirm medicines': 'medicines', 'check interactions': 'interactions', 'start report': 'report_start', 'add findings': 'edit', 'build report': 'build', 'sign off': 'sign' })[next];
   const primary = target ? buttons.findIndex(([step]) => step === target) : (next ? -1 : buttons.findIndex(([, , status]) => status?.ready && !status?.done));
   const renderButton = ([step, label, status], index) => {
     const attr = step === 'medicines' ? `data-medicines="${esc(p.id)}"`
@@ -73,6 +89,7 @@ function reportRow(p, detail, agent) {
   const main = next === 'send report' ? `<button class="primary" data-claim-action="report_sent" data-id="${esc(p.id)}">Mark report sent</button>`
     : primary >= 0 ? renderButton(buttons[primary], primary) : `<p>${esc(p.next_step || 'Review the report')}</p>`;
   return `<div class="card"><div class="card-head"><h3>${esc(p.name)}</h3><span class="status-chip stage-${H.stageClass(p.stage)}">${esc(p.status_text || p.state)}</span></div>
+    ${H.reportStatusHtml(detail.reportCurrency) || '<p class="muted" role="status">Report currency could not be verified. Do not sign off until checked.</p>'}
     <div class="report-steps"><strong>Next action</strong>${main}<details><summary>Other report steps</summary><div class="report-steps">${buttons.map((item, i) => i === primary ? '' : renderButton(item, i)).join('')}<button data-report-folder="${esc(p.id)}">Open folder</button></div></details></div>
     <div id="medicines-${esc(p.id)}"></div></div>`;
 }
@@ -240,3 +257,4 @@ async function pharmacistReportSignoff(patientId) {
     dialog.showModal();
   });
       }
+
