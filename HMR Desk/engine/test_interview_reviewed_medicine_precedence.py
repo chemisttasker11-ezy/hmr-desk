@@ -46,7 +46,7 @@ def test_reviewed_list_replaces_conflicting_parser_rows(tmp_path, monkeypatch):
 
 
 def test_matching_parser_rows_are_kept_with_evidence(tmp_path, monkeypatch):
-    conn, patient = setup(tmp_path, monkeypatch, ['Synthetic Parsed P', 'Synthetic Parsed Q'])
+    conn, patient = setup(tmp_path, monkeypatch, ['Synthetic Parsed P daily', 'Synthetic Parsed Q nightly'])
     rec = interview.blank(conn, patient)
     assert [r[0] for r in rec['meds']][:2] == ['Synthetic Parsed P', 'Synthetic Parsed Q']
     assert 'source_evidence' in rec['details']['meds'][0]
@@ -60,3 +60,19 @@ def test_saved_interview_is_not_overwritten(tmp_path, monkeypatch):
     rec = interview.blank(conn, patient)
     assert [r[0] for r in rec['meds']][0] == 'Synthetic Edited E'
     assert not any(r[0] == 'Synthetic Reviewed X' for r in rec['meds'])
+
+
+def test_same_name_different_directions_uses_reviewed_text(tmp_path, monkeypatch):
+    conn, patient = setup(tmp_path, monkeypatch, ['Synthetic Parsed P 20 mg twice daily', 'Synthetic Parsed Q nightly'])
+    rec = interview.blank(conn, patient)
+    names = [r[0] for r in rec['meds']]
+    assert 'Synthetic Parsed P 20 mg twice daily' in names and 'Synthetic Parsed Q nightly' in names
+    assert not any(r[0] == 'Synthetic Parsed P' for r in rec['meds'])
+    assert any('Parser read' in x for x in rec['clarify'])
+    assert all(not m.get('use_status') for r, m in zip(rec['meds'], rec['details']['meds']) if 'Ceased' not in r[0])
+
+
+def test_exact_full_line_match_keeps_parser_rows(tmp_path, monkeypatch):
+    conn, patient = setup(tmp_path, monkeypatch, ['Synthetic Parsed P  daily', 'Synthetic Parsed Q nightly'])
+    rec = interview.blank(conn, patient)
+    assert rec['meds'][0][:2] == ['Synthetic Parsed P', 'daily'] and 'source_evidence' in rec['details']['meds'][0]

@@ -250,7 +250,8 @@ def blank(conn, patient):
                     # merged or appended; they are kept as text in Clarify. Ceased-per-referral rows are kept.
                     keep = {i for i, meta in enumerate(record['details']['meds']) if meta.get('use_status') == 'not_using'}
                     parsed = [r for i, r in enumerate(record['meds']) if i not in keep]
-                    same = {r[0].strip().casefold() for r in parsed} == {x.casefold() for x in lines}
+                    norm = lambda t: ' '.join(str(t).split()).casefold()
+                    same = {norm(' '.join(x for x in r[:2] if x)) for r in parsed} == {norm(x) for x in lines}
                     if parsed and not same:
                         kept_rows = [(r, record['details']['meds'][i]) for i, r in enumerate(record['meds']) if i in keep and r[0].strip().casefold() not in {x.casefold() for x in lines}]
                         record['meds'] = [r for r, _ in kept_rows]; record['details']['meds'] = [m for _, m in kept_rows]
