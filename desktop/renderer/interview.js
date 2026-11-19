@@ -102,6 +102,7 @@ async function leaveInterview() {
 async function openInterview(id) {
   const target = String(id), previous = interviewId;
   if (page === 'interview' && interviewId !== target && !(await leaveInterview())) return { cancelled: true };
+  if (previous !== target) interviewProgressFilter = 'all';  // a filter chosen for one patient must not hide another patient's checked rows
   interviewId = target;
   if (page !== 'interview') await navigate('interview');
   else await interviewScreen();
@@ -314,7 +315,7 @@ function interviewOtherMedicineTable(rows) {
   rows ||= [];
   const meta = interviewRecord.details.other_meds, checked = meta.filter(m => m.checked).length;
   const order = rows.map((row, i) => i).filter(i => interviewProgressFilter === 'all' || (interviewProgressFilter === 'checked') === meta[i].checked).sort((a, b) => Number(meta[a].checked) - Number(meta[b].checked) || Number(meta[a].use_status === 'not_using') - Number(meta[b].use_status === 'not_using') || meta[b].priority - meta[a].priority || Number(!!rows[b][3].trim()) - Number(!!rows[a][3].trim()));
-  return `<div class="interview-progress"><span>Other medicines found: ${rows.length - checked} remaining · ${checked} checked</span></div><div class="interview-table interview-medicines"><table><tbody>${order.map(i => interviewMedicineRow('other_meds', rows[i], meta[i], i)).join('')}</tbody></table></div><button type="button" data-interview-add="other_meds">Add row</button>`;
+  return `<div class="interview-progress"><span>Other medicines found: ${rows.length - checked} remaining · ${checked} checked</span><label>Show <select data-interview-progress-filter aria-label="Filter found medicine progress">${[['all','All'],['remaining','Remaining'],['checked','Checked']].map(([v,l]) => `<option value="${v}" ${interviewProgressFilter === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label></div><div class="interview-table interview-medicines"><table><tbody>${order.map(i => interviewMedicineRow('other_meds', rows[i], meta[i], i)).join('')}</tbody></table></div><button type="button" data-interview-add="other_meds">Add row</button>`;
 }
 function interviewMoveFocus(el, key, change) {
   const row = el.closest?.('tr'), sectionId = row?.closest('section')?.id, col = key === 'meds' ? 2 : 1;
