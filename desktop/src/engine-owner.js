@@ -51,6 +51,8 @@ async function start({ resourcesPath, dataDir, workspace, config, timeoutMs = 20
   const port = await freePort();
   const session = crypto.randomBytes(32).toString('hex');
   const tokenFile = path.join(dataDir, 'api_token');
+  const endpointFile = path.join(dataDir, 'engine_endpoint.json');
+  try { fs.rmSync(endpointFile, { force: true }); } catch {}
   const url = 'http://127.0.0.1:' + port;
   const child = spawn(engine, ['--data-dir', dataDir, '--workspace', workspace, '--port', String(port)], {
     windowsHide: true,
@@ -92,8 +94,11 @@ async function start({ resourcesPath, dataDir, workspace, config, timeoutMs = 20
           config.api = url;
           config.tokenFile = tokenFile;
           ready = true;
+          // Live endpoint for local automation, written beside the token (never containing it).
+          try { fs.writeFileSync(endpointFile, JSON.stringify({ url, pid: child.pid, app_pid: process.pid, written_at: new Date().toISOString() }), { mode: 0o600 }); } catch {}
           return { child, url, status, stop: async () => {
             stopping = true;
+            try { fs.rmSync(endpointFile, { force: true }); } catch {}
             if (exited) return;
             try {
               await fetch(url + '/api/engine/stop', {
