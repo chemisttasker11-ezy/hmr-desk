@@ -227,7 +227,7 @@ const H = (() => {
     else if (status.status === 'not_generated') line = 'No report has been built yet.';
     else line = 'Report status could not be checked.';
     if (status.reasons && status.reasons.includes('cannot_verify')) line += ' Treat it as unverified.';
-    const head = status.status === 'outdated' ? 'Outdated' : status.status === 'current' ? 'Built report' : 'Report';
+    const head = status.status === 'current' ? 'Built report' : 'Report status';
     let sign = status.signed_off ? 'A signed version exists.' : 'Not signed off.';
     if (status.signed_off && status.signed_version_intact === false) sign = 'A signed version exists, but the signed version has changed or is no longer intact.';
     const words = { met: 'Done', not_met: 'Not done', unknown: 'Unknown' };
