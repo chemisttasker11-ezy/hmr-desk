@@ -164,3 +164,24 @@ def test_table_header_text_is_black_on_17365d_as_in_the_reference(tmp_path):
         for cell in table.rows[0].cells:
             run = cell.paragraphs[0].runs[0]
             assert run.bold and run.font.size.pt == 9 and str(run.font.color.rgb) == "000000"
+
+
+def test_tables_use_direct_formatting_like_the_reference(tmp_path):
+    doc = render(tmp_path)
+    for table in doc.tables:
+        pr = table._tbl.tblPr
+        assert pr.find(qn('w:tblStyle')) is None
+        assert pr.find(qn('w:tblLayout')).get(qn('w:type')) == 'fixed'
+        assert pr.find(qn('w:tblInd')).get(qn('w:w')) == '-5'
+        assert pr.find(qn('w:tblLook')).get(qn('w:val')) == '04A0'
+        assert int(pr.find(qn('w:tblW')).get(qn('w:w'))) == sum(grid(table))
+        tags = [e.tag.split('}')[1] for e in pr]
+        assert tags.index('tblW') < tags.index('tblInd') < tags.index('tblBorders') < tags.index('tblLayout') < tags.index('tblLook')
+
+
+def test_header_cells_have_the_075pt_bottom_and_right_borders(tmp_path):
+    for table in render(tmp_path).tables[2:5]:
+        for cell in table.rows[0].cells:
+            borders = cell._tc.tcPr.find(qn('w:tcBorders'))
+            assert {e.tag.split('}')[1]: (e.get(qn('w:val')), e.get(qn('w:sz'))) for e in borders} == {
+                'bottom': ('single', '6'), 'right': ('single', '6')}

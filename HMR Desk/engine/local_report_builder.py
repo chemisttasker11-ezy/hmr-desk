@@ -37,6 +37,37 @@ def _fixed_layout(table, widths_cm):
     for row in table.rows:
         for cell, width in zip(row.cells, widths_cm):
             cell.width = Twips(_tw(width))
+    _direct_table_props(table, sum(_tw(w) for w in widths_cm))
+
+
+_TBLPR_ORDER = ('tblStyle', 'tblpPr', 'tblOverlap', 'bidiVisual', 'tblStyleRowBandSize', 'tblStyleColBandSize', 'tblW',
+                'jc', 'tblCellSpacing', 'tblInd', 'tblBorders', 'shd', 'tblLayout', 'tblCellMar', 'tblLook')
+
+
+def _direct_table_props(table, total_tw):
+    """Reference tables use direct formatting only: no named table style, tblW = grid sum, tblInd -5, fixed layout,
+    tblLook 04A0. Default cell margins (0 top/bottom, 108 left/right) come from the document default table style."""
+    pr = table._tbl.tblPr
+    for tag in ('tblStyle', 'tblW', 'tblInd', 'tblLook'):
+        for el in pr.findall(qn('w:' + tag)):
+            pr.remove(el)
+    width = OxmlElement('w:tblW')
+    width.set(qn('w:w'), str(total_tw))
+    width.set(qn('w:type'), 'dxa')
+    indent = OxmlElement('w:tblInd')
+    indent.set(qn('w:w'), '-5')
+    indent.set(qn('w:type'), 'dxa')
+    look = OxmlElement('w:tblLook')
+    for key, val in (('val', '04A0'), ('firstRow', '1'), ('lastRow', '0'), ('firstColumn', '1'), ('lastColumn', '0'),
+                     ('noHBand', '0'), ('noVBand', '1')):
+        look.set(qn('w:' + key), val)
+    for el in (width, indent, look):
+        pr.append(el)
+    kids = sorted(list(pr), key=lambda e: _TBLPR_ORDER.index(e.tag.split('}')[1]) if e.tag.split('}')[1] in _TBLPR_ORDER else 99)
+    for el in list(pr):
+        pr.remove(el)
+    for el in kids:
+        pr.append(el)
 
 # Style conventions from the host's corroborated spec of the pharmacist's latest pair of reports (non-identifying):
 # A4; margins top 1985 / right 991 / bottom 1843 / left 993 twips; header 788 / footer 785; Montserrat runs, 9 pt bold
@@ -139,7 +170,6 @@ def _cell_text(cell, text, size=BODY_PT, bold=False, color=None):
 def _title_table(doc, assess, report):
     """Unfilled 3-column, 2-row title table, black text. Title in Heading 1 (16 pt bold black)."""
     table = doc.add_table(rows=2, cols=3)
-    table.style = "Table Grid"
     _borders(table)
     title = table.cell(0, 0)
     title.paragraphs[0].style = doc.styles["Heading 1"]
@@ -155,7 +185,6 @@ def _title_table(doc, assess, report):
 def _details_table(doc, patient, doctor):
     """Three columns: patient, doctor, accredited pharmacist. Pharmacist data is not in the report spec."""
     table = doc.add_table(rows=2, cols=3)
-    table.style = "Table Grid"
     _borders(table)
     for cell, label, value in zip(table.rows[0].cells, ("Patient Details", "Doctor Details", "Accredited Pharmacist Details"),
                                   (None, None, None)):
@@ -178,7 +207,17 @@ def _header_row(table):
     trpr = first._tr.get_or_add_trPr()
     trpr.append(OxmlElement('w:tblHeader'))
     for cell in first.cells:
-        _shade(cell._tc.get_or_add_tcPr(), NAVY)
+        tc_pr = cell._tc.get_or_add_tcPr()
+        cell_borders = OxmlElement('w:tcBorders')
+        for side in ('bottom', 'right'):  # reference: single 0.75 pt black on these two sides of header cells
+            line = OxmlElement('w:' + side)
+            line.set(qn('w:val'), 'single')
+            line.set(qn('w:sz'), '6')
+            line.set(qn('w:space'), '0')
+            line.set(qn('w:color'), '000000')
+            cell_borders.append(line)
+        tc_pr.append(cell_borders)
+        _shade(tc_pr, NAVY)
         for paragraph in cell.paragraphs:
             for run in paragraph.runs:
                 run.bold = True
@@ -284,7 +323,6 @@ def render(data, target):
             continue
         _heading(doc, heading, color)
         table = doc.add_table(rows=1, cols=len(labels))
-        table.style = "Table Grid"
         _borders(table)
         for cell, label in zip(table.rows[0].cells, labels):
             _cell_text(cell, label, 9, True)
