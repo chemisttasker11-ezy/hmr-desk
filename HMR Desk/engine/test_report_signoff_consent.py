@@ -4,6 +4,7 @@ import json
 import pytest
 
 import report_auth
+import report_status
 from test_report_auth import case
 
 
@@ -33,6 +34,9 @@ def test_invalid_or_missing_interview_consent_refuses_report_signoff(tmp_path, m
     evidence['clinical_snapshot_sha256'] = report_auth.clinical_snapshot_hash(conn, patient)
     with conn:
         conn.execute('UPDATE events SET detail=? WHERE id=?', (json.dumps(evidence), latest['id']))
+    displayed = report_status.report_status(conn, patient)
+    states = {item['key']: item['state'] for item in displayed['readiness']['items']}
+    assert states['consent_recorded'] == 'not_met'
     with pytest.raises(ValueError, match='Signed, dated patient consent'):
         report_auth.check_approval(conn, patient, body)
     conn.close()
@@ -41,6 +45,7 @@ def test_invalid_or_missing_interview_consent_refuses_report_signoff(tmp_path, m
 def test_interview_patient_consent_allows_report_authorisation_without_a_pdf(tmp_path, monkeypatch):
     conn, patient, folder, body = case(tmp_path, monkeypatch)
     assert not list(folder.glob('PPA Consent* signed.pdf'))
+    assert {item['key']: item['state'] for item in report_status.report_status(conn, patient)['readiness']['items']}['consent_recorded'] == 'met'
     assert report_auth.check_approval(conn, patient, body)['clinical_reviewed'] is True
     conn.close()
 
@@ -58,5 +63,6 @@ def test_interview_authorised_person_consent_is_accepted_with_complete_details(t
     evidence['clinical_snapshot_sha256'] = report_auth.clinical_snapshot_hash(conn, patient)
     with conn:
         conn.execute('UPDATE events SET detail=? WHERE id=?', (json.dumps(evidence), latest['id']))
+    assert {item['key']: item['state'] for item in report_status.report_status(conn, patient)['readiness']['items']}['consent_recorded'] == 'met'
     assert report_auth.check_approval(conn, patient, body)['clinical_reviewed'] is True
     conn.close()
