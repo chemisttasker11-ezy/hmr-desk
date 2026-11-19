@@ -56,6 +56,8 @@ def test_terms_cannot_match_across_different_physical_pages(tmp_path,monkeypatch
 def test_production_api_independent_reference_routes(tmp_path,monkeypatch):
     import api
     p=setup(tmp_path,monkeypatch)
+    # Hermetic: a build tree that has packaged Brainstorm tables must not turn the missing-PDF case into the packaged-tier 200.
+    monkeypatch.setattr(api.app_paths,'engine_assets',lambda:tmp_path/'no-packaged-tables')
     status,result=api.handle(None,'POST','/api/reference/local',{}, {'path':str(p),'edition':'test','local_use_confirmed':True})
     assert status==200
     status,found=api.handle(None,'GET','/api/reference/search',{'q':['marker-alpha']},None)
