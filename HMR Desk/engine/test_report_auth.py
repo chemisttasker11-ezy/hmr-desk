@@ -61,7 +61,10 @@ def case(tmp_path, monkeypatch):
     patient = conn.execute('SELECT * FROM patients WHERE id=?', (pid,)).fetchone()
     records.put(conn, pid, 'report_spec.json', spec_bytes); conn.commit()
     # The pharmacist explicitly acknowledged this synthetic medicine snapshot.
-    record = {'meds': [], 'other_meds': [], 'header': {'gp': 'Dr Synthetic', 'dob': '01-Jan-1950', 'visit': '12/11/2026 10:00'},
+    record = {'meds': [], 'other_meds': [],
+              'consent': {'signed': True, 'date': '2026-11-12', 'by': 'patient',
+                          'relationship': 0, 'authorised_name': ''},
+              'header': {'gp': 'Dr Synthetic', 'dob': '01-Jan-1950', 'visit': '12/11/2026 10:00'},
               'details': {'meds': [], 'other_meds': []}}
     monkeypatch.setattr(report_auth.interview, 'load', lambda conn, patient: record)
     # Sign-off compares the report's patient, GP and date blocks with the current record, so the spec carries them.
