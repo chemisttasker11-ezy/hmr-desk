@@ -209,4 +209,4 @@ def workflow_step(p, conn=None):
         if not steps.interactions_done(conn, p): return 'check interactions'
         return 'start report'
     if state == 'sent': return steps.BY_NAME['claim'].label
-    return {'new': steps.BY_NAME['intake_dry'].label, 'pooled': 'offer a time', 'offered': 'wait for reply', 'report_drafted': 'sign off', 'signed_off': 'send report'}.get(state, '')
+    return {'new': 'offer a time', 'pooled': 'offer a time', 'offered': 'wait for reply', 'report_drafted': 'sign off', 'signed_off': 'send report'}.get(state, '')
