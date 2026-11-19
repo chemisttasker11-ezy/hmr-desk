@@ -474,6 +474,13 @@ const H = (() => {
     } catch (_) { return []; }
     return drafts;
   }
+  // The engine answered and refused the content (for example a finding that is still blank): that is a reason the
+  // pharmacist can act on, not an unreachable store. A dropped or unreachable connection keeps the storage wording.
+  const TRANSPORT_FAILURE = /fetch failed|UND_ERR|ECONN|EPIPE|socket|other side closed|network|timed? ?out|offline|ENOTFOUND/i;
+  function isRefusal(e) {
+    const message = String((e && e.message) || e || '');
+    return !!message && message.length < 300 && !TRANSPORT_FAILURE.test(message);
+  }
   function autosaver({ getRecord, getId, endpoint, status, errorText, draftKey, loadCurrent, onReconcile, equivalent }) {
     let saved = '', timer, saving = null, error = '', generation = 0, key = '', conflicts = [], storageError = false, unreadable = false, retries = 0, offline = false, verifying = null;
     const dirty = () => !!getRecord() && (conflicts.length > 0 || recordChanged(getRecord(), saved));
@@ -588,7 +595,7 @@ const H = (() => {
               await verifyCurrent();
               return false;
             }
-            error = draftKey ? 'Unable to reach storage; retrying' : errorText(e);
+            error = draftKey && !isRefusal(e) ? 'Unable to reach storage; retrying' : errorText(e);
             status(storageError ? storageMessage : `Not saved - ${error}`);
             scheduleRetry();
           }
