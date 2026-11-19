@@ -105,7 +105,8 @@ const H = (() => {
     claim: 'Claim',
     register_xlsx: 'Export register',
   };
-  const plainSteps = { 'confirm medicines': 'Check medicines for interaction check' };
+  // Today rows and buttons do not load report currency, so plain 'sign off' would imply the report is current.
+  const plainSteps = { 'confirm medicines': 'Check medicines for interaction check', 'sign off': 'Check report, then sign off' };
   function sectionOf(page) {
     return ({ messages: 'book', intake: 'book', to_book: 'book', calendar: 'visit', interview: 'visit',
       reports: 'report', report_editor: 'report', followup_editor: 'followup', run: 'activity' })[page] || page;
@@ -187,6 +188,29 @@ const H = (() => {
     'report_build',
     'claim',
   ];
+  // A historical 'report_build: done' step can be true even after the clinical record changes.
+  // Keep backend workflow and pharmacist approval separate from the status shown on screens.
+  function reportWorkflowStatus(patientState, buildStep, currency) {
+    const canBuild = ['visited', 'report_drafted'].includes(patientState);
+    const current = currency?.status === 'current';
+    const reason = current ? '' : currency?.status === 'outdated'
+      ? 'The generated report is outdated. Rebuild Word and PDF before sign-off.'
+      : currency?.status === 'not_generated'
+        ? 'No current generated report. Build Word and PDF before sign-off.'
+        : 'Report currency could not be verified. Reload before sign-off.';
+    return {
+      build: {
+        ...(buildStep || {}),
+        // A previous build is not evidence that the current clinical record matches it.
+        done: current,
+        // Rebuilding remains available in editable stages; this never enables sign-off.
+        ready: canBuild && Boolean(buildStep?.ready || buildStep?.done),
+        reason: reason || buildStep?.reason || '',
+      },
+      canSign: canBuild && current,
+      signReason: canBuild ? reason : 'This report is not awaiting sign-off.',
+    };
+  }
   // Freshness and recorded-state checklist from GET /api/patients/<id>/report-status. Display only: it never
   // says approved or ready, and unknown or unverifiable stays visibly uncertain.
   function reportStatusHtml(status) {
@@ -203,7 +227,7 @@ const H = (() => {
     else if (status.status === 'not_generated') line = 'No report has been built yet.';
     else line = 'Report status could not be checked.';
     if (status.reasons && status.reasons.includes('cannot_verify')) line += ' Treat it as unverified.';
-    const head = status.status === 'outdated' ? 'Outdated' : status.status === 'current' ? 'Built report' : 'Report';
+    const head = status.status === 'current' ? 'Built report' : 'Report status';
     let sign = status.signed_off ? 'A signed version exists.' : 'Not signed off.';
     if (status.signed_off && status.signed_version_intact === false) sign = 'A signed version exists, but the signed version has changed or is no longer intact.';
     const words = { met: 'Done', not_met: 'Not done', unknown: 'Unknown' };
@@ -738,7 +762,7 @@ const H = (() => {
       const days = Number(item.days_left);
       if (Number.isFinite(days)) parts.push(days < 0 ? `Expired ${-days} days ago` : `${days} days left`);
     }
-    if (!parts.filter(Boolean).length) parts.push(item.detail);
+    if (!parts.filter(Boolean).length) parts.push(String(item.detail || '').toLowerCase() === 'sign off' ? stepLabel('sign off') : item.detail);
     return parts.filter(Boolean).map(esc).join(' &middot; ');
   }
   function medicineItemId() { return globalThis.crypto.randomUUID().replaceAll('-', ''); }
@@ -767,6 +791,7 @@ const H = (() => {
     patientPathway,
     buildOutcomeText,
     runStatusText,
+    reportWorkflowStatus,
     reportStatusHtml,
     commonStep,
     suburb,
@@ -791,3 +816,4 @@ const H = (() => {
   };
 })();
 if (typeof module !== 'undefined') module.exports = H;
+

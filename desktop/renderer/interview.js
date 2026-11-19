@@ -36,6 +36,8 @@ let interviewId = '',
   interviewRecord = null;
 let interviewSaveStatus = 'Ready', interviewConflict = false, interviewProgressFilter = 'all';
 let interviewReconciliation = null;
+// A stale review (acknowledged for earlier medicines) must be re-acknowledgeable; the engine still binds each acknowledgement to the current digest.
+function canAcknowledgeReconciliation(status) { return !!status && !status.reviewed; }
 let interviewPathology = null, interviewPathologyDirty = false, interviewPathologyError = '';
 let interviewCandidateChecks = null, interviewCandidateChecksError = '', interviewCandidateChecksStale = false;
 // Monotonic epoch for the observation layer. Every load start, relevant edit
@@ -100,6 +102,7 @@ async function leaveInterview() {
 async function openInterview(id) {
   const target = String(id), previous = interviewId;
   if (page === 'interview' && interviewId !== target && !(await leaveInterview())) return { cancelled: true };
+  if (previous !== target) interviewProgressFilter = 'all';  // a filter chosen for one patient must not hide another patient's checked rows
   interviewId = target;
   if (page !== 'interview') await navigate('interview');
   else await interviewScreen();
@@ -312,7 +315,7 @@ function interviewOtherMedicineTable(rows) {
   rows ||= [];
   const meta = interviewRecord.details.other_meds, checked = meta.filter(m => m.checked).length;
   const order = rows.map((row, i) => i).filter(i => interviewProgressFilter === 'all' || (interviewProgressFilter === 'checked') === meta[i].checked).sort((a, b) => Number(meta[a].checked) - Number(meta[b].checked) || Number(meta[a].use_status === 'not_using') - Number(meta[b].use_status === 'not_using') || meta[b].priority - meta[a].priority || Number(!!rows[b][3].trim()) - Number(!!rows[a][3].trim()));
-  return `<div class="interview-progress"><span>Other medicines found: ${rows.length - checked} remaining · ${checked} checked</span></div><div class="interview-table interview-medicines"><table><tbody>${order.map(i => interviewMedicineRow('other_meds', rows[i], meta[i], i)).join('')}</tbody></table></div><button type="button" data-interview-add="other_meds">Add row</button>`;
+  return `<div class="interview-progress"><span>Other medicines found: ${rows.length - checked} remaining · ${checked} checked</span><label>Show <select data-interview-progress-filter aria-label="Filter found medicine progress">${[['all','All'],['remaining','Remaining'],['checked','Checked']].map(([v,l]) => `<option value="${v}" ${interviewProgressFilter === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label></div><div class="interview-table interview-medicines"><table><tbody>${order.map(i => interviewMedicineRow('other_meds', rows[i], meta[i], i)).join('')}</tbody></table></div><button type="button" data-interview-add="other_meds">Add row</button>`;
 }
 function interviewMoveFocus(el, key, change) {
   const row = el.closest?.('tr'), sectionId = row?.closest('section')?.id, col = key === 'meds' ? 2 : 1;
@@ -430,11 +433,11 @@ function renderInterview() {
     <h2>Medicine reconciliation</h2>
     <p>Compare prescribed and actual medicine use. Flags require pharmacist judgement; they are not treatment recommendations.</p>
     ${interviewReconciliation
-      ? `<p role="status">${esc(interviewReconciliation.reviewed ? 'Reviewed and acknowledged for the saved medicines' : interviewReconciliation.stale ? 'Review is stale: medicines changed' : reconciliationRows.length + ' discrepancies require review')}</p>
+      ? `<p role="status">${esc(interviewReconciliation.reviewed ? 'Reviewed and acknowledged for the saved medicines' : interviewReconciliation.stale ? 'Review is stale: medicines changed. Acknowledge again for the current medicines' : reconciliationRows.length + ' discrepancies require review')}</p>
          <ul>${reconciliationRows.map(f => `<li><strong>${esc(f.medicine_id)}</strong>: ${esc(f.message)} <button type="button" data-interview-jump="meds">Go to medicines</button></li>`).join('')}</ul>`
       : '<p>Save changes, then load the current reconciliation checklist.</p>'}
     <div class="actions"><button type="button" data-reconciliation-load>Save and refresh checklist</button>
-    ${interviewReconciliation && !interviewReconciliation.reviewed && !interviewReconciliation.stale
+    ${canAcknowledgeReconciliation(interviewReconciliation)
       ? '<button type="button" data-reconciliation-ack>Acknowledge reviewed discrepancies</button>' : ''}</div>
     </section>`;
 
