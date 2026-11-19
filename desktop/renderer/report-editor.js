@@ -160,7 +160,10 @@ function reportField(key, label, multiline = true) {
   const input = multiline
     ? `<textarea data-field="${esc(key)}">${esc(reportRecord[key] || '')}</textarea>`
     : `<input data-field="${esc(key)}" value="${esc(H.date(reportRecord[key] || ''))}">`;
-  return `<label>${esc(label)} ${review}${input}</label>`;
+  const unrecorded = (key === 'allergies' || key === 'conditions') && !String(reportRecord[key] || '').trim()
+    ? `<small data-report-unrecorded="${esc(key)}">Nothing is recorded here. This means unknown, not "none". Check the interview before building.</small>`
+    : '';
+  return `<label>${esc(label)} ${review}${unrecorded}${input}</label>`;
 }
 function followupDecisionHtml() {
   if (reportRecord.followup_decision === undefined) {

@@ -25,6 +25,10 @@ def handle(conn, method, path, query, body):
             result['medicine_snapshot_changed'] = (('medicine_snapshot_sha256' in result and result['medicine_snapshot_sha256'] != current_digest)
                                                    or ('medicine_snapshot_sha256' not in result and 'confirmed_at' in result and snapshot is not None))
             result['medicine_snapshot'] = snapshot
+            if result['medicine_snapshot_changed'] and snapshot is not None:
+                # The saved list froze the allergies at confirmation time. Show what the interview says now, never the old list, and keep the old one visible.
+                result['allergies_confirmed_earlier'] = result.get('allergies', [])
+                result['allergies'] = [x.strip() for x in snapshot['allergies'].splitlines() if x.strip()]
             result['medicine_snapshot_sha256'] = medicine_snapshot.digest(snapshot) if snapshot is not None else 'missing'
             return 200, result
         if method == 'POST':

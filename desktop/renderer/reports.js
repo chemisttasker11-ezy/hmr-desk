@@ -96,6 +96,7 @@ function renderMedicines() {
       )
       .join('')}</div>
     <button type="button" data-add-medicine>Add medicine</button>
+    ${medicineData.allergies_confirmed_earlier && medicineData.allergies_confirmed_earlier.join('\n') !== medicineData.allergies.join('\n') ? `<p class="error" role="alert">The interview now lists ${medicineData.allergies.length} allergy line(s); the list you confirmed earlier had ${medicineData.allergies_confirmed_earlier.length}. The box below shows the current interview text. Check it, then save.</p>` : ''}
     <label>Allergies, one per line<textarea name="allergies">${esc(medicineData.allergies.join('\n'))}</textarea>
     </label><p class="error" role="alert"></p><button class="primary">Save medicines</button>
     <button type="button" data-close-medicines>Cancel</button></form>`;
