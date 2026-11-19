@@ -212,7 +212,9 @@ const H = (() => {
         done: current,
         // Rebuilding remains available in editable stages; this never enables sign-off.
         ready: canBuild && Boolean(buildStep?.ready || buildStep?.done),
-        reason: reason || buildStep?.reason || '',
+        // The engine's own prerequisite (for example "confirm the medicine list first") is the real reason a Build
+        // button is grey. Report currency explains the sign-off block, so it only fills in when the engine gave no reason.
+        reason: (!buildStep?.ready && !buildStep?.done && buildStep?.reason) || reason || buildStep?.reason || '',
       },
       canSign: canBuild && current,
       signReason: canBuild ? reason : 'This report is not awaiting sign-off.',
