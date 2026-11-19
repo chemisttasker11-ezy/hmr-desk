@@ -126,7 +126,7 @@ class RealParserTests(unittest.TestCase):
         original_base = db.BASE
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            shutil.copytree(Path(original_base) / 'scripts' / 'intake', root / 'scripts' / 'intake')
+            shutil.copytree(Path(__file__).resolve().parents[2] / 'scripts' / 'intake', root / 'scripts' / 'intake')  # the repository's own parser; db.BASE can be left pointing at a temp folder by an earlier test
             db.BASE = tmp
             conn = db.connect(str(root / 'test.db'))
             try:
