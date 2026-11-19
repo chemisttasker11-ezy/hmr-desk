@@ -17,7 +17,7 @@ def _display_date(value):
 
 # Pathology provenance text (verified-by, sample date, source) is sentence-length; equal-width
 # autofit squeezed it into one-word lines. Fixed widths give the notes column room to read.
-_PATHOLOGY_WIDTHS_CM = (2.0, 3.0, 3.0, 2.2, 4.4)  # sums to the 14.6cm usable width (A4, 1800 twip side margins)
+_PATHOLOGY_WIDTHS_CM = (1.8, 3.0, 3.0, 2.6, 4.2)  # sums to the 14.6cm usable width (A4, 1800 twip side margins)
 
 
 def _fixed_layout(table, widths_cm):
@@ -29,8 +29,8 @@ def _fixed_layout(table, widths_cm):
         col.set(qn('w:w'), str(Cm(width).twips))
 
 # Style conventions taken from the pharmacist's recent completed reports (host comparison, non-identifying):
-# A4, Aptos throughout at 10 to 18 pt, margins 1400 top / 1440 bottom / 1800 sides (twips), a compact black
-# title and date box, boxed profile blocks, navy table headers and light-blue plan and feedback blocks.
+# A4, Aptos throughout at 10 to 18 pt, margins 1400 top / 1440 bottom / 1800 sides (twips), a plain black title
+# with a small bordered date box, boxed profile blocks, navy table headers and light-blue plan and feedback blocks.
 # Exact navy and blue values are not confirmed from the reference. The output stays labelled provisional.
 FONT = "Aptos"
 NAVY = "1F3864"
@@ -91,17 +91,29 @@ def _box(paragraph, fill=None, edge="808080", left_only=False, size=6):
         _shade(ppr, fill)
 
 
-def _banner(doc, text, size, fill=BLACK):
+def _title(doc, text, size):
+    """Black text on the white page, as in the reference. No fill."""
     paragraph = doc.add_paragraph()
     run = paragraph.add_run(text)
     run.bold = True
     run.font.size = Pt(size)
-    run.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
+    run.font.color.rgb = RGBColor(0, 0, 0)
     _fonts(run._r.get_or_add_rPr())
-    ppr = paragraph._p.get_or_add_pPr()
-    _shade(ppr, fill)
-    paragraph.paragraph_format.space_after = Pt(0)
+    paragraph.paragraph_format.space_after = Pt(4)
     paragraph.paragraph_format.keep_with_next = True
+    return paragraph
+
+
+def _date_box(doc, text):
+    """Small bordered box with black text. Not full width."""
+    paragraph = doc.add_paragraph()
+    run = paragraph.add_run(text)
+    run.bold = True
+    run.font.size = Pt(10)
+    _fonts(run._r.get_or_add_rPr())
+    _box(paragraph, edge=BLACK, size=8)
+    paragraph.paragraph_format.right_indent = Cm(6.5)
+    paragraph.paragraph_format.space_after = Pt(4)
     return paragraph
 
 
@@ -149,8 +161,8 @@ def render(data, target):
     header_run.bold = True
     header_run.font.size = Pt(9)
     _fonts(header_run._r.get_or_add_rPr())
-    _banner(doc, "Home Medicines Review", 18)
-    _banner(doc, "Assessment: " + _display_date(data["assess_date"]) + "    Report: " + _display_date(data["report_date"]), 10)
+    _title(doc, "Home Medicines Review", 18)
+    _date_box(doc, "Assessment: " + _display_date(data["assess_date"]) + "    Report: " + _display_date(data["report_date"]))
     marker = doc.add_paragraph()
     marker_run = marker.add_run(PROVISIONAL_LABEL)
     marker_run.bold = True

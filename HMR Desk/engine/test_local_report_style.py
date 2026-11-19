@@ -4,7 +4,7 @@ The conventions come from the pharmacist's recent completed reports as compared 
 blue values are not confirmed, and this renderer stays labelled provisional. These tests pin structure, not taste."""
 from docx import Document
 from docx.oxml.ns import qn
-from docx.shared import Cm, Twips
+from docx.shared import Cm, RGBColor, Twips
 
 import local_report_builder as builder
 
@@ -28,6 +28,12 @@ def shading(element):
     return {s.get(qn('w:fill')) for s in element.iter(qn('w:shd'))}
 
 
+def test_provisional_marker_survives(tmp_path):
+    doc = render(tmp_path)
+    assert builder.PROVISIONAL_LABEL in "\n".join(p.text for p in doc.paragraphs)
+    assert builder.PROVISIONAL_LABEL in doc.sections[0].header.paragraphs[0].text
+
+
 def test_page_is_a4_with_reference_margins(tmp_path):
     section = render(tmp_path).sections[0]
     assert abs(section.page_width - Cm(21.0)) < 1000 and abs(section.page_height - Cm(29.7)) < 1000
@@ -44,13 +50,14 @@ def test_fonts_are_explicit_aptos_with_no_theme_override(tmp_path):
     assert doc.styles["Normal"].font.size.pt == 10.5
 
 
-def test_title_and_date_are_one_black_box_and_provisional_marker_survives(tmp_path):
+def test_title_is_black_text_on_white_with_a_small_bordered_date_box(tmp_path):
     doc = render(tmp_path)
     paragraphs = doc.paragraphs
-    assert paragraphs[0].text == "Home Medicines Review" and shading(paragraphs[0]._p) == {"000000"}
-    assert paragraphs[1].text == "Assessment: 17/11/2026    Report: 17/11/2026" and shading(paragraphs[1]._p) == {"000000"}
-    assert builder.PROVISIONAL_LABEL in "\n".join(p.text for p in paragraphs)
-    assert builder.PROVISIONAL_LABEL in doc.sections[0].header.paragraphs[0].text
+    assert paragraphs[0].text == "Home Medicines Review" and not shading(paragraphs[0]._p)
+    assert paragraphs[0].runs[0].font.color.rgb == RGBColor(0, 0, 0)
+    assert paragraphs[1].text == "Assessment: 17/11/2026    Report: 17/11/2026" and not shading(paragraphs[1]._p)
+    assert paragraphs[1]._p.pPr.find(qn('w:pBdr')) is not None
+    assert paragraphs[1].paragraph_format.right_indent > 0
 
 
 def test_data_tables_have_navy_repeating_header_rows(tmp_path):
