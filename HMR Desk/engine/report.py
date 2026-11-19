@@ -1,4 +1,5 @@
 """Local report editor data and reusable finding search."""
+import copy
 import datetime as dt
 import hashlib
 import json
@@ -135,13 +136,23 @@ def _bind_template_reviews(conn, patient, data, old):
     client saw the current patient context (template_review_for). Editing never creates a review, and a review is
     dropped when the wording changes. Review state in the payload is never trusted: only the previous saved state is."""
     issues = data.get('issues', [])
-    if not any(isinstance(i, dict) and ('suggestion_source' in i or 'template_review' in i or 'template_reviewed' in i) for i in issues): return data
     previous = old.get('issues', []) if isinstance(old, dict) else []
+    if not any(isinstance(i, dict) and ('suggestion_source' in i or 'template_review' in i or 'template_reviewed' in i) for i in list(issues) + list(previous)): return data
     current = None
     result = []
+    imported = {}
+    for before in previous:
+        if isinstance(before, dict) and 'suggestion_source' in before:
+            imported.setdefault(tuple(str(before.get(k, '')).strip() for k in ('title', 'rec', 'rationale')), before['suggestion_source'])
     for index, issue in enumerate(issues):
         clean = {k: v for k, v in issue.items() if k not in ('template_review', 'template_reviewed', 'template_review_for')}
         if 'suggestion_source' not in issue:
+            # A save that drops the provenance of wording that is still exactly an imported template does not make it a
+            # manual finding: the source is restored and the review starts again. Rewritten wording is the pharmacist's own.
+            restored = imported.get(tuple(str(issue.get(k, '')).strip() for k in ('title', 'rec', 'rationale')))
+            if restored is not None:
+                result.append({**clean, 'suggestion_source': copy.deepcopy(restored)})
+                continue
             result.append(clean)  # a manual finding carries no review state
             continue
         before = previous[index] if index < len(previous) and isinstance(previous[index], dict) else {}

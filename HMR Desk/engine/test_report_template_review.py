@@ -172,3 +172,47 @@ def test_review_fields_are_validated_and_manual_findings_cannot_carry_review_sta
         stored = records.get_json(conn, patient['id'], 'report_spec.json')
         assert not {'template_review', 'template_reviewed'} & set(stored['issues'][0])
         assert _pending(conn, patient) == []
+
+
+def test_ordinary_round_trip_keeps_review_and_reordering_or_deleting_above_lapses_it(tmp_path, monkeypatch):
+    connection = _setup(tmp_path, monkeypatch)
+    with connection() as conn:
+        patient, _ = _saved_report(conn)
+        manual = {'title': 'Manual', 'rec': 'Manual rec', 'rationale': 'Manual why'}
+        _spec(conn, patient, _imported(), manual)
+        _tick(conn, patient)
+        assert _pending(conn, patient) == []
+        for _ in range(2):  # what the editor does: save what it loaded, unchanged, repeatedly
+            report.save(conn, patient, report.load(conn, patient))
+            assert _pending(conn, patient) == []
+        swapped = report.load(conn, patient)
+        swapped['issues'] = [swapped['issues'][1], swapped['issues'][0]]
+        report.save(conn, patient, swapped)  # the reviewed finding moved from position 1 to 2
+        assert _pending(conn, patient) == [2]
+        again = report.load(conn, patient)  # the move itself is saved now, so a fresh deliberate tick on the new position counts
+        again['issues'][1]['template_reviewed'] = True
+        again['issues'][1]['template_review_for'] = again['suggestion_context_sha256']
+        report.save(conn, patient, again)
+        assert _pending(conn, patient) == []
+        dropped = report.load(conn, patient)
+        dropped['issues'] = dropped['issues'][1:]
+        report.save(conn, patient, dropped)  # deleting a finding above moves it; it needs its tick again
+        assert _pending(conn, patient) == [1]
+
+
+def test_dropping_the_provenance_of_unchanged_template_wording_does_not_remove_the_gate(tmp_path, monkeypatch):
+    connection = _setup(tmp_path, monkeypatch)
+    with connection() as conn:
+        patient, _ = _saved_report(conn)
+        _spec(conn, patient, _imported())
+        _tick(conn, patient)
+        stripped = report.load(conn, patient)
+        stripped['issues'] = [{k: v for k, v in stripped['issues'][0].items() if k not in ('suggestion_source', 'template_review', 'template_reviewed')}]
+        report.save(conn, patient, stripped)
+        stored = records.get_json(conn, patient['id'], 'report_spec.json')
+        assert stored['issues'][0]['suggestion_source'] == SOURCE and 'template_review' not in stored['issues'][0]
+        assert _pending(conn, patient) == [1]
+        rewritten = report.load(conn, patient)
+        rewritten['issues'] = [{'title': 'Own title', 'rec': 'Own recommendation', 'rationale': 'Own rationale'}]
+        report.save(conn, patient, rewritten)  # pharmacist-authored wording is a manual finding
+        assert _pending(conn, patient) == []
