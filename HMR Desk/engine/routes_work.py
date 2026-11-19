@@ -8,6 +8,7 @@ import re
 from contextlib import nullcontext
 from pathlib import Path
 
+import app_paths
 import db
 import jobs
 import settings
@@ -20,7 +21,7 @@ def fill_referral_fields(conn, patient):
         import interview
         text, _ = interview.referral_text(jobs.patient_folder(patient))
         if text is None: return patient
-        spec = importlib.util.spec_from_file_location('hmr_intake', Path(db.BASE) / 'scripts' / 'intake' / 'intake.py')
+        spec = importlib.util.spec_from_file_location('hmr_intake', app_paths.resource_root() / 'scripts' / 'intake' / 'intake.py')
         module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
         fields, _ = module.extract_fields(text)
         values = {k: fields[k] for k in ('dob', 'sex', 'medicare', 'irn', 'clinic') if not patient[k] and fields.get(k)}
