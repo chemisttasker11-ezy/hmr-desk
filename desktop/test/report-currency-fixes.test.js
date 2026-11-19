@@ -17,6 +17,7 @@ test('Today card never says plain Sign off, it names the report check', () => {
   const html = nextButton({ id: 4, next_step: 'sign off' });
   assert.match(html, /Check report, then sign off/);
   assert.match(html, /data-step="sign off"/);
+  assert.equal(H.stepLabel('sign off'), 'Check report, then sign off');
   assert.doesNotMatch(nextButton({ id: 5, next_step: 'build report' }), /Check report/);
 });
 
@@ -35,4 +36,9 @@ test('Reports list limits concurrent patient loads and keeps order and failures'
   assert.equal(res[6].value, 14);
   assert.equal(res[3].reason.message, 'boom');
   assert.equal((await settledPool([], 3, async () => 1)).length, 0);
+});
+
+test('Today attention row detail for a sign-off item names the report check', () => {
+  assert.match(H.attentionDetail({ detail: 'sign off' }, 'reports'), /Check report, then sign off/);
+  assert.equal(H.attentionDetail({ detail: 'Phone gateway offline' }, 'stuck'), 'Phone gateway offline');
 });

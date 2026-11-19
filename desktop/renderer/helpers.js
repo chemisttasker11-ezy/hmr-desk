@@ -105,7 +105,8 @@ const H = (() => {
     claim: 'Claim',
     register_xlsx: 'Export register',
   };
-  const plainSteps = { 'confirm medicines': 'Check medicines for interaction check' };
+  // Today rows and buttons do not load report currency, so plain 'sign off' would imply the report is current.
+  const plainSteps = { 'confirm medicines': 'Check medicines for interaction check', 'sign off': 'Check report, then sign off' };
   function sectionOf(page) {
     return ({ messages: 'book', intake: 'book', to_book: 'book', calendar: 'visit', interview: 'visit',
       reports: 'report', report_editor: 'report', followup_editor: 'followup', run: 'activity' })[page] || page;
@@ -761,7 +762,7 @@ const H = (() => {
       const days = Number(item.days_left);
       if (Number.isFinite(days)) parts.push(days < 0 ? `Expired ${-days} days ago` : `${days} days left`);
     }
-    if (!parts.filter(Boolean).length) parts.push(item.detail);
+    if (!parts.filter(Boolean).length) parts.push(String(item.detail || '').toLowerCase() === 'sign off' ? stepLabel('sign off') : item.detail);
     return parts.filter(Boolean).map(esc).join(' &middot; ');
   }
   function medicineItemId() { return globalThis.crypto.randomUUID().replaceAll('-', ''); }
