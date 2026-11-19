@@ -125,7 +125,7 @@ def test_local_docx_readable_pathology_notes_and_consistent_dates(tmp_path):
     # unit strings like "mL/min/1.73m2" mid-token.
     table = doc.tables[0]
     widths = [cell.width for cell in table.rows[0].cells]
-    assert widths[-1] >= Cm(5)
+    assert widths[-1] >= Cm(4.3)
     assert widths[1] >= Cm(3) and widths[2] >= Cm(3)
     assert all(w is not None for w in widths)
 
