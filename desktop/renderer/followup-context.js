@@ -8,7 +8,7 @@ function followupMedicineContextMarkup(context) {
   const rows = context.medicines || [];
   return heading + warning + (rows.length ? '<div class="interview-table"><table><thead><tr><th>Medicine / origin</th><th>Directions on referral</th><th>At interview</th><th>Medicine use at interview</th><th>Recorded reference</th></tr></thead><tbody>' + rows.map(row => {
     const ref = row.reference;
-    const reference = ref ? `${ref.display} (${String(ref.source).toUpperCase()} ${ref.code}, release ${ref.release})` : 'No reference linked';
+    const reference = ref ? `${ref.display} (${ref.source === 'pbs' ? 'PBS' : String(ref.source).toUpperCase() + ' ' + ref.code}, release ${ref.release})` : 'No reference linked';
     return `<tr><td>${esc(row.name)}<br><small>${esc(row.origin)}</small></td><td>${esc(row.listed_directions || 'Not recorded')}</td><td>${esc(row.interview_directions || 'Not recorded')}</td><td>${esc(row.use)}</td><td>${esc(reference)}</td></tr>`;
   }).join('') + '</tbody></table></div>' : '<p>No medicine rows were recorded in the saved interview. Confirm the current list separately.</p>') + '</section>';
 }
