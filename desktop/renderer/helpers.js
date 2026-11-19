@@ -205,6 +205,22 @@ const H = (() => {
       : currency?.status === 'not_generated'
         ? 'No current generated report. Build Word and PDF before sign-off.'
         : 'Report currency could not be verified. Reload before sign-off.';
+    const required = {
+      consent_recorded: 'Record patient consent in the interview',
+      medicines_reconciled: 'Acknowledge the current medicine reconciliation in the interview',
+      demographics_match: 'Resolve patient, GP and date differences in the report',
+    };
+    const items = currency?.readiness?.items;
+    // Display-only checks are advisory, not backend approval. Unknown or omitted evidence cannot
+    // make the UI suggest that authorisation is ready; the API remains the final authority.
+    const missing = Object.entries(required).filter(([key]) =>
+      !Array.isArray(items) || !items.some(item => item?.key === key && item.state === 'met'));
+    const signPrereqReason = missing.length
+      ? 'Complete recorded checks before sign-off: ' + missing.map(([key, label]) => {
+          const item = Array.isArray(items) ? items.find(row => row?.key === key) : null;
+          return label + (item?.state === 'unknown' || !item ? ' (unverified)' : '');
+        }).join('; ') + '.'
+      : '';
     return {
       build: {
         ...(buildStep || {}),
@@ -216,8 +232,8 @@ const H = (() => {
         // button is grey. Report currency explains the sign-off block, so it only fills in when the engine gave no reason.
         reason: (!buildStep?.ready && !buildStep?.done && buildStep?.reason) || reason || buildStep?.reason || '',
       },
-      canSign: canBuild && current,
-      signReason: canBuild ? reason : 'This report is not awaiting sign-off.',
+      canSign: canBuild && current && missing.length === 0,
+      signReason: !canBuild ? 'This report is not awaiting sign-off.' : reason || signPrereqReason,
     };
   }
   // The report editor greys both Build buttons when there are no findings. Say so beside them: a disabled button with no reason

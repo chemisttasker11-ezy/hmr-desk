@@ -5,7 +5,12 @@ const vm = require('node:vm');
 const H = require('../renderer/helpers.js');
 
 const historical = { name: 'report_build', done: true, ready: false, reason: 'already done' };
-const currency = (status, reasons = []) => ({ status, reasons, signed_off: false, readiness: { items: [] } });
+const readiness = (overrides = {}) => ({
+  items: ['consent_recorded', 'medicines_reconciled', 'demographics_match']
+    .map(key => ({ key, state: overrides[key] || 'met' })),
+});
+const currency = (status, reasons = [], checks = readiness()) =>
+  ({ status, reasons, signed_off: false, readiness: checks });
 
 test('a historical built flag is not a current report after clinical changes', () => {
   const stale = H.reportWorkflowStatus('report_drafted', historical, currency('outdated', ['interview_changed']));
@@ -28,6 +33,27 @@ test('only verified current reports can surface sign-off as available', () => {
     assert.ok(result.signReason);
   }
   assert.equal(H.reportWorkflowStatus('signed_off', historical, currency('current')).canSign, false);
+});
+
+test('current report with incomplete recorded clinical checks remains blocked without requiring rebuild', () => {
+  const checks = [
+    ['consent_recorded', 'not_met', /Record patient consent/],
+    ['medicines_reconciled', 'not_met', /Acknowledge the current medicine reconciliation/],
+    ['demographics_match', 'not_met', /Resolve patient, GP and date differences/],
+    ['medicines_reconciled', 'unknown', /unverified/],
+  ];
+  for (const [key, state, message] of checks) {
+    const result = H.reportWorkflowStatus('report_drafted', historical, currency('current', [], readiness({ [key]: state })));
+    assert.equal(result.build.done, true);
+    assert.equal(result.canSign, false, key + ' should block the displayed sign-off action');
+    assert.match(result.signReason, message);
+    assert.doesNotMatch(result.signReason, /Rebuild/);
+  }
+  const missing = H.reportWorkflowStatus('report_drafted', historical, {
+    status: 'current', readiness: { items: [{ key: 'consent_recorded', state: 'met' }] },
+  });
+  assert.equal(missing.canSign, false, 'missing evidence must fail closed');
+  assert.match(missing.signReason, /unverified/);
 });
 
 function reportCard(status) {
@@ -58,6 +84,14 @@ test('reports list fails closed when freshness cannot be fetched', () => {
   assert.match(html, /Report currency could not be verified/);
   assert.match(html, /data-sign-off="7" disabled/);
   assert.doesNotMatch(html, /Build Word &#10003; Done/);
+});
+
+test('reports list shows incomplete reviews rather than telling pharmacist to rebuild a current report', () => {
+  const html = reportCard(currency('current', [], readiness({ consent_recorded: 'not_met' })));
+  assert.match(html, /data-sign-off="7" disabled/);
+  assert.match(html, /Record patient consent/);
+  assert.doesNotMatch(html, /<strong>Next action<\/strong><div><button[^>]+data-build="build"/);
+  assert.match(html, /Build Word &#10003; Done/);
 });
 
 test('reports list enables sign-off only for a verified current build', () => {
@@ -102,6 +136,13 @@ test('patient overview directs a stale report to rebuild, not sign-off', async (
   assert.match(html, /data-report-open="7" data-build="build"/);
   assert.match(html, /data-sign-off="7" disabled/);
   assert.doesNotMatch(html, /Build report<\/span><span class="step-state is-done">Done/);
+});
+
+test('patient overview blocks sign-off but keeps a current report built while consent is missing', async () => {
+  const html = await patientOverview(currency('current', [], readiness({ consent_recorded: 'not_met' })));
+  assert.match(html, /data-sign-off="7" disabled/);
+  assert.match(html, /Record patient consent/);
+  assert.match(html, /Build report<\/span><span class="step-state is-done">Done/);
 });
 
 test('patient overview allows reviewable sign-off UI for verified current build', async () => {

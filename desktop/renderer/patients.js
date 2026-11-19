@@ -238,7 +238,7 @@ async function showPatient(id, action, background = false) {
   const listPatient = typeof patients !== 'undefined' ? patients.find(item => String(item.id) === String(p.id)) : null;
   const proposedNext = String(p.next_step || listPatient?.next_step || p.stage_step || '').toLowerCase().replaceAll('_', ' ');
   const followupNext = p.followups?.next_action;
-  const next = proposedNext === 'sign off' && !reportWorkflow.canSign && ['visited', 'report_drafted'].includes(p.state)
+  const next = proposedNext === 'sign off' && reportCurrency?.status !== 'current' && !reportWorkflow.canSign && ['visited', 'report_drafted'].includes(p.state)
     ? 'build report' : proposedNext;
   const aliases = {
     'collect pathology': 'pathology',
