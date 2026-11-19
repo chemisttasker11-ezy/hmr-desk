@@ -133,8 +133,7 @@ def extract_fields(text):
         match = re.fullmatch(r'(?:(Mr|Mrs|Ms|Miss|Master|Dr)\.?\s+)?([A-Za-z][A-Za-z\' -]*\s+[A-Za-z][A-Za-z\' -]*)', value, re.I)
         if match and not re.search(r'\b(?:pharmacy|pharmacist|Consultant Pharmacist|your practice)\b', match.group(2), re.I):
             add('name', person_case(match.group(2).strip()))
-            title = (match.group(1) or '').lower()
-            add('sex', 'M' if title == 'mr' else 'F' if title in ('mrs', 'ms', 'miss') else None)
+            # The title is not evidence of sex, so sex is left blank for the pharmacist to enter from a source.
     for value in labelled(patient, r'D?\.?O\.?B\.?|date of birth|birth date'):
         match = re.search(DATE, value)
         if match:

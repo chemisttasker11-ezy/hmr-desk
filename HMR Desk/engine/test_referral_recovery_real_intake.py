@@ -30,5 +30,5 @@ def conn(tmp_path, monkeypatch):
 def test_demographics_recovered_from_referral_without_scripts_in_workspace(conn):
     assert not (db.BASE and (__import__('pathlib').Path(db.BASE) / 'scripts').exists())
     patient = routes_work.fill_referral_fields(conn, conn.execute('SELECT * FROM patients WHERE id=1').fetchone())
-    assert patient['dob'] == '01/02/1950' and patient['sex'] == 'F' and patient['medicare'] == '2123456701'
+    assert patient['dob'] == '01/02/1950' and not patient['sex'] and patient['medicare'] == '2123456701'
     assert conn.execute("SELECT count(*) FROM events WHERE patient_id=1 AND type='referral_fields'").fetchone()[0] == 1
