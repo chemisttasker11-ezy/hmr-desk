@@ -95,6 +95,17 @@ MEDS_GRID = (2520, 1800, 2700, 3145)  # 4 columns, host map table 5 of the newes
 OTC_GRID = (4140, 2070, 3870)  # 3 columns, host map tables 6 and 7
 CEASED_GRID = (4140, 2070, 3870)
 RESULTS_GRID = (1885, 1105, 1870, 1620, 3820)
+_RESULTS_SOURCE_FLOOR = 2400  # twips, keeps the provenance column at least 4.1cm
+
+
+def _results_grid(rows):
+    """Reference grid, widened in the Result column only when a result token would split mid-word.
+
+    The extra width comes out of the provenance column; the total stays equal. Values are never altered."""
+    longest = max((len(tok) for row in rows for tok in str(row[1]).split()), default=0)
+    want = longest * 110 + 276
+    extra = max(0, min(want - RESULTS_GRID[1], RESULTS_GRID[4] - _RESULTS_SOURCE_FLOOR))
+    return (RESULTS_GRID[0], RESULTS_GRID[1] + extra, RESULTS_GRID[2], RESULTS_GRID[3], RESULTS_GRID[4] - extra)
 PLAN_WIDTH = 10138
 
 
@@ -343,7 +354,7 @@ def render(data, target):
             for cell, value in zip(table.add_row().cells, values):
                 _cell_text(cell, value, 9)
         _header_row(table, None)
-        _fixed_layout(table, RESULTS_GRID)
+        _fixed_layout(table, _results_grid(data["path"]))
     if data["followup"].strip():
         _heading(doc, "Follow-up", BLACK)
         _plan_block(doc, (("Follow-up: ", data["followup"]),))
