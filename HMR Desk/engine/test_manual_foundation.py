@@ -118,8 +118,9 @@ def test_local_docx_readable_pathology_notes_and_consistent_dates(tmp_path):
     doc = Document(target)
     text = "\n".join([p.text for p in doc.paragraphs] + [c.text for c in doc.tables[0]._cells])
     # Both dates display in the same DD/MM/YYYY format; the stored values are not rewritten.
-    assert "Assessment date: 17/11/2026    Report date: 17/11/2026" in text
-    assert "2026-11-17    Report" not in text
+    title = doc.tables[0]
+    assert (title.cell(0, 2).text, title.cell(1, 2).text) == ("17/11/2026", "17/11/2026")
+    assert "2026-11-17" not in text
     assert local_report_builder._display_date("not a date") == "not a date"
     # Provenance and value columns are wide enough to wrap readably without splitting
     # unit strings like "mL/min/1.73m2" mid-token.

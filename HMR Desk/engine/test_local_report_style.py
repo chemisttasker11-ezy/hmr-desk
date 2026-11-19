@@ -65,7 +65,8 @@ def test_title_table_is_white_with_black_text_and_single_half_point_borders(tmp_
     table = doc.tables[0]
     assert not fills(table._tbl)
     assert table.cell(0, 0).text == "Home Medication Review"
-    assert table.cell(0, 1).text == "Assessment date: 17/11/2026    Report date: 17/11/2026"
+    assert [table.cell(0, 1).text, table.cell(0, 2).text] == ["Assessment date:", "17/11/2026"]
+    assert [table.cell(1, 1).text, table.cell(1, 2).text] == ["Report date:", "17/11/2026"]
     for t in doc.tables[:3]:
         for side in t._tbl.tblPr.find(qn('w:tblBorders')):
             assert side.get(qn('w:val')) == 'single' and side.get(qn('w:sz')) == '4' and side.get(qn('w:color')) == '000000'
@@ -131,3 +132,35 @@ def test_signoff_states_missing_pharmacist_data(tmp_path):
 def test_footer_table_has_page_field(tmp_path):
     footer = render(tmp_path).sections[0].footer
     assert footer.tables and 'PAGE' in footer.tables[0]._tbl.xml
+
+
+def grid(table):
+    return tuple(int(c.get(qn('w:w'))) for c in table._tbl.tblGrid.findall(qn('w:gridCol')))
+
+
+def test_column_grids_match_the_reference_twips(tmp_path):
+    doc = render(tmp_path)
+    t = doc.tables
+    assert grid(t[0]) == (6487, 1985, 1701) and grid(t[1]) == (2965, 4299, 2909)
+    assert grid(t[2]) == (2155, 1045, 3330, 3235)
+    assert grid(t[3]) == (3690, 1313, 5167) and grid(t[4]) == (3690, 2970, 3420)
+    assert grid(t[6]) == (10138,)
+
+
+def test_sizes_title_headings_and_normal(tmp_path):
+    doc = render(tmp_path)
+    assert doc.styles["Normal"].font.size.pt == 12
+    assert doc.styles["Heading 1"].font.size.pt == 16 and doc.styles["Heading 1"].font.bold
+    title = doc.tables[0].cell(0, 0).paragraphs[0]
+    assert title.style.name == "Heading 1" and title.runs[0].font.size.pt == 16
+    for p in doc.paragraphs:
+        if p.style.name == "Heading 2":
+            assert p.runs[0].font.size.pt == 12 and p.runs[0].bold
+
+
+def test_table_header_text_is_black_on_17365d_as_in_the_reference(tmp_path):
+    # Reference truth: header text inherits black on navy. Reproduced as specified, readability is flagged separately.
+    for table in render(tmp_path).tables[2:5]:
+        for cell in table.rows[0].cells:
+            run = cell.paragraphs[0].runs[0]
+            assert run.bold and run.font.size.pt == 9 and str(run.font.color.rgb) == "000000"

@@ -21,17 +21,22 @@ _PATHOLOGY_WIDTHS_CM = (1.9, 3.3, 3.5, 3.9, 4.9)  # sums to the 17.5cm usable wi
 _TEXT_WIDTH_CM = 17.5
 
 
+def _tw(width):
+    """Column width: ints are twips (reference grids), floats are cm."""
+    return width if isinstance(width, int) else Cm(width).twips
+
+
 def _fixed_layout(table, widths_cm):
     layout = OxmlElement('w:tblLayout')
     layout.set(qn('w:type'), 'fixed')
     table._tbl.tblPr.append(layout)
     # Word and LibreOffice size fixed-layout columns from the grid, so set it alongside cell widths.
     for col, width in zip(table._tbl.tblGrid.findall(qn('w:gridCol')), widths_cm):
-        col.set(qn('w:w'), str(Cm(width).twips))
+        col.set(qn('w:w'), str(_tw(width)))
     table.autofit = False
     for row in table.rows:
         for cell, width in zip(row.cells, widths_cm):
-            cell.width = Cm(width)
+            cell.width = Twips(_tw(width))
 
 # Style conventions from the host's corroborated spec of the pharmacist's latest pair of reports (non-identifying):
 # A4; margins top 1985 / right 991 / bottom 1843 / left 993 twips; header 788 / footer 785; Montserrat runs, 9 pt bold
@@ -50,7 +55,15 @@ HEAD_GREEN = "00B050"
 HEAD_RED = "C00000"
 LEAD_ORANGE = "E97132"
 BLACK = "000000"
-BODY_PT = 10
+BODY_PT = 12  # Normal paragraph style per spec
+PLAN_PT = 10
+# Reference column grids (twips) from the host spec; contents of the reference cells are only partly known.
+TITLE_GRID = (6487, 1985, 1701)
+DETAILS_GRID = (2965, 4299, 2909)
+MEDS_GRID = (2155, 1045, 3330, 3235)
+OTC_GRID = (3690, 1313, 5167)
+CEASED_GRID = (3690, 2970, 3420)
+PLAN_WIDTH = 10138
 
 
 def _fonts(style_or_run_element, name=FONT):
@@ -123,14 +136,19 @@ def _cell_text(cell, text, size=BODY_PT, bold=False, color=None):
     _run(paragraph, text, size, bold, color)
 
 
-def _title_table(doc, date_text):
-    """White, unfilled title table: black title and date text, single black borders."""
-    table = doc.add_table(rows=1, cols=2)
+def _title_table(doc, assess, report):
+    """Unfilled 3-column, 2-row title table, black text. Title in Heading 1 (16 pt bold black)."""
+    table = doc.add_table(rows=2, cols=3)
     table.style = "Table Grid"
     _borders(table)
-    _cell_text(table.cell(0, 0), "Home Medication Review", 18, True, BLACK)
-    _cell_text(table.cell(0, 1), date_text, 9, True, BLACK)
-    _fixed_layout(table, (11.0, 6.5))
+    title = table.cell(0, 0)
+    title.paragraphs[0].style = doc.styles["Heading 1"]
+    _run(title.paragraphs[0], "Home Medication Review", 16, True, BLACK)
+    _cell_text(table.cell(0, 1), "Assessment date:", 9, True)
+    _cell_text(table.cell(0, 2), assess, 9)
+    _cell_text(table.cell(1, 1), "Report date:", 9, True)
+    _cell_text(table.cell(1, 2), report, 9)
+    _fixed_layout(table, TITLE_GRID)
     return table
 
 
@@ -144,13 +162,13 @@ def _details_table(doc, patient, doctor):
         _cell_text(cell, label, 9, True)
     for cell, value in zip(table.rows[1].cells, (patient, doctor, "Not supplied in the report data")):
         _cell_text(cell, value, 9)
-    _fixed_layout(table, (6.0, 6.0, 5.5))
+    _fixed_layout(table, DETAILS_GRID)
     return table
 
 
 def _heading(doc, text, color):
     paragraph = doc.add_paragraph(style="Heading 2")
-    _run(paragraph, text, 14, True, color)
+    _run(paragraph, text, 12, True, color)
     paragraph.paragraph_format.keep_with_next = True
     return paragraph
 
@@ -165,7 +183,7 @@ def _header_row(table):
             for run in paragraph.runs:
                 run.bold = True
                 run.font.size = Pt(9)
-                run.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
+                run.font.color.rgb = RGBColor(0, 0, 0)  # spec: black on 17365D (readability concern flagged, not redesigned)
     for row in table.rows:
         row._tr.get_or_add_trPr().append(OxmlElement('w:cantSplit'))
 
@@ -179,10 +197,10 @@ def _plan_block(doc, rows):
         _shade(cell._tc.get_or_add_tcPr(), BLUE_FILL)
         paragraph = cell.paragraphs[0]
         paragraph.paragraph_format.space_after = Pt(3)
-        _run(paragraph, label, 10, True, BLACK)
+        _run(paragraph, label, PLAN_PT, True, BLACK)
         if text:
-            _run(paragraph, text, BODY_PT)
-    _fixed_layout(table, (_TEXT_WIDTH_CM,))
+            _run(paragraph, text, PLAN_PT)
+    _fixed_layout(table, (PLAN_WIDTH,))
     doc.add_paragraph().paragraph_format.space_after = Pt(2)
     return table
 
@@ -225,7 +243,8 @@ def render(data, target):
     sec.footer_distance = Twips(785)
     styles = doc.styles
     _style(styles, "Normal", BODY_PT)
-    _style(styles, "Heading 2", 14, bold=True, color=HEAD_BLUE, space_before=10, space_after=4)
+    _style(styles, "Heading 1", 16, bold=True, color=BLACK, space_before=0, space_after=2)
+    _style(styles, "Heading 2", 12, bold=True, color=HEAD_BLUE, space_before=10, space_after=4)
     _style(styles, "Header", 9)
     _style(styles, "Footer", 9)
     # Table-based header and footer. The marker repeats on every printed page, again in bold under the title.
@@ -239,7 +258,7 @@ def render(data, target):
     _cell_text(ftable.cell(0, 0), PROVISIONAL_LABEL, 9, True)
     ftable.cell(0, 1).paragraphs[0].add_run("Page ")
     _page_field(ftable.cell(0, 1).paragraphs[0])
-    _title_table(doc, "Assessment date: " + _display_date(data["assess_date"]) + "    Report date: " + _display_date(data["report_date"]))
+    _title_table(doc, _display_date(data["assess_date"]), _display_date(data["report_date"]))
     marker = doc.add_paragraph()
     _run(marker, PROVISIONAL_LABEL, 9, True)
     marker.paragraph_format.space_before = Pt(6)
@@ -273,18 +292,18 @@ def render(data, target):
             for cell, value in zip(table.add_row().cells, values):
                 _cell_text(cell, value, 9)
         _header_row(table)
-        widths = _PATHOLOGY_WIDTHS_CM if key == "path" else tuple(_TEXT_WIDTH_CM / len(labels) for _ in labels)
+        widths = {"meds": MEDS_GRID, "otc": OTC_GRID, "ceased": CEASED_GRID}.get(key, _PATHOLOGY_WIDTHS_CM)
         _fixed_layout(table, widths)
     _heading(doc, "Review Findings", HEAD_BLUE)
     for index, finding in enumerate(data["issues"], 1):
         lead = doc.add_paragraph()
-        _run(lead, str(index) + ". " + finding["title"], 10, True, LEAD_ORANGE)
+        _run(lead, str(index) + ". " + finding["title"], PLAN_PT, True, LEAD_ORANGE)
         lead.paragraph_format.keep_with_next = True
         _plan_block(doc, (("Plan/Feedback", ""), ("Recommendation: ", finding["rec"]), ("Rationale: ", finding["rationale"])))
     if data["followup"].strip():
         _heading(doc, "Follow-up", BLACK)
         _plan_block(doc, (("Follow-up: ", data["followup"]),))
-    _run(doc.add_paragraph(), "Yours Sincerely,", 10)
+    _run(doc.add_paragraph(), "Yours Sincerely,", BODY_PT)
     signoff = doc.add_paragraph()
     _run(signoff, "Pharmacist name, credentials, phone and email: not supplied in the report data (provisional).", 9, True)
     doc.save(target)
