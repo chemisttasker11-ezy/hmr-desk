@@ -241,6 +241,26 @@ def _wipe_and_remove(path):
 _MIGRATION_LOCK_STALE = 600
 
 
+_LOCK_DENIED_TRIES = 20
+_LOCK_DENIED_PAUSE = 0.025
+
+
+def _create_lock_file(path):
+    """Create a lock file exclusively (FileExistsError when it is held).
+
+    On Windows, creating a file another request is deleting fails briefly with PermissionError (delete pending), not
+    FileExistsError. Retry that case a bounded number of times (about half a second); a lasting denial is a real
+    permission problem and is raised unchanged. Never treats a denial as having acquired the lock."""
+    for attempt in range(_LOCK_DENIED_TRIES):
+        try:
+            os.close(os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+            return
+        except PermissionError:
+            if attempt == _LOCK_DENIED_TRIES - 1:
+                raise
+            time.sleep(_LOCK_DENIED_PAUSE)
+
+
 class _migration_lock:
     def __init__(self, path):
         self.path = path + '.migrating'
@@ -249,11 +269,9 @@ class _migration_lock:
         deadline = time.time() + 120
         while True:
             try:
-                os.close(os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+                _create_lock_file(self.path)
                 return self
-            except (FileExistsError, PermissionError):
-                # Windows reports PermissionError, not FileExistsError, while another process is deleting the
-                # lock file (delete pending); treat it as "held" and retry.
+            except FileExistsError:
                 try:
                     if time.time() - os.path.getmtime(self.path) > _MIGRATION_LOCK_STALE:
                         os.unlink(self.path)
@@ -284,15 +302,13 @@ class _rotation_lock(_migration_lock):
             self.held = True
             return self
         try:
-            os.close(os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+            _create_lock_file(self.path)
             self.held = True
-        except (FileExistsError, PermissionError):
-            # PermissionError: Windows delete-pending state of the lock file while a concurrent request
-            # releases it. Not held by this request, so no pending-key cleanup now.
+        except FileExistsError:
             try:
                 if time.time() - os.path.getmtime(self.path) > _MIGRATION_LOCK_STALE:
                     os.unlink(self.path)
-                    os.close(os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+                    _create_lock_file(self.path)
                     self.held = True
             except OSError:
                 pass
