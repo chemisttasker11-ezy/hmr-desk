@@ -116,3 +116,32 @@ def test_search_route_grouped_flag_is_opt_in():
         s, plain = api.handle(conn, 'GET', '/api/medicines/search', {'q': ['brandex']}, None)
         s2, grouped = api.handle(conn, 'GET', '/api/medicines/search', {'q': ['brandex'], 'grouped': ['1']}, None)
         assert s == s2 == 200 and 'groups' not in plain and len(grouped['groups']) == 1 and grouped['groups'][0]['count'] == 2
+
+
+def test_labels_never_carry_the_pbs_code_and_uncertain_twins_say_so():
+    g, _ = mg.group_rows([pbs('1001A'), pbs('1002B')], 15)
+    assert mg.finish(g)[0]['label'] == 'Brandex | 20 mg tablet, 30'
+    twin = lambda code: {**pbs(code), 'details': {'pbs_listed': True, 'pbs_code': code}}
+    g, _ = mg.group_rows([twin('1'), twin('2')], 15)
+    labels = [x['label'] for x in mg.finish(g)]
+    assert all(l.startswith('Brandex | 20 mg tablet, 30 (source') for l in labels)
+    assert all(l.endswith('(source details incomplete, entry kept separate)') for l in labels) and len(labels) == 2
+    amt = {'source': 'amt', 'code': '7', 'display': 'Examplestatin 20 mg tablet | 7', 'kind': 'MPUU', 'details_json': '{}'}
+    assert mg.plain_label(amt) == amt['display']  # only the importer's own trailing PBS code is removed
+
+
+def test_representative_is_first_by_code_regardless_of_input_order():
+    g, _ = mg.group_rows([pbs('3'), pbs('1'), pbs('2')], 15)
+    g = mg.finish(g)
+    assert [l['pbs_code'] for l in g[0]['listings']] == ['1', '2', '3'] and g[0]['indexes'] == [1, 2, 0]
+
+
+def test_suggestions_carry_groups_and_keep_candidates_unchanged():
+    with tempfile.TemporaryDirectory() as t:
+        db.DATA_DIR = t
+        build(ref.reference_path(), [pbs('1001A'), pbs('1002B'), pbs('2001D', form='40 mg tablet, 30')])
+        out = ref.suggest_many(['brandex'])['results'][0]
+        assert len(out['candidates']) == 3
+        assert sorted(len(g['indexes']) for g in out['groups']) == [1, 2]
+        assert all('|' in g['label'] and not g['label'].endswith(('A', 'B', 'D')) for g in out['groups'])
+        assert set(out['candidates'][0]) == {'source', 'code', 'display', 'kind', 'generic_name', 'brand_name', 'dose_form', 'release'}

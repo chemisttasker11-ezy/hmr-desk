@@ -1,12 +1,18 @@
 const medicineSuggestions = new WeakMap();
+// One line per medicine for the suggestion panel. Lines come from the engine's groups when present; older
+// proposals show each candidate. The pharmacist never sees or chooses a listing code.
+function medicineProposalLines(proposal) {
+  const c = proposal.candidates, groups = Array.isArray(proposal.groups) && proposal.groups.length ? proposal.groups : c.map((r, n) => ({label: r.display, indexes: [n]}));
+  return groups.filter(g => c[g.indexes[0]]).map(g => ({index: g.indexes[0], count: g.indexes.length, label: g.label, generic_name: c[g.indexes[0]].generic_name, release: c[g.indexes[0]].release}));
+}
 // Medicine reference lookup for the interview. The pharmacist always picks; free text stays valid.
 function interviewLookupControls(key, meta, i) {
   const ref = meta && meta.reference, esc = H.esc;
-  const linked = ref ? `<span class="med-ref">Linked: ${esc(ref.display)} (${esc(ref.source.toUpperCase())} ${esc(ref.code)}, release ${esc(ref.release)}) <button type="button" data-med-unlink="${esc(key)}" data-row="${i}">Unlink</button></span>` : '';
+  const linked = ref ? `<span class="med-ref">Linked: ${esc(ref.display)} (${ref.source === 'pbs' ? 'PBS' : esc(ref.source.toUpperCase()) + ' ' + esc(ref.code)}, release ${esc(ref.release)}) <button type="button" data-med-unlink="${esc(key)}" data-row="${i}">Unlink</button></span>` : '';
   const evidence = meta?.source_evidence;
   const original = evidence ? `<details class="med-source"><summary>Extracted referral text (not current use)</summary>${evidence.lines.map((line,n)=>`<p>${esc(line)} <small>${evidence.page_candidates[n].length === 1 ? `Text located on page ${evidence.page_candidates[n][0]}` : evidence.page_candidates[n].length ? `Page candidates: ${evidence.page_candidates[n].join(', ')}` : 'Page not established'}</small></p>`).join('')}</details>` : '';
   const proposal = medicineSuggestions.get(meta);
-  const suggestions = !ref && proposal ? `<div class="medicine-proposals"><p>${esc(({exact_candidate:'Exact displayed-text candidate, not confirmed. Check strength, form and release type.',ambiguous:'More than one exact text candidate. Choose only after reviewing the original.',review_candidates:'Possible matches only. OCR or product details differ; do not guess.',unmatched:'No catalogue candidate. Keep the source/free text and review it.',unavailable:'Medicine reference unavailable. Free text still works.'})[proposal.state] || 'Review medicine candidates.')}${proposal.prepared==='intake' ? ' Prepared at intake from the referral text; the catalogue entry was re-checked when this interview opened.' : ''}${proposal.truncated ? ' More candidates exist; use manual lookup to narrow.' : ''}</p>${proposal.candidates.map((r,n)=>`<div class="med-lookup-result"><span>${esc(r.display)} [${esc(r.kind)}]${r.generic_name ? ` | Modelled generic: ${esc(r.generic_name)}` : ''} | ${esc(r.source.toUpperCase())} ${esc(r.code)}, release ${esc(r.release)}</span><button type="button" data-med-suggestion="${esc(key)}" data-row="${i}" data-candidate="${n}">Use this</button></div>`).join('')}</div>` : '';
+  const suggestions = !ref && proposal ? `<div class="medicine-proposals"><p>${esc(({exact_candidate:'Exact displayed-text candidate, not confirmed. Check strength, form and release type.',ambiguous:'More than one exact text candidate. Choose only after reviewing the original.',review_candidates:'Possible matches only. OCR or product details differ; do not guess.',unmatched:'No catalogue candidate. Keep the source/free text and review it.',unavailable:'Medicine reference unavailable. Free text still works.'})[proposal.state] || 'Review medicine candidates.')}${proposal.prepared==='intake' ? ' Prepared at intake from the referral text; the catalogue entry was re-checked when this interview opened.' : ''}${proposal.truncated ? ' More candidates exist; use manual lookup to narrow.' : ''}</p>${medicineProposalLines(proposal).map(g=>`<div class="med-lookup-result"><span>${esc(g.label)}${g.generic_name ? ` | Modelled generic: ${esc(g.generic_name)}` : ''}${g.count>1 ? ` (${g.count} matching entries combined)` : ''} | release ${esc(g.release)}</span><button type="button" data-med-suggestion="${esc(key)}" data-row="${i}" data-candidate="${g.index}">Use this</button></div>`).join('')}</div>` : '';
   return `<div class="med-lookup">${original}${suggestions}<button type="button" data-med-lookup="${esc(key)}" data-row="${i}">Look up medicine</button>${linked}<div class="med-lookup-results" data-med-results="${esc(key)}-${i}" role="status"></div></div>`;
 }
 // Editing a linked name makes the previous identity ambiguous. Never keep a silent stale link.
@@ -33,8 +39,9 @@ async function medicineLookupClick(b) {
     const key=b.dataset.medSuggestion, i=Number(b.dataset.row), meta=interviewRecord.details[key]?.[i];
     const proposal=medicineSuggestions.get(meta), candidate=proposal?.candidates[Number(b.dataset.candidate)];
     if (!candidate || interviewRecord[key][i][0] !== proposal.input_text) return true;
-    interviewRecord[key][i][0]=candidate.display;
-    meta.reference={source:candidate.source,code:candidate.code,display:candidate.display,release:candidate.release};
+    const line=medicineProposalLines(proposal).find(g=>g.index===Number(b.dataset.candidate)), shown=line?.label || candidate.display;
+    interviewRecord[key][i][0]=shown;
+    meta.reference={source:candidate.source,code:candidate.code,display:shown,release:candidate.release};
     medicineSuggestions.delete(meta);interviewChanged(key);renderInterview();return true;
   }
   if (b.dataset.medUnlink !== undefined) {
@@ -64,30 +71,18 @@ async function medicineLookupClick(b) {
       interviewChanged(key); renderInterview();
     };
     // Identical PBS listings arrive as one group; each listing stays individually pickable. Older replies are flat.
-    const groups = Array.isArray(found.groups) ? found.groups : found.results.map((r) => ({ grouped: false, label: r.display, listings: [r], count: 1 }));
+    const groups = Array.isArray(found.groups) ? found.groups : found.results.map((r) => ({ grouped: false, label: '', listings: [r], count: 1 }));
     for (const g of groups) {
       const row = document.createElement('div'); row.className = 'med-lookup-result';
       const label = document.createElement('span');
       const first = g.listings[0];
-      if (g.listings.length === 1) {
-        label.textContent = first.display + ' [' + first.kind + ']';
-        const use = document.createElement('button'); use.type = 'button'; use.textContent = 'Use this';
-        use.addEventListener('click', () => choose(first));
-        row.append(label, use); out.append(row); continue;
-      }
-      label.textContent = g.label + ' [' + first.kind + '] - ' + g.listings.length + ' PBS listings';
-      const toggle = document.createElement('button'); toggle.type = 'button'; toggle.textContent = 'Show listings';
-      const list = document.createElement('div'); list.className = 'med-lookup-listings'; list.hidden = true;
-      for (const r of g.listings) {
-        const item = document.createElement('div'); item.className = 'med-lookup-listing';
-        const name = document.createElement('span');
-        name.textContent = r.display + (r.program_code ? ' (program ' + r.program_code + ')' : '');
-        const use = document.createElement('button'); use.type = 'button'; use.textContent = 'Use this listing';
-        use.addEventListener('click', () => choose(r));
-        item.append(name, use); list.append(item);
-      }
-      toggle.addEventListener('click', () => { list.hidden = !list.hidden; toggle.textContent = list.hidden ? 'Show listings' : 'Hide listings'; });
-      row.append(label, toggle); out.append(row, list);
+      // A group is one medicine as the source states it. The pharmacist sees no listing codes; the stored
+      // reference is one real catalogue listing of that group (the first by code) so provenance stays intact.
+      const pick = g.label ? Object.assign({}, first, { display: g.label }) : first;
+      label.textContent = (g.label || first.display) + (g.listings.length > 1 ? ' (' + g.listings.length + ' matching entries combined)' : '');
+      const use = document.createElement('button'); use.type = 'button'; use.textContent = 'Use this';
+      use.addEventListener('click', () => choose(pick));
+      row.append(label, use); out.append(row);
     }
     if (found.more_available) say('More matches exist. Type more of the name to narrow the list.');
   } catch (error) { say('Lookup failed: ' + errorText(error) + '. Type the name by hand.'); }

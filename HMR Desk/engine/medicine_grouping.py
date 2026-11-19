@@ -56,6 +56,16 @@ def _listing(row):
     return out
 
 
+def plain_label(row):
+    """User-facing text without the billing code. Only a trailing ' | <pbs_code>' that
+    pbs.py itself appended is removed; anything else is shown exactly as stored."""
+    display = row.get('display') or ''
+    code = _text(_details(row).get('pbs_code'))
+    if row.get('kind') == 'pbs_listing' and code and display.endswith(' | ' + code):
+        return display[:-len(' | ' + code)]
+    return display
+
+
 def group_rows(rows, max_groups):
     """Return (groups, more_available). Order follows the first row of each group.
 
@@ -63,15 +73,16 @@ def group_rows(rows, max_groups):
     listings are counted; a row that would need a new group sets more_available.
     """
     groups, index, more = [], {}, False
-    for row in rows:
+    for position, row in enumerate(rows):
         key = identity_key(row)
         if key is not None and key in index:
             groups[index[key]]['listings'].append(_listing(row))
+            groups[index[key]]['indexes'].append(position)
             continue
         if len(groups) >= max_groups:
             more = True
             continue
-        entry = {'grouped': key is not None, 'listings': [_listing(row)]}
+        entry = {'grouped': key is not None, 'listings': [_listing(row)], 'indexes': [position]}
         if key is not None:
             details = _details(row)
             form = _text(details.get('schedule_form')) or _text(details.get('li_form'))
@@ -79,12 +90,23 @@ def group_rows(rows, max_groups):
             entry['generic_name'], entry['brand_name'] = key[2], key[3]
             index[key] = len(groups)
         else:
-            entry['label'] = row.get('display')
+            entry['label'] = plain_label(row)
         groups.append(entry)
     return groups, more
 
 
 def finish(groups):
+    """Order each group's listings by source code so the first one, the stored
+    representative when the pharmacist picks the group, is deterministic."""
+    seen = {}
     for group in groups:
+        seen[group['label']] = seen.get(group['label'], 0) + 1
+    for group in groups:
+        if seen[group['label']] > 1 and not group['grouped']:
+            # Same words, but the source details are incomplete or differ: never hide that.
+            group['label'] += ' (source details incomplete, entry kept separate)'
+        order = sorted(range(len(group['listings'])), key=lambda n: (str(group['listings'][n].get('source')), str(group['listings'][n].get('code'))))
+        group['listings'] = [group['listings'][n] for n in order]
+        group['indexes'] = [group['indexes'][n] for n in order]
         group['count'] = len(group['listings'])
     return groups

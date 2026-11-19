@@ -120,8 +120,12 @@ def suggest_many(queries):
         raise ValueError('Invalid medicine suggestion queries')
     conn = _open()
     def result(query, state, rows=(), truncated=False):
+        from medicine_grouping import group_rows, finish
+        rows = list(rows)
+        groups, _ = group_rows([dict(row) for row in rows], max(len(rows), 1))
         return {'input_text': query, 'state': state, 'truncated': truncated,
-                'candidates': [{key: row[key] for key in ('source','code','display','kind','generic_name','brand_name','dose_form','release')} for row in rows]}
+                'candidates': [{key: row[key] for key in ('source','code','display','kind','generic_name','brand_name','dose_form','release')} for row in rows],
+                'groups': [{'label': g['label'], 'grouped': g['grouped'], 'indexes': g['indexes']} for g in finish(groups)]}
     if conn is None:
         return {'installed': False, 'results': [result(q, 'unavailable') for q in queries]}
     _SCANS.acquire()
