@@ -31,7 +31,7 @@ test('Reports list limits concurrent patient loads and keeps order and failures'
     return n * 2;
   });
   assert.equal(peak, 3);
-  assert.deepEqual(res.map((r) => r.status), ['fulfilled', 'fulfilled', 'fulfilled', 'rejected', 'fulfilled', 'fulfilled', 'fulfilled']);
+  assert.deepEqual(Array.from(res, (r) => r.status), ['fulfilled', 'fulfilled', 'fulfilled', 'rejected', 'fulfilled', 'fulfilled', 'fulfilled']);
   assert.equal(res[6].value, 14);
   assert.equal(res[3].reason.message, 'boom');
   assert.equal((await settledPool([], 3, async () => 1)).length, 0);
