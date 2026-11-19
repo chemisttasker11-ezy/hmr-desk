@@ -54,7 +54,7 @@ function renderReferrals() {
       <label>Reviewing pharmacist<input name="clinical_reviewer" value="${esc(row.clinical?.reviewed_by || '')}"></label>
       <label>Conditions and indications<textarea name="clinical_conditions" rows="3">${esc(row.clinical?.conditions || '')}</textarea></label>
       <label>Conditions source page<input name="clinical_page_conditions" type="number" min="0" step="1" value="${esc(row.clinical?.source_pages?.conditions ?? 0)}"></label>
-      <label>Prescribed medicines / directions<textarea name="clinical_medicines" rows="4">${esc(row.clinical?.medicines || '')}</textarea></label>
+      <label>Prescribed medicines / directions (one medicine per line)<textarea name="clinical_medicines" rows="4">${esc(row.clinical?.medicines || '')}</textarea></label>
       <label>Medicines source page<input name="clinical_page_medicines" type="number" min="0" step="1" value="${esc(row.clinical?.source_pages?.medicines ?? 0)}"></label>
       <label>Observations / measurements<textarea name="clinical_observations" rows="3">${esc(row.clinical?.observations || '')}</textarea></label>
       <label>Observations source page<input name="clinical_page_observations" type="number" min="0" step="1" value="${esc(row.clinical?.source_pages?.observations ?? 0)}"></label>
