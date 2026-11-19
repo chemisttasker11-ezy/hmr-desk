@@ -243,7 +243,21 @@ def blank(conn, patient):
                 # medicine rows. Each non-empty line becomes one row exactly as entered: no name or directions are
                 # split out, use is left unconfirmed (so nothing counts as Taking until the pharmacist says so).
                 lines = [line.strip() for line in str(reviewed['medicines']).splitlines() if line.strip()]
-                if not record['meds'] and 0 < len(lines) <= 60 and all(len(line) <= 400 for line in lines):
+                fresh = stored_spec is None and not spec.is_file()
+                replaced = False
+                if fresh and record['meds'] and 0 < len(lines) <= 60 and all(len(line) <= 400 for line in lines):
+                    # First preparation only: the pharmacist's confirmed list outranks parser rows. Parser rows are not
+                    # merged or appended; they are kept as text in Clarify. Ceased-per-referral rows are kept.
+                    keep = {i for i, meta in enumerate(record['details']['meds']) if meta.get('use_status') == 'not_using'}
+                    parsed = [r for i, r in enumerate(record['meds']) if i not in keep]
+                    same = {r[0].strip().casefold() for r in parsed} == {x.casefold() for x in lines}
+                    if parsed and not same:
+                        kept_rows = [(r, record['details']['meds'][i]) for i, r in enumerate(record['meds']) if i in keep and r[0].strip().casefold() not in {x.casefold() for x in lines}]
+                        record['meds'] = [r for r, _ in kept_rows]; record['details']['meds'] = [m for _, m in kept_rows]
+                        record['clarify'].append('Referral parser read different medicine rows; replaced by the confirmed list. Parser read: ' + '; '.join(' '.join(x for x in r[:2] if x) for r in parsed)[:3000])
+                        record['sources'] = [x for x in record['sources'] if x != 'meds from referral - check']
+                        replaced = True
+                if (replaced or not record['meds']) and 0 < len(lines) <= 60 and all(len(line) <= 400 for line in lines):
                     for line in lines:
                         record['meds'].append([line, '', '', '', ''])
                         record['details']['meds'].append({'packed': '', 'as_instructed': False})
