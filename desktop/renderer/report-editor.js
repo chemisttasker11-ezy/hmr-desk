@@ -216,7 +216,7 @@ function renderReport() {
             ([key, label]) =>
               `<label>${label}${key === 'title' ? `<input data-issue="${i}" data-prop="${key}" value="${esc(issue[key] || '')}">` : `<textarea data-issue="${i}" data-prop="${key}">${esc(issue[key] || '')}</textarea>`}</label>`,
           )
-          .join('')}${issue.suggestion_source ? `<details><summary>Evidence retained when selected (not automatically refreshed)</summary><p>Re-review if the interview, pathology or medicines change. Editing the finding does not update this retained evidence.</p>${suggestionEvidenceHtml(issue.suggestion_source)}</details>` : ''}</article>`,
+          .join('')}${issue.suggestion_source ? `<div class="template-review" data-template-review-state="${issue.template_reviewed ? 'reviewed' : 'pending'}"><p>${issue.template_reviewed ? 'Imported past-case wording reviewed for this patient.' : 'Imported from a past-case template and not yet reviewed for this patient. The report cannot be built until you review it. Editing the wording does not count as review.'}</p><label><input type="checkbox" data-template-reviewed="${i}" ${issue.template_reviewed ? 'checked' : ''}> I have reviewed this imported wording for this patient</label></div><details><summary>Evidence retained when selected (not automatically refreshed)</summary><p>Re-review if the interview, pathology or medicines change. Editing the finding does not update this retained evidence.</p>${suggestionEvidenceHtml(issue.suggestion_source)}</details>` : ''}</article>`,
     )
     .join('');
   const file = (reportDetail.files?.folder || []).find((f) => /^mims interactions.*\.txt$/i.test(f));
@@ -293,6 +293,37 @@ document.addEventListener('input', (event) => {
     }, 300);
     return;
   }
+  if (el.dataset.templateReviewed !== undefined) {
+    const index = Number(el.dataset.templateReviewed), issue = reportRecord.issues[index], id = reportId;
+    if (!issue) return;
+    const refresh = async () => {
+      const fresh = await hmr.api('GET', `/api/patients/${encodeURIComponent(id)}/report`);
+      if (reportId === id && page === 'report_editor') {
+        reportSaver.adopt({ issues: fresh.issues, suggestion_context_sha256: fresh.suggestion_context_sha256 });
+        renderReport();
+      }
+      return fresh;
+    };
+    if (!el.checked) {
+      issue.template_reviewed = false;
+      reportSaver.changed();
+      (async () => { if (await reportSaver.save(true)) await refresh(); })().catch((e) => alert(errorText(e)));
+      return;
+    }
+    el.checked = false; // becomes checked only when the engine confirms the review
+    (async () => {
+      if (!(await reportSaver.save(true))) return; // the wording on screen is stored first; the review covers exactly that text
+      const seen = await hmr.api('GET', `/api/patients/${encodeURIComponent(id)}/report`);
+      if (reportId !== id || page !== 'report_editor' || reportRecord.issues[index] !== issue) return;
+      issue.template_reviewed = true;
+      issue.template_review_for = seen.suggestion_context_sha256 || '';
+      reportSaver.changed();
+      if (!(await reportSaver.save(true))) return;
+      const fresh = await refresh();
+      if (!fresh.issues?.[index]?.template_reviewed) alert('Review not recorded: the wording or the patient sources changed. Check the finding and tick again.');
+    })().catch((e) => alert(errorText(e)));
+    return;
+  }
   if (el.dataset.followupReviewed !== undefined) { reportRecord.followup_text_reviewed = !!el.checked; reportSaver.changed(); return; }
   if (el.dataset.followupDecision !== undefined) {
     reportRecord.followup_decision = el.value;
@@ -308,7 +339,15 @@ document.addEventListener('input', (event) => {
     return;
   }
   if (el.tagName === 'TEXTAREA') H.growTextarea(el);
-  if (el.dataset.issue !== undefined) reportRecord.issues[Number(el.dataset.issue)][el.dataset.prop] = el.value;
+  if (el.dataset.issue !== undefined) {
+    const issue = reportRecord.issues[Number(el.dataset.issue)];
+    issue[el.dataset.prop] = el.value;
+    if (issue.suggestion_source) {  // editing is never a review
+      issue.template_reviewed = false;
+      const box = document.querySelector(`[data-template-reviewed="${Number(el.dataset.issue)}"]`);
+      if (box) box.checked = false;
+    }
+  }
   else if (el.dataset.field) {
     const key = el.dataset.field;
     if (el.dataset.row !== undefined) reportRecord[key][Number(el.dataset.row)][Number(el.dataset.col)] = el.value;
@@ -343,6 +382,13 @@ async function reportJob(job, extra = {}) {
   }
 }
 function showBuildError(message) {
+  const template = String(message).match(/Review imported template findings:\s*([0-9, ]+)/i);
+  if (template) {
+    const numbers = template[1].split(',').map((n) => Number(n.trim())).filter(Boolean);
+    alert(`Review imported template wording before building (finding ${numbers.join(', ')}). Tick "I have reviewed this imported wording for this patient" on each.`);
+    document.querySelector(`[data-template-reviewed="${(numbers[0] || 1) - 1}"]`)?.focus();
+    return;
+  }
   const match = String(message).match(/Review placeholder fields:\s*([^\r\n]+)/i);
   if (!match) { alert(message); return; }
   const labels = { reason: 'Reason for referral', intro: 'Introduction', thanks: 'Thanks', followup: 'Follow-up', followup_decision: 'Follow-up decision', followup_plan: 'Follow-up plan and timing', followup_review: 'Follow-up wording review' };

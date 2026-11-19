@@ -270,6 +270,8 @@ def report_build(patient_id, pdf=False):
         if not data['issues']: raise ValueError('add at least one finding')
         pending = report.placeholders(data)
         if pending: raise ValueError('Review placeholder fields: ' + ', '.join(pending))
+        unreviewed = report.template_reviews_pending(conn, p, data)
+        if unreviewed: raise ValueError('Review imported template findings: ' + ', '.join(str(n) for n in unreviewed))
         import report_auth
         # One snapshot, taken before rendering: build evidence records the sources the document is built from,
         # so a source saved during rendering or PDF conversion leaves evidence that sign-off refuses.

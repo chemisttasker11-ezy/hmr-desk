@@ -46,6 +46,12 @@ def validate(data):
             any(not isinstance(e,dict) or not isinstance(e.get('id'),str) or not isinstance(e.get('text'),str) for e in origin['evidence']) or
             len(json.dumps(origin,ensure_ascii=False)) > 2000000):
             raise ValueError('invalid suggestion source evidence')
+        review = issue.get('template_review')
+        if review is not None and (not isinstance(review, dict) or set(review) != {'sha256', 'context_sha256'} or
+                                   any(not isinstance(review[k], str) or not re.fullmatch('[a-f0-9]{64}', review[k]) for k in review)):
+            raise ValueError('invalid template review')
+        if 'template_reviewed' in issue and not isinstance(issue['template_reviewed'], bool): raise ValueError('invalid template_reviewed')
+        if 'template_review_for' in issue and not (isinstance(issue['template_review_for'], str) and re.fullmatch('[a-f0-9]{64}', issue['template_review_for'])): raise ValueError('invalid template_review_for')
     if 'followup_decision' in data and data['followup_decision'] not in manual_defaults.DECISIONS: raise ValueError('invalid followup_decision')
     if 'followup_text_reviewed' in data and not isinstance(data['followup_text_reviewed'], bool): raise ValueError('invalid followup_text_reviewed')
     if 'followup_reviewed_sha256' in data and (not isinstance(data['followup_reviewed_sha256'], str) or (data['followup_reviewed_sha256'] and not re.fullmatch('[a-f0-9]{64}', data['followup_reviewed_sha256']))): raise ValueError('invalid followup_reviewed_sha256')
@@ -60,6 +66,7 @@ def load(conn, patient, ai=False):
     if not ai: data = with_trusted_policy(conn, patient, data)
     if not ai: data['followup_text_reviewed'] = manual_defaults.review_valid(data)
     if not ai: data['revision'] = records.revision(conn, patient['id'], 'report_spec.json')
+    if not ai: data = _expose_template_review(conn, patient, data)
     if not ai: data['demographic_mismatches'] = demographic_mismatches(conn, patient, data)
     if not ai: data['interview_newer'] = 'interview_revision' in data and interview.revision(conn, patient) != data['interview_revision']
     if not ai:
@@ -86,6 +93,80 @@ def with_trusted_policy(conn, patient, data):
     return {**data, 'followup_policy': policy} if policy else data
 
 
+def template_review_sha(issue, context_sha256):
+    """Review of an imported past-case template covers the exact wording and the saved patient sources it was reviewed against.
+    Only a hash is stored, never the template text."""
+    parts = ['template-review-v1'] + [str(issue.get(k, '')).strip() for k in ('title', 'rec', 'rationale')] + [context_sha256]
+    return hashlib.sha256('\n'.join(parts).encode('utf-8')).hexdigest()
+
+
+def _current_context_sha(conn, patient):
+    """Fingerprint of the saved sources the suggestion context is built from (interview, pathology, confirmed medicines,
+    interaction files), not of today's date, so a review does not lapse at midnight. '' when it cannot be established
+    (a review is then never valid)."""
+    try:
+        import suggest
+        revisions = suggest.context_for(conn, patient).get('source_revisions')
+        if not isinstance(revisions, dict) or not revisions: return ''
+        return hashlib.sha256(('template-context-v1\n' + json.dumps(revisions, sort_keys=True, ensure_ascii=False, separators=(',', ':'))).encode('utf-8')).hexdigest()
+    except Exception:
+        return ''
+
+
+def _review_is_valid(issue, current):
+    review = issue.get('template_review')
+    return bool(current and isinstance(review, dict) and review.get('context_sha256') == current and
+                review.get('sha256') == template_review_sha(issue, current))
+
+
+def template_reviews_pending(conn, patient, data):
+    """1-based numbers of findings that came from an imported suggestion template and have not been deliberately reviewed
+    for this exact wording and the current patient context. Manual findings are never listed. A suggestion-derived
+    finding saved before this review existed has no review record, so it is listed until the pharmacist reviews it."""
+    numbered = [(n, i) for n, i in enumerate(data.get('issues', []), 1) if isinstance(i, dict) and 'suggestion_source' in i]
+    if not numbered: return []
+    current = _current_context_sha(conn, patient)
+    return [n for n, i in numbered if not _review_is_valid(i, current)]
+
+
+def _bind_template_reviews(conn, patient, data, old):
+    """template_reviewed=True from the client means 'I reviewed this imported template wording for this patient now'.
+    It is honoured only when the finding text and its suggestion source are unchanged from the previous save and the
+    client saw the current patient context (template_review_for). Editing never creates a review, and a review is
+    dropped when the wording changes. Review state in the payload is never trusted: only the previous saved state is."""
+    issues = data.get('issues', [])
+    if not any(isinstance(i, dict) and ('suggestion_source' in i or 'template_review' in i or 'template_reviewed' in i) for i in issues): return data
+    previous = old.get('issues', []) if isinstance(old, dict) else []
+    current = None
+    result = []
+    for index, issue in enumerate(issues):
+        clean = {k: v for k, v in issue.items() if k not in ('template_review', 'template_reviewed', 'template_review_for')}
+        if 'suggestion_source' not in issue:
+            result.append(clean)  # a manual finding carries no review state
+            continue
+        before = previous[index] if index < len(previous) and isinstance(previous[index], dict) else {}
+        same = ({k: str(before.get(k, '')).strip() for k in ('title', 'rec', 'rationale')} == {k: str(issue.get(k, '')).strip() for k in ('title', 'rec', 'rationale')}
+                and before.get('suggestion_source') == issue.get('suggestion_source'))
+        asked = issue.get('template_reviewed')
+        keep = before.get('template_review') if same else None
+        if asked is False: keep = None
+        elif asked and same:
+            if current is None: current = _current_context_sha(conn, patient)
+            if current and issue.get('template_review_for') == current: keep = {'sha256': template_review_sha(clean, current), 'context_sha256': current}
+        if isinstance(keep, dict) and keep.get('sha256') != template_review_sha(clean, keep.get('context_sha256', '')): keep = None
+        result.append({**clean, 'template_review': keep} if keep else clean)
+    return {**data, 'issues': result}
+
+
+def _expose_template_review(conn, patient, data):
+    """Read-only view for the editor: whether each suggestion-derived finding is reviewed now, and the context fingerprint
+    the pharmacist is looking at. Not stored."""
+    if not any(isinstance(i, dict) and 'suggestion_source' in i for i in data.get('issues', [])): return data
+    current = _current_context_sha(conn, patient)
+    return {**data, 'suggestion_context_sha256': current,
+            'issues': [({**i, 'template_reviewed': _review_is_valid(i, current)} if isinstance(i, dict) and 'suggestion_source' in i else i) for i in data['issues']]}
+
+
 def _bind_followup_review(data, old):
     """followup_text_reviewed=True from the client means 'I reviewed the follow-up text now saved'. It is stored as a hash
     of that exact text, and only when the text and the decision are unchanged from the previous save; otherwise it is dropped."""
@@ -104,18 +185,19 @@ def _save(conn, patient, data):
     if expected is not None and not isinstance(expected, str): raise ValueError('invalid expected_revision')
     data = with_trusted_policy(conn, patient, data)
     validate(data)
-    data = manual_defaults.apply_followup_decision({k: v for k, v in data.items() if k not in ('interview_newer', 'pathology_newer', 'revision', 'expected_revision', 'demographic_mismatches', 'demographic_conflicts')})
+    data = manual_defaults.apply_followup_decision({k: v for k, v in data.items() if k not in ('interview_newer', 'pathology_newer', 'revision', 'expected_revision', 'demographic_mismatches', 'demographic_conflicts', 'suggestion_context_sha256')})
     if expected is not None:
         # Compare and write in one write transaction so two saves cannot both pass the check.
         if not conn.in_transaction: conn.execute('BEGIN IMMEDIATE')
         if records.revision(conn, patient['id'], 'report_spec.json') != expected: raise records.Conflict('report changed since it was read')
     previous = records.get(conn, patient['id'], 'report_spec.json')
     data = _bind_followup_review(data, json.loads(previous) if previous else {})
+    data = _bind_template_reviews(conn, patient, data, json.loads(previous) if previous else {})
     if previous is not None: records.put(conn, patient['id'], 'report_spec.json.bak', previous)
     records.put_json(conn, patient['id'], 'report_spec.json', data)
     db.log(conn, patient['id'], 'report_saved', {}, 'api')
     conn.commit()
-    return dict(data, revision=records.revision(conn, patient['id'], 'report_spec.json'))  # the caller's next conditional save needs it
+    return dict(_expose_template_review(conn, patient, data), revision=records.revision(conn, patient['id'], 'report_spec.json'))  # the caller's next conditional save needs it
 
 def placeholders(data):
     return manual_defaults.unresolved(data)
