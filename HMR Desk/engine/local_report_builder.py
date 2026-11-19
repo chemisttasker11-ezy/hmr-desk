@@ -112,7 +112,7 @@ def _date_box(doc, text):
     run.font.size = Pt(10)
     _fonts(run._r.get_or_add_rPr())
     _box(paragraph, edge=BLACK, size=8)
-    paragraph.paragraph_format.right_indent = Cm(6.5)
+    paragraph.paragraph_format.right_indent = Cm(3.0)
     paragraph.paragraph_format.space_after = Pt(4)
     return paragraph
 
