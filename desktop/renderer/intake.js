@@ -1,4 +1,10 @@
 let referralRows = [];
+let referralListings = [];
+// Discovered and submitted come from the folder listing. How many were reviewed is only what the engine returned as rows.
+function listingNotice(listing) {
+  const n = listing.found, p = listing.pdfs;
+  return `Discovered ${n} item${n === 1 ? '' : 's'} in the folder: ${p} PDF${p === 1 ? '' : 's'} submitted for review, ${listing.skippedTotal} not submitted.`;
+}
 const REFERRAL_IDENTITY_KEYS = ['name','dob','gp','referral_date','clinic','phone',
   'address','suburb','sex','medicare','irn','ihi'];
 function referralReviewFields(form) {
@@ -33,8 +39,10 @@ function renderReferrals() {
   const target = $('referral-results');
   if (!target) return;
   const labels = {name:'Patient name', dob:'Date of birth', gp:'GP', referral_date:'Referral date', medicare:'Medicare', irn:'IRN', ihi:'IHI'};
-  const counts = ['review', 'manual', 'duplicate', 'rejected', 'error', 'added'].map(status => `${status}: ${referralRows.filter(row => row.status === status).length}`).join(' · ');
-  target.innerHTML = `${referralRows.length ? `<p>${esc(counts)}</p>` : ''}` + referralRows.map((row, i) => `<article class="card"><h3>${esc(row.file)}</h3><p><strong>${esc(({review:'Ready for review',manual:'Requires pharmacist classification',duplicate:'Possible duplicate',rejected:'Not recognised as a referral',error:'Could not read PDF',added:'Added'})[row.status] || row.status)}</strong>${row.message ? ': ' + esc(row.message) : ''}</p>
+  const shown = referralRows.filter(row => !row.userSkipped);
+  const counts = ['review', 'manual', 'duplicate', 'rejected', 'error', 'added'].map(status => `${status}: ${shown.filter(row => row.status === status).length}`).concat(referralRows.length - shown.length ? [`skipped by you: ${referralRows.length - shown.length}`] : []).join(' · ');
+  const listingHtml = referralListings.map(listing => `<section class="referral-listing" role="status"><p>${esc(listingNotice(listing))}</p>${listing.skippedTotal ? `<details><summary>Not submitted (${listing.skippedTotal})</summary><ul>${listing.skipped.map(item => `<li>${esc(item.name)}: ${esc(item.reason)}</li>`).join('')}${listing.skippedTotal > listing.skipped.length ? `<li>and ${listing.skippedTotal - listing.skipped.length} more</li>` : ''}</ul></details>` : ''}</section>`).join('');
+  target.innerHTML = listingHtml + `${referralRows.length ? `<p>${esc(counts)}</p>` : ''}` + referralRows.map((row, i) => row.userSkipped ? '' : `<article class="card"><h3>${esc(row.file)}</h3><p><strong>${esc(({review:'Ready for review',manual:'Requires pharmacist classification',duplicate:'Possible duplicate',rejected:'Not recognised as a referral',error:'Could not read PDF',added:'Added'})[row.status] || row.status)}</strong>${row.message ? ': ' + esc(row.message) : ''}</p>
     ${row.status === 'duplicate' ? `<p>${row.duplicate_kind === 'identity' ? 'The extracted name matches an existing patient or another referral. Compare date of birth and identifiers before adding. A different person with the same name requires explicit acknowledgement.' : 'This PDF has already been reviewed or added.'}</p>` : ''}
     ${row.status === 'manual' ? '<p>This document was not recognised automatically. Verify the original PDF is a genuine Home Medicines Review referral before entering identifiers and creating a patient. No unknown information will be filled automatically.</p>' : ''}
     ${row.token ? `<button type="button" data-referral-source="${esc(row.token)}">Open original PDF for visual page comparison</button>` : ''}
@@ -58,7 +66,7 @@ function renderReferrals() {
       <label><input type="checkbox" name="clinical_confirmed" ${row.clinical?.confirmed ? 'checked' : ''}>
         I checked each clinical field against its own original PDF page (enter the page where that fact appears). Preserve all other information as unconfirmed.</label>
     </fieldset>
-    ${row.kind !== 'referral' ? '<fieldset><legend>Manual source classification</legend><label><input type="checkbox" data-manual-referral required> I inspected the original PDF and confirm it is an HMR referral for this patient. The document and all clinical details remain unconfirmed until reviewed.</label></fieldset>' : ''}
+    ${row.kind !== 'referral' ? '<fieldset><legend>Manual source classification</legend><label><input type="checkbox" data-manual-referral required> I inspected the original PDF and confirm it is an HMR referral for this patient. The document and all clinical details remain unconfirmed until reviewed.</label><p><button type="button" data-referral-skip="' + i + '">Not a referral, skip this file</button> <small class="muted">Only removes it from this list. Nothing is added or recorded, and the PDF stays where it is.</small></p></fieldset>' : ''}
     ${row.status === 'duplicate' && row.duplicate_kind === 'identity' ? `<fieldset><legend>Same-name patient safety check</legend>
     ${row.duplicate_candidates?.length ? `<p>Existing local records to compare: ${row.duplicate_candidates.map(candidate => `#${Number(candidate.id)} · ${esc(candidate.name)} · DOB ${esc(candidate.dob || 'unknown')} · GP ${esc(candidate.gp || 'unknown')}`).join('; ')}</p>` : '<p>Another referral in this batch contains this name.</p>'}
     <label><input type="checkbox" data-distinct-person required> I compared reliable identifiers against the source PDF and confirm this is a different person (not a duplicate document).</label>
@@ -67,15 +75,21 @@ function renderReferrals() {
 }
 
 document.addEventListener('click', async event => {
-  const button = event.target.closest('[data-referral-pick], [data-referral-open], [data-referral-source]');
+  const button = event.target.closest('[data-referral-pick], [data-referral-open], [data-referral-source], [data-referral-skip]');
   if (!button) return;
   try {
+    if (button.dataset.referralSkip !== undefined) {
+      const row = referralRows[Number(button.dataset.referralSkip)];
+      if (row && row.status === 'manual') { row.userSkipped = true; renderReferrals(); }
+      return;
+    }
     if (button.dataset.referralOpen) return await openPatientWorkspace(Number(button.dataset.referralOpen), 'Overview', 'patient');
     if (button.dataset.referralSource) return await hmr.openReviewedReferral(button.dataset.referralSource);
     button.disabled = true;
     $('referral-status').textContent = 'Reading referrals…';
     const result = await hmr.referralPick(button.dataset.referralPick);
     if (result) referralRows.push(...result.rows);
+    if (result?.listing) referralListings.push(result.listing);
     renderReferrals();
     if ($('referral-status')) $('referral-status').textContent = result ? 'Review the results below.' : '';
   } catch (error) { if ($('referral-status')) $('referral-status').textContent = errorText(error); }
