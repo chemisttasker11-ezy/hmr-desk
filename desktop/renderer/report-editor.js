@@ -600,7 +600,8 @@ async function refreshLocalReferenceStatus() {
       const packaged = await hmr.api('GET', '/api/reference/search?q=');
       if (!target.isConnected) return;
       if (packaged && packaged.reference && packaged.reference.packaged) {
-        target.textContent = 'Packaged Brainstorm tables are searchable. Excerpts are extraction text, not re-verified against the original page. Register your original PDF to verify and open source pages.';
+        const lost = packaged.registered_original && packaged.registered_original.state === 'registered_unavailable' ? 'Your registered original PDF is unavailable: ' + (packaged.registered_original.reason || error.message) + ' ' : '';
+        target.textContent = lost + 'Packaged Brainstorm tables are searchable. Excerpts are extraction text, not re-verified against the original page. Register your original PDF to verify and open source pages.';
         return;
       }
     } catch (_) { /* fall through to the original unavailable message */ }
@@ -609,9 +610,14 @@ async function refreshLocalReferenceStatus() {
 }
 let localReferenceHits = [];
 function localReferenceHtml(response) {
+  function registeredOriginalNotice(original) {
+    return original && original.state === 'registered_unavailable'
+      ? `<p class="warning-banner" role="alert"><strong>Your registered original PDF is unavailable.</strong> ${esc(original.reason || 'It is missing, changed or cannot be read.')} Showing packaged extraction only. Register the original again to verify and open source pages.</p>`
+      : '';
+  }
   const ref=response.reference;
   const packagedNote = ref.packaged ? '<p class="muted">Packaged tables: excerpts are extraction text, not re-verified against the original page. Open-original is available only after you register your own matching PDF.</p>' : '';
-  return `<p>Brainstorm | ${esc(ref.edition)} | ${esc(ref.page_count)} physical PDF pages</p><p class="muted" style="overflow-wrap:anywhere">SHA-256: ${esc(ref.pdf_sha256)}</p><p>All search words must occur in the heading plus one physical page. Text matches only. Writing guide, not clinical advice. Cross-check current sources. Pharmacist review required.</p>${packagedNote}` + (response.results.length ? response.results.map((hit,i)=>`<article class="card helper-card"><h3>${esc(hit.title)}</h3><p>${esc(hit.edition)} | Physical PDF page ${esc(hit.page)} | Section pages ${esc(hit.section_page)}-${esc(hit.section_page_end)}</p><blockquote style="white-space:pre-wrap;overflow-wrap:anywhere">${hit.omitted_before ? '[...] ' : ''}${esc(hit.snippet)}${hit.omitted_after ? ' [...]' : ''}</blockquote><p class="muted">Extracted text excerpt, spacing normalized. Not a clinical recommendation.</p>${hit.openable === false ? '' : `<button data-local-ref-open="${i}">Open original physical page ${esc(hit.page)}</button>`}</article>`).join('') : '<p>No matching passages. No clinical conclusion can be drawn from this.</p>');
+  return registeredOriginalNotice(response.registered_original) + `<p>Brainstorm | ${esc(ref.edition)} | ${esc(ref.page_count)} physical PDF pages</p><p class="muted" style="overflow-wrap:anywhere">SHA-256: ${esc(ref.pdf_sha256)}</p><p>All search words must occur in the heading plus one physical page. Text matches only. Writing guide, not clinical advice. Cross-check current sources. Pharmacist review required.</p>${packagedNote}` + (response.results.length ? response.results.map((hit,i)=>`<article class="card helper-card"><h3>${esc(hit.title)}</h3><p>${hit.page_verified === false ? '<strong>Packaged extraction, NOT verified against the original page.</strong> ' : ''}${esc(hit.edition)} | ${hit.page_verified === false ? 'Extracted from page' : 'Physical PDF page'} ${esc(hit.page)} | Section pages ${esc(hit.section_page)}-${esc(hit.section_page_end)}</p><blockquote style="white-space:pre-wrap;overflow-wrap:anywhere">${hit.omitted_before ? '[...] ' : ''}${esc(hit.snippet)}${hit.omitted_after ? ' [...]' : ''}</blockquote><p class="muted">Extracted text excerpt, spacing normalized. Not a clinical recommendation.</p>${hit.openable === false ? '' : `<button data-local-ref-open="${i}">Open original physical page ${esc(hit.page)}</button>`}</article>`).join('') : '<p>No matching passages. No clinical conclusion can be drawn from this.</p>');
 }
 document.addEventListener('click', async event => {
   const el=event.target.closest('[data-local-ref-pick],[data-local-ref-search],[data-local-ref-open]');
