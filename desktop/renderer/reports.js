@@ -74,7 +74,7 @@ function reportRow(p, detail, agent) {
     ['sign', 'Signed off', sign],
   ];
   const next = String(p.next_step || '').toLowerCase();
-  const target = next === 'sign off' && !workflow.canSign && ['visited', 'report_drafted'].includes(p.state)
+  const target = next === 'sign off' && detail.reportCurrency?.status !== 'current' && !workflow.canSign && ['visited', 'report_drafted'].includes(p.state)
     ? 'build'
     : ({ 'confirm medicines': 'medicines', 'check interactions': 'interactions', 'start report': 'report_start', 'add findings': 'edit', 'build report': 'build', 'sign off': 'sign' })[next];
   const primary = target ? buttons.findIndex(([step]) => step === target) : (next ? -1 : buttons.findIndex(([, , status]) => status?.ready && !status?.done));
