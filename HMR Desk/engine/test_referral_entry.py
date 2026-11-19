@@ -144,7 +144,7 @@ class RealParserTests(unittest.TestCase):
                 other = pdf('other.pdf', 'Unrelated administrative document.\n' * 12)
                 bad = root / 'bad.pdf'; bad.write_bytes(b'not a PDF')
                 rows = referral_entry.review(conn, [str(first), str(second), str(other), str(bad)])['rows']
-                self.assertEqual([r['status'] for r in rows], ['review', 'duplicate', 'rejected', 'error'])
+                self.assertEqual([r['status'] for r in rows], ['review', 'duplicate', 'manual', 'error'])  # 'manual' since 4447e17: unrecognised PDFs are review-only; commit refuses without explicit confirmation (test_referral_identity)
                 self.assertEqual(rows[1]['duplicate_kind'], 'identity')
                 fields = {k: (v or '') for k, v in rows[0]['fields'].items() if k in referral_entry.FIELDS}
                 fields['name'] = 'Corrected Person'
