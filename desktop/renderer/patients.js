@@ -216,20 +216,30 @@ async function showPatient(id, action, background = false) {
   const timeline = await hmr.api('GET', `/api/patients/${encodeURIComponent(id)}/timeline`);
   if (!$('detail') || selected !== String(id) || request !== patientRequest || (typeof page !== 'undefined' && page !== startedPage) || (typeof navToken !== 'undefined' && navToken !== startedNav)) return false;
   if (offerPatient !== String(id)) { offerPatient = String(id); offerDraft = null; offerStatus = ''; }
-  const [board, agents] = await Promise.all([hmr.api('GET', '/api/messages/board').catch(() => ({})), hmr.api('GET', '/api/agents').catch(() => ({}))]);
+  const [board, agents, reportCurrency] = await Promise.all([
+    hmr.api('GET', '/api/messages/board').catch(() => ({})),
+    hmr.api('GET', '/api/agents').catch(() => ({})),
+    ['visited', 'report_drafted', 'signed_off', 'sent', 'claimed'].includes(p.state)
+      ? hmr.api('GET', `/api/patients/${encodeURIComponent(id)}/report-status`).catch(() => null)
+      : Promise.resolve(null),
+  ]);
   if (!$('detail') || selected !== String(id) || request !== patientRequest || (typeof page !== 'undefined' && page !== startedPage) || (typeof navToken !== 'undefined' && navToken !== startedNav) || formOpen || (background && $('detail').querySelector?.('details[open]'))) return false;
   const milestones = timeline.milestones || {};
   const canChange = action !== 'offer_new' && !!p.change_kinds?.length;
   const phone = String(p.phone || '').replace(/[^\d+]/g, '');
-  const pathway = H.patientPathway ? H.patientPathway(p, milestones, p.steps) : [];
+  const reportWorkflow = H.reportWorkflowStatus(p.state, (p.steps || []).find((step) => step.name === 'report_build'), reportCurrency);
+  const visibleSteps = (p.steps || []).map((step) => step.name === 'report_build' ? { ...step, ...reportWorkflow.build } : step);
+  const pathway = H.patientPathway ? H.patientPathway(p, milestones, visibleSteps) : [];
   const files = (list) => (list?.length ? list.map((x) => `<li>${esc(x)}</li>`).join('') : '<li>None</li>');
 
   const actions = availableActions(p, milestones);
   const more = ['note', 'update', ...(p.can_undo ? ['undo_stage'] : [])];
   const shownActions = actions.filter(a => !followupActions.includes(a));
   const listPatient = typeof patients !== 'undefined' ? patients.find(item => String(item.id) === String(p.id)) : null;
-  const next = String(p.next_step || listPatient?.next_step || p.stage_step || '').toLowerCase().replaceAll('_', ' ');
+  const proposedNext = String(p.next_step || listPatient?.next_step || p.stage_step || '').toLowerCase().replaceAll('_', ' ');
   const followupNext = p.followups?.next_action;
+  const next = proposedNext === 'sign off' && !reportWorkflow.canSign && ['visited', 'report_drafted'].includes(p.state)
+    ? 'build report' : proposedNext;
   const aliases = {
     'collect pathology': 'pathology',
     'read reply': 'conversation',
@@ -260,7 +270,8 @@ async function showPatient(id, action, background = false) {
     'report sent': 'report_sent',
   };
   let primaryAction = aliases[next] || null;
-  if (primaryAction && !['pathology', 'conversation', 'waiting', 'followups', ...followupActions].includes(primaryAction) && !shownActions.includes(primaryAction)) primaryAction = null;
+  if (primaryAction && !['pathology', 'conversation', 'waiting', 'followups', ...followupActions].includes(primaryAction) && !shownActions.includes(primaryAction)
+    && !(primaryAction === 'build_report' && ['visited', 'report_drafted'].includes(p.state))) primaryAction = null;
   if (!primaryAction && !next) {
     if (p.visit_date && shownActions.includes('visited')) primaryAction = 'visited';
     else if (shownActions.includes('medicines')) primaryAction = 'medicines';
@@ -277,7 +288,7 @@ async function showPatient(id, action, background = false) {
     return { enabled: !!agent && !!step && !step.ai_off && (step.ready || step.done), label: agent ? `Agent: ${agent.name}` : 'No enabled agent selected', reason: step?.ai_off ? 'AI is off in settings' : !agent ? 'No enabled agent selected' : step?.reason || 'Not ready' };
   };
   const interviewAI = aiInfo('interview_assist'), reportAI = aiInfo('report_draft');
-  const buildDone = !!steps.report_build?.done;
+  const buildDone = reportWorkflow.build.done;
   const isSigned = ['signed_off', 'sent', 'claimed'].includes(p.state);
   const stageButton = (a) => {
     if (a === 'pathology') return `<button data-run-task="pathology" data-patient-id="${esc(p.id)}">Collect pathology</button>`;
@@ -295,12 +306,12 @@ async function showPatient(id, action, background = false) {
     }
     if (a === 'edit_report') return `<button data-report-open="${esc(p.id)}">Edit report</button>`;
     if (a === 'build_report') {
-      const ready = !!steps.report_build?.ready || !!steps.report_build?.done;
-      return `<button data-report-open="${esc(p.id)}" data-build="build" ${ready ? '' : `disabled title="${esc(steps.report_build?.reason || 'Prerequisites not met')}"`}>Build</button>`;
+      const ready = reportWorkflow.build.ready;
+      return `<button data-report-open="${esc(p.id)}" data-build="build" ${ready ? '' : `disabled title="${esc(reportWorkflow.build.reason || 'Prerequisites not met')}"`}>Build</button>`;
     }
     if (a === 'signed_off') {
-      const ready = buildDone || isSigned;
-      return `<button data-sign-off="${esc(p.id)}" ${ready && !isSigned ? '' : 'disabled'}${!ready ? ' title="Word report must be built first"' : ''}>${isSigned ? 'Signed off &#10003; Done' : 'Signed off'}</button>`;
+      const ready = reportWorkflow.canSign;
+      return `<button data-sign-off="${esc(p.id)}" ${ready && !isSigned ? '' : 'disabled'}${!ready ? ` title="${esc(reportWorkflow.signReason)}"` : ''}>${isSigned ? 'Signed off &#10003; Done' : 'Signed off'}</button>`;
     }
     if (a === 'report_sent') {
       return `<button data-action="report_sent" ${isSigned ? '' : 'disabled title="Report must be signed off first"'}>${actionLabels.report_sent}</button>`;
@@ -374,6 +385,7 @@ async function showPatient(id, action, background = false) {
     </div>
     <div class="overview-view" ${isOverviewTab ? '' : 'hidden'}>
       ${pathway.length ? `<div class="patient-pathway card"><h4>HMR Pathway</h4><div class="pathway-steps">${pathway.map((s) => `<div class="pathway-step ${s.completed ? 'is-completed' : s.current ? 'is-current' : ''}"><strong>${esc(s.title)}</strong><br><small>${s.completed ? '&#10003; Done' : esc(s.detail)}</small></div>`).join('')}</div></div>` : ''}
+      ${reportCurrency ? H.reportStatusHtml(reportCurrency) : ['visited', 'report_drafted', 'signed_off', 'sent', 'claimed'].includes(p.state) ? '<p class="muted" role="status">Report currency could not be verified. Do not sign off until checked.</p>' : ''}
       <section class="panel-section"><h3>Automation & manual steps</h3>
         <div class="path-options">
           ${['ready', 'booking', 'intake'].includes(p.stage) ? `
@@ -395,10 +407,10 @@ async function showPatient(id, action, background = false) {
         })()}
       </section>
       ${['report', 'claim', 'followup', 'done'].includes(p.stage) ? `<section class="panel-section"><h3>Report steps</h3><ul class="step-list">${
-        (p.steps || [])
+        visibleSteps
           .map(
             (step) =>
-              `<li><span>${esc(H.steps[step.name] || step.name.replaceAll('_', ' '))}</span><span class="step-state ${step.done ? 'is-done' : step.ready ? 'is-ready' : ''}">${step.done ? 'Done' : step.ready ? 'Ready' : 'Not ready'}</span>${!step.done && !step.ready && step.reason ? `<small>${esc(step.reason)}</small>` : ''}</li>`,
+              `<li><span>${esc(H.steps[step.name] || step.name.replaceAll('_', ' '))}</span><span class="step-state ${step.done ? 'is-done' : step.ready ? 'is-ready' : ''}">${step.done ? 'Done' : step.ready ? 'Ready' : 'Not ready'}</span>${step.name === 'report_build' && !step.done && reportWorkflow.build.reason ? `<small>${esc(reportWorkflow.build.reason)}</small>` : (!step.done && !step.ready && step.reason ? `<small>${esc(step.reason)}</small>` : '')}</li>`,
           )
           .join('') || '<li class="muted">No steps from the engine.</li>'
       }</ul></section>` : ''}
@@ -557,3 +569,4 @@ function openForm(action, patient) {
     }
   });
                }
+
