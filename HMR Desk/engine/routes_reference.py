@@ -27,7 +27,7 @@ def handle(conn, method, path, query, body):
                             raise reference_library.ReferenceUnavailable(str(tables_exc)) from None
                         # No usable PDF and no intact packaged tables: the same
                         # user-facing state as before packaged tables existed.
-                        raise reference_library.ReferenceUnavailable('Local reference unavailable; choose the original PDF') from None
+                        raise reference_library.ReferenceUnavailable(reference_library.UNAVAILABLE_MESSAGE) from None
             if path == '/api/reference/open' and method == 'POST' and isinstance(body,dict) and set(body)=={'pdf_sha256','page'}:
                 return 200, reference_library.open_source(body['pdf_sha256'],body['page'])
         except reference_library.ReferenceUnavailable as exc: return 409, {'error':str(exc)}

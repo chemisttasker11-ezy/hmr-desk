@@ -27,6 +27,10 @@ def parser():
     return module
 
 
+UNRECOGNISED_LAYOUT_FLAG = ('This PDF layout is not one the app reads medicines, conditions or allergies from, so they will not be '
+                            'pre-filled at the interview either. Enter them from the original PDF.')
+
+
 def read_pdf(path):
     path = Path(path)
     if not path.is_absolute() or path.suffix.lower() != '.pdf' or path.is_symlink() or not path.is_file():
@@ -69,6 +73,12 @@ def review(conn, paths):
                 if hashlib.sha256(read_pdf(source)).hexdigest() != digest: raise ValueError('Source changed during review; try again')
             kind, _, flags = module.classify('\n'.join(pages))
             flags.extend(ocr_flags)
+            # Intake never fills the clinical box: the pharmacist enters it from the original. Later, the interview can
+            # read medicines, conditions and allergies only from recognised referral layouts, so say plainly when
+            # this PDF is not one. A flag only; nothing is inferred or changed.
+            import referral
+            if referral.layout('\n'.join(pages)) not in ('clinical summary', 'HMR referral form'):
+                flags.append(UNRECOGNISED_LAYOUT_FLAG)
             fields = {}
             if kind == 'referral':
                 fields, more = module.extract_fields('\n'.join(pages[:3])); flags += more
