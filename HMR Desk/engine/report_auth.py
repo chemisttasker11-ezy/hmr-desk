@@ -104,6 +104,34 @@ def _find_build(conn, patient, filename):
     raise ValueError('Select a report built by this HMR Desk installation')
 
 
+def consent_for_approval(record):
+    """Check the interview's explicit signed and dated consent attestation.
+
+    This accepts documented paper consent as well as app-signed consent; it does not
+    infer consent from the existence of a PDF, a patient's title or a blank flag.
+    Validation here is independent of the desktop checklist.
+    """
+    import datetime as dt
+    consent = record.get('consent') if isinstance(record, dict) else None
+    if not isinstance(consent, dict) or consent.get('signed') is not True:
+        return False
+    try:
+        date = consent.get('date')
+        if not isinstance(date, str) or not date:
+            return False
+        dt.date.fromisoformat(date)
+    except (ValueError, TypeError):
+        return False
+    if consent.get('by') == 'patient':
+        return True
+    if consent.get('by') != 'authorised':
+        return False
+    relationship = consent.get('relationship')
+    return (type(relationship) is int and 1 <= relationship <= 5
+            and isinstance(consent.get('authorised_name'), str)
+            and bool(consent['authorised_name'].strip()))
+
+
 def check_approval(conn, patient, body):
     if not isinstance(body, dict) or set(body) != {
         'action', 'report_file', 'report_sha256', 'reviewer', 'clinical_reviewed'
@@ -149,6 +177,8 @@ def check_approval(conn, patient, body):
     import reconciliation
     saved_review = records.get_json(conn, patient['id'], 'reconciliation_review.json') or {}
     current_interview = interview.load(conn, patient)
+    if not consent_for_approval(current_interview):
+        raise ValueError('Signed, dated patient consent must be recorded before report sign-off')
     review_status = reconciliation.review_status(current_interview, saved_review)
     if not review_status['reviewed']:
         raise ValueError('Medicine reconciliation must be acknowledged for the current interview before sign-off')

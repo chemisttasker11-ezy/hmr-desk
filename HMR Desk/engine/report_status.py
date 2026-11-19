@@ -83,7 +83,9 @@ def _safe(key, label, check):
 def readiness(conn, patient):
     """Existing validated state shown as met / not_met / unknown. Never a pass, never approval."""
     def consent():
-        return 'met' if interview.load(conn, patient)['consent']['signed'] is True else 'not_met'
+        # Reflect the same recorded interview consent contract enforced at sign-off.
+        # A checked but undated consent must not show as completed.
+        return 'met' if report_auth.consent_for_approval(interview.load(conn, patient)) else 'not_met'
 
     def meds():
         saved = records.get_json(conn, patient['id'], 'reconciliation_review.json') or {}
