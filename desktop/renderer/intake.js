@@ -70,7 +70,7 @@ function renderReferrals() {
     ${row.status === 'duplicate' && row.duplicate_kind === 'identity' ? `<fieldset><legend>Same-name patient safety check</legend>
     ${row.duplicate_candidates?.length ? `<p>Existing local records to compare: ${row.duplicate_candidates.map(candidate => `#${Number(candidate.id)} · ${esc(candidate.name)} · DOB ${esc(candidate.dob || 'unknown')} · GP ${esc(candidate.gp || 'unknown')}`).join('; ')}</p>` : '<p>Another referral in this batch contains this name.</p>'}
     <label><input type="checkbox" data-distinct-person required> I compared reliable identifiers against the source PDF and confirm this is a different person (not a duplicate document).</label>
-    <p>If the DOB, Medicare number or IHI match, open the existing patient instead. If reliable identifiers are unavailable, gather them before creating another same-name record.</p></fieldset>` : ''}<button class="primary">Confirm and add patient</button><p class="error" role="alert"></p></form>` : ''}
+    <p>If the DOB, Medicare number or IHI match, open the existing patient instead. If reliable identifiers are unavailable, gather them before creating another same-name record.</p></fieldset>` : ''}<button class="primary">Confirm and add patient</button><p class="referral-pending" role="status"></p><p class="error" role="alert" tabindex="-1"></p></form>` : ''}
     ${row.patient_id ? `<button data-referral-open="${Number(row.patient_id)}">Open patient</button>` : ''}</article>`).join('');
 }
 
@@ -101,7 +101,12 @@ document.addEventListener('submit', async event => {
   if (!form) return;
   event.preventDefault();
   const row = referralRows[Number(form.dataset.referralCommit)], button = form.querySelector('button');
+  const pending = form.querySelector('.referral-pending'), error = form.querySelector('.error'), label = button.textContent;
   button.disabled = true;
+  button.textContent = 'Adding patient...';
+  // No timeout on purpose: if the answer is slow the add may still complete, and a second submit could duplicate it.
+  if (pending) pending.textContent = 'Adding the patient. Wait for the result before trying again.';
+  if (error) error.textContent = '';
   try {
     const reviewed = referralReviewFields(form);
     const result = await hmr.api('POST', '/api/referrals/commit', {
@@ -113,7 +118,17 @@ document.addEventListener('submit', async event => {
     row.dirty = false;
     if (page === 'intake') formOpen = referralRows.some(item => item.dirty && item.status !== 'added');
     renderReferrals();
-  } catch (error) { form.querySelector('.error').textContent = errorText(error); button.disabled = false; }
+  } catch (failure) {
+    // Keep the form and every entered value. Show why, right where the pharmacist is looking.
+    button.disabled = false;
+    button.textContent = label;
+    if (pending) pending.textContent = '';
+    if (error) {
+      error.textContent = 'Not added: ' + errorText(failure);
+      error.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
+      error.focus?.({ preventScroll: true });
+    }
+  }
 });
 
 document.addEventListener('dragover', event => {
