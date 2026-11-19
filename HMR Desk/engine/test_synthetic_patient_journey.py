@@ -215,6 +215,10 @@ def test_synthetic_pdf_referral_to_signed_sent_report(tmp_path, monkeypatch):
         with fitz.open(pdf) as rendered:
             pdf_text = '\n'.join(page.get_text() for page in rendered)
             assert 'Synthetic Journey' in pdf_text
+            assert rendered.page_count >= 1 and 'Synthetic medicine directions' in pdf_text
+        raw = pdf.read_bytes()
+        assert raw.startswith(b'%PDF-') and b'%%EOF' in raw[-1024:] and len(raw) >= 1000
+        assert not list(folder.glob('.hmr-pdf-*')), 'converter scratch folder left behind'
 
         # SIGN-OFF: backend checks the actual built pair, review, and consent
         # already saved in interview; no UI-only authorisation assumptions.
