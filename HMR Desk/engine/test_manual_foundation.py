@@ -64,7 +64,7 @@ def test_local_docx_build(tmp_path):
     text = "\n".join(p.text for p in doc.paragraphs)
     assert "Verify anticoagulant dose" in text
     assert "Synthetic Patient" in [c.text for c in doc.tables[1]._cells]
-    assert len(doc.tables) == 5  # title, details, medicines, finding block, follow-up block
+    assert len(doc.tables) == 6  # title, details, profile, medicines, finding block, follow-up block
     try:
         local_report_builder.render(data, target)
         assert False, "must not overwrite report"
@@ -126,8 +126,9 @@ def test_local_docx_readable_pathology_notes_and_consistent_dates(tmp_path):
     # unit strings like "mL/min/1.73m2" mid-token.
     table = next(t for t in doc.tables if t.rows[0].cells[0].text == "Test")
     widths = [cell.width for cell in table.rows[0].cells]
+    # Reference results grid 1885/1105/1870/1620/3820 twips: units column about 3.3 cm, source/notes about 6.7 cm.
     assert widths[-1] >= Cm(4.1)
-    assert widths[1] >= Cm(3) and widths[2] >= Cm(3)
+    assert widths[2] >= Cm(3.2)
     assert all(w is not None for w in widths)
 
 
