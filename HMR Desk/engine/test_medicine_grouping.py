@@ -10,7 +10,7 @@ import api
 
 
 def pbs(code, brand='Brandex', generic='Examplestatin', form='20 mg tablet, 30', pack='30', program='GE', **extra):
-    d = {'pbs_listed': True, 'schedule_form': form, 'li_form': 'Tablet', 'pack_size': pack,
+    d = {'pbs_listed': True, 'schedule_form': form, 'li_form': extra.pop('li_form', 'Tablet 20 mg'), 'pack_size': pack,
          'program_code': program, 'pbs_code': code}
     d.update(extra)
     return {'source': 'pbs', 'code': f'{program}:{code}:{code}9', 'display': f'{brand} | {form} | {code}',
@@ -34,18 +34,18 @@ def test_same_product_different_pbs_codes_share_one_group_and_keep_listings():
     assert len(groups) == 1 and not more and groups[0]['grouped']
     assert [l['pbs_code'] for l in groups[0]['listings']] == ['1001A', '1002B', '1003C']
     assert [l['program_code'] for l in groups[0]['listings']] == ['GE', 'GE', 'S100']
-    assert groups[0]['label'] == 'Brandex | 20 mg tablet, 30'
+    assert groups[0]['label'] == 'Brandex | Tablet 20 mg'
 
 
 def test_strength_form_brand_generic_and_route_differences_stay_separate():
-    rows = [pbs('1'), pbs('2', form='40 mg tablet, 30'), pbs('4', brand='Otherbrand'),
+    rows = [pbs('1'), pbs('2', li_form='Tablet 40 mg'), pbs('4', brand='Otherbrand'),
             pbs('5', generic='Examplestatin calcium'), pbs('6', manner_of_administration='ORAL')]
     groups, _ = mg.group_rows(rows, 15)
     assert len(groups) == 5 and not any(g['count'] > 1 for g in mg.finish(groups))
 
 
 def test_strength_text_is_not_parsed_as_equivalent():
-    groups, _ = mg.group_rows([pbs('1', form='20 mg tablet'), pbs('2', form='20mg tablet'), pbs('3', form='0.02 g tablet')], 15)
+    groups, _ = mg.group_rows([pbs('1', li_form='Tablet 20 mg'), pbs('2', li_form='Tablet 20mg'), pbs('3', li_form='Tablet 0.02 g')], 15)
     assert len(groups) == 3
 
 
@@ -120,7 +120,7 @@ def test_search_route_grouped_flag_is_opt_in():
 
 def test_labels_never_carry_the_pbs_code_and_uncertain_twins_say_so():
     g, _ = mg.group_rows([pbs('1001A'), pbs('1002B')], 15)
-    assert mg.finish(g)[0]['label'] == 'Brandex | 20 mg tablet, 30'
+    assert mg.finish(g)[0]['label'] == 'Brandex | Tablet 20 mg'
     twin = lambda code: {**pbs(code), 'details': {'pbs_listed': True, 'pbs_code': code}}
     g, _ = mg.group_rows([twin('1'), twin('2')], 15)
     labels = [x['label'] for x in mg.finish(g)]
@@ -139,7 +139,7 @@ def test_representative_is_first_by_code_regardless_of_input_order():
 def test_suggestions_carry_groups_and_keep_candidates_unchanged():
     with tempfile.TemporaryDirectory() as t:
         db.DATA_DIR = t
-        build(ref.reference_path(), [pbs('1001A'), pbs('1002B'), pbs('2001D', form='40 mg tablet, 30')])
+        build(ref.reference_path(), [pbs('1001A'), pbs('1002B'), pbs('2001D', li_form='Tablet 40 mg')])
         out = ref.suggest_many(['brandex'])['results'][0]
         assert len(out['candidates']) == 3
         assert sorted(len(g['indexes']) for g in out['groups']) == [1, 2]
@@ -152,3 +152,18 @@ def test_pack_size_never_separates_lines():
     groups, _ = mg.group_rows(rows, 15)
     assert len(groups) == 1 and groups[0]['grouped'] and len(groups[0]['listings']) == 4
     assert 'pack' not in groups[0]['label']
+
+
+def test_trailing_pack_count_in_schedule_form_does_not_separate_when_li_form_matches():
+    rows = [pbs('1', form='20 mg tablet, 30'), pbs('2', form='20 mg tablet, 90'), pbs('3', form='20 mg tablet, 100')]
+    groups, _ = mg.group_rows(rows, 15)
+    assert len(groups) == 1
+
+
+def test_device_wording_in_li_form_stays_separate_and_missing_li_form_falls_back_conservatively():
+    pen = pbs('1', li_form='Injection 40 mg in 0.4 mL pre-filled pen')
+    syr = pbs('2', li_form='Injection 40 mg in 0.4 mL pre-filled syringe')
+    assert len(mg.group_rows([pen, syr], 15)[0]) == 2
+    nolf = lambda code, form: pbs(code, form=form, li_form='null')
+    assert len(mg.group_rows([nolf('3', '20 mg tablet, 30'), nolf('4', '20 mg tablet, 90')], 15)[0]) == 2
+    assert len(mg.group_rows([nolf('5', '20 mg tablet, 30'), nolf('6', '20 mg tablet, 30')], 15)[0]) == 1

@@ -24,6 +24,8 @@ def test_importer_rows_group_exactly_the_equivalent_entries():
         assert len({g['label'] for g in out['groups']}) == len(out['groups'])  # no two lines read the same
         assert len(out['groups']) == 4
         assert len(out['results']) == 7
+        pens = ref.search_grouped('examplepen')['groups']
+        assert sorted(g['label'] for g in pens) == ['Penbrand | Injection 40 mg in 0.4 mL pre-filled pen | subcutaneous', 'Penbrand | Injection 40 mg in 0.4 mL pre-filled syringe | subcutaneous']
 
 
 def test_no_code_in_any_label_and_incomplete_entries_stay_separate():

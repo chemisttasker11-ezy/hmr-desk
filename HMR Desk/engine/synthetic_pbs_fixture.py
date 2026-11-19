@@ -14,16 +14,20 @@ ITEM_COLS = ['li_item_id', 'pbs_code', 'program_code', 'drug_name', 'li_drug_nam
              'originator_brand_indicator', 'benefit_type_code']
 # (li_item_id, pbs_code, program, drug, brand, li_form, schedule_form, pack, route)
 ITEMS = [
-    # Same product under three PBS codes (different programs / prescriber codes): should collapse.
-    ('9001', '1001A', 'GE', 'Examplestatin', 'Brandex', 'Tablet', 'Tablet 20 mg', '30', 'ORAL'),
-    ('9002', '1002B', 'GE', 'Examplestatin', 'Brandex', 'Tablet', 'Tablet 20 mg', '30', 'ORAL'),
-    ('9003', '1003C', 'S100', 'Examplestatin', 'Brandex', 'Tablet', 'Tablet 20 mg', '30', 'ORAL'),
-    # Different strength, pack and brand: must stay separate.
-    ('9004', '1004D', 'GE', 'Examplestatin', 'Brandex', 'Tablet', 'Tablet 40 mg', '30', 'ORAL'),
-    ('9005', '1005E', 'GE', 'Examplestatin', 'Brandex', 'Tablet', 'Tablet 20 mg', '90', 'ORAL'),
-    ('9006', '1006F', 'GE', 'Examplestatin', 'Otherbrand', 'Tablet', 'Tablet 20 mg', '30', 'ORAL'),
-    # Release type differs in the source's own form text: must stay separate.
-    ('9007', '1007G', 'GE', 'Examplestatin', 'Brandex', 'Tablet', 'Tablet 20 mg (modified release)', '30', 'ORAL'),
+    # Shapes follow the real items.csv aggregate: li_form = form + strength (+ presentation),
+    # schedule_form = "<strength> <form>, <pack count>". Same product under three PBS codes: collapse.
+    ('9001', '1001A', 'GE', 'Examplestatin', 'Brandex', 'Tablet 20 mg', '20 mg tablet, 30', '30', 'ORAL'),
+    ('9002', '1002B', 'GE', 'Examplestatin', 'Brandex', 'Tablet 20 mg', '20 mg tablet, 30', '30', 'ORAL'),
+    ('9003', '1003C', 'S100', 'Examplestatin', 'Brandex', 'Tablet 20 mg', '20 mg tablet, 30', '30', 'ORAL'),
+    # Same product, different pack count (schedule_form differs only by the trailing count): collapse.
+    ('9005', '1005E', 'GE', 'Examplestatin', 'Brandex', 'Tablet 20 mg', '20 mg tablet, 90', '90', 'ORAL'),
+    # Different strength, brand or release type: stay separate.
+    ('9004', '1004D', 'GE', 'Examplestatin', 'Brandex', 'Tablet 40 mg', '40 mg tablet, 30', '30', 'ORAL'),
+    ('9006', '1006F', 'GE', 'Examplestatin', 'Otherbrand', 'Tablet 20 mg', '20 mg tablet, 30', '30', 'ORAL'),
+    ('9007', '1007G', 'GE', 'Examplestatin', 'Brandex', 'Tablet 20 mg (modified release)', '20 mg modified release tablet, 30', '30', 'ORAL'),
+    # Device wording in li_form is a material presentation difference: stays separate.
+    ('9010', '1010K', 'GE', 'Examplepen', 'Penbrand', 'Injection 40 mg in 0.4 mL pre-filled pen', '40 mg/0.4 mL injection, 2 x 0.4 mL pen devices', '2', 'SUBCUTANEOUS'),
+    ('9011', '1011L', 'GE', 'Examplepen', 'Penbrand', 'Injection 40 mg in 0.4 mL pre-filled syringe', '40 mg/0.4 mL injection, 2 x 0.4 mL syringes', '2', 'SUBCUTANEOUS'),
     # Uncertain metadata (no form text): never grouped.
     ('9008', '1008H', 'GE', 'Samplecor', 'Corbrand', '', '', '', ''),
     ('9009', '1009J', 'GE', 'Samplecor', 'Corbrand', '', '', '', ''),

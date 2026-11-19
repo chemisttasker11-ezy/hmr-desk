@@ -9,8 +9,12 @@ source, code and release, so the chosen listing stays traceable.
 import json
 
 # Fields that must match exactly for two PBS listings to share one line.
-_IDENTITY_DETAIL_FIELDS = ('schedule_form', 'li_form', 'manner_of_administration')
-_REQUIRED_ANY = ('schedule_form', 'li_form')   # at least one form/strength text is needed
+# Real PBS items.csv (host aggregate, Nov 19): li_form is dose form plus strength and
+# presentation ("Tablet 20 mg", "Injection 40 mg in 0.4 mL pre-filled pen") with no trailing pack
+# count. schedule_form embeds the drug name and a trailing pack count ("20 mg tablet, 30"), so it is
+# only a fallback when li_form is missing, and then the pack count keeps rows separate (conservative).
+_IDENTITY_DETAIL_FIELDS = ('li_form', 'manner_of_administration')
+_REQUIRED_ANY = ('li_form', 'schedule_form')   # at least one form/strength text is needed
 _LISTING_FIELDS = ('source', 'code', 'display', 'kind', 'generic_name', 'brand_name', 'dose_form', 'release')
 
 
@@ -43,6 +47,8 @@ def identity_key(row):
     if not generic or not brand:
         return None
     fields = tuple(_text(details.get(name)) for name in _IDENTITY_DETAIL_FIELDS)
+    if not fields[0]:
+        fields = (None, fields[1], _text(details.get('schedule_form')))
     if not any(_text(details.get(name)) for name in _REQUIRED_ANY):
         return None
     return (row.get('source'), row.get('kind'), generic, brand, _text(row.get('dose_form')), fields)
@@ -85,7 +91,7 @@ def group_rows(rows, max_groups):
         entry = {'grouped': key is not None, 'listings': [_listing(row)], 'indexes': [position]}
         if key is not None:
             details = _details(row)
-            form = _text(details.get('schedule_form')) or _text(details.get('li_form'))
+            form = _text(details.get('li_form')) or _text(details.get('schedule_form'))
             route = _text(details.get('manner_of_administration'))
             # Pack, bottle and blister size never separate lines. Form and route do.
             entry['label'] = ' | '.join(filter(None, [key[3], form, route.lower() if route else None]))
