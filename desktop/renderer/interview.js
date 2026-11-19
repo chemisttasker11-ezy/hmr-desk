@@ -36,6 +36,8 @@ let interviewId = '',
   interviewRecord = null;
 let interviewSaveStatus = 'Ready', interviewConflict = false, interviewProgressFilter = 'all';
 let interviewReconciliation = null;
+// A stale review (acknowledged for earlier medicines) must be re-acknowledgeable; the engine still binds each acknowledgement to the current digest.
+function canAcknowledgeReconciliation(status) { return !!status && !status.reviewed; }
 let interviewPathology = null, interviewPathologyDirty = false, interviewPathologyError = '';
 let interviewCandidateChecks = null, interviewCandidateChecksError = '', interviewCandidateChecksStale = false;
 // Monotonic epoch for the observation layer. Every load start, relevant edit
@@ -430,11 +432,11 @@ function renderInterview() {
     <h2>Medicine reconciliation</h2>
     <p>Compare prescribed and actual medicine use. Flags require pharmacist judgement; they are not treatment recommendations.</p>
     ${interviewReconciliation
-      ? `<p role="status">${esc(interviewReconciliation.reviewed ? 'Reviewed and acknowledged for the saved medicines' : interviewReconciliation.stale ? 'Review is stale: medicines changed' : reconciliationRows.length + ' discrepancies require review')}</p>
+      ? `<p role="status">${esc(interviewReconciliation.reviewed ? 'Reviewed and acknowledged for the saved medicines' : interviewReconciliation.stale ? 'Review is stale: medicines changed. Acknowledge again for the current medicines' : reconciliationRows.length + ' discrepancies require review')}</p>
          <ul>${reconciliationRows.map(f => `<li><strong>${esc(f.medicine_id)}</strong>: ${esc(f.message)} <button type="button" data-interview-jump="meds">Go to medicines</button></li>`).join('')}</ul>`
       : '<p>Save changes, then load the current reconciliation checklist.</p>'}
     <div class="actions"><button type="button" data-reconciliation-load>Save and refresh checklist</button>
-    ${interviewReconciliation && !interviewReconciliation.reviewed && !interviewReconciliation.stale
+    ${canAcknowledgeReconciliation(interviewReconciliation)
       ? '<button type="button" data-reconciliation-ack>Acknowledge reviewed discrepancies</button>' : ''}</div>
     </section>`;
 
