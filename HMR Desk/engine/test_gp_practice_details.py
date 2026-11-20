@@ -18,6 +18,7 @@ def test_schema_v1_to_v2_adds_gp_details_without_changing_existing_rows():
         conn.executescript(db_v1)
         conn.execute("INSERT INTO patients(key,name,gp,clinic) VALUES ('synthetic','Fictional Person','Dr Example','Example Practice')")
         conn.execute('PRAGMA user_version = 1')
+        conn.commit()  # Simulate a closed historical transaction before startup migration.
         db.migrate_schema(conn)
         assert conn.execute('PRAGMA user_version').fetchone()[0] == 2
         columns = {row[1] for row in conn.execute('PRAGMA table_info(patients)')}
