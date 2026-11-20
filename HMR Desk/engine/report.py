@@ -364,7 +364,12 @@ def _demographics(conn, patient, record):
     name = p['name']; gp = p.get('gp') or h['gp'] or ''
     address = ', '.join(filter(None, (p.get('address'), p.get('suburb'))))
     patient_lines = [name, 'DOB: ' + _dmy(p.get('dob') or h['dob']), 'Medicare No: ' + (p.get('medicare') or ''), 'Address: ' + address, 'Phone: ' + (p.get('phone') or '')]
-    doctor_lines = [gp, p.get('clinic') or '', 'Request date: ' + _dmy(p.get('referral_date') or '')]
+    doctor_lines = [gp,
+                    ('Provider number: ' + p['gp_provider']) if p.get('gp_provider') else '',
+                    p.get('clinic') or '',
+                    ('Practice address: ' + p['clinic_address']) if p.get('clinic_address') else '',
+                    ('Practice phone: ' + p['clinic_phone']) if p.get('clinic_phone') else '',
+                    'Request date: ' + _dmy(p.get('referral_date') or '')]
     import steps
     visit = steps.event_date(conn, patient, 'visited') or p.get('visit_date') or h['visit'].split(' ')[0]
     return dict(name=name, assess_date=visit, patient='\n'.join(patient_lines), doctor='\n'.join(filter(None, doctor_lines)), dear='Dear ' + (gp or 'Doctor') + ',')
