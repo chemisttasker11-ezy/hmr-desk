@@ -355,7 +355,11 @@ function interviewMoveFocus(el, key, change) {
 }
 function interviewApplyPreset(key, i, preset) {
   if (key === 'meds') { interviewSetUsage(i, preset[1]); interviewRecord.details.meds[i].as_instructed = false; }
-  else interviewRecord.other_meds[i][1] = preset[1];
+  else {
+    const row = interviewRecord.other_meds[i];
+    if (row[1] && row[1] !== preset[1]) row[3] = [row[3], 'Previous directions: ' + row[1]].filter(Boolean).join('\n');
+    row[1] = preset[1];
+  }
   interviewChanged(key); renderInterview();
   document.querySelector(`[data-usage-preset="${key}"][data-row="${i}"]`)?.focus({ preventScroll: true });
 }

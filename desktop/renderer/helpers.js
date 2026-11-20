@@ -761,6 +761,10 @@ const H = (() => {
       .sort((a, b) => String(a.visit_time || '').localeCompare(String(b.visit_time || '')));
     return String((rows.find((p) => (p.visit_time || '99:99') >= now.toTimeString().slice(0, 5)) || rows[0])?.id || '');
   }
+  // The Interview tab must open the patient whose detail is open, not the day's first visit.
+  function interviewTabTarget(page, selected) {
+    return ['calendar', 'today', 'patients'].includes(page) && /^\d+$/.test(String(selected || '')) ? String(selected) : '';
+  }
   function taskGroups(tasks) {
     return tasks
       .filter((t) => t.state === 'waiting')
@@ -817,6 +821,7 @@ const H = (() => {
     taskGroups,
     nextVisitText,
     defaultInterviewId,
+    interviewTabTarget,
     bulkSteps,
     patientPathway,
     buildOutcomeText,
