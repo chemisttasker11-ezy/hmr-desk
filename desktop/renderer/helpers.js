@@ -762,8 +762,10 @@ const H = (() => {
     return String((rows.find((p) => (p.visit_time || '99:99') >= now.toTimeString().slice(0, 5)) || rows[0])?.id || '');
   }
   // The Interview tab must open the patient whose detail is open, not the day's first visit.
-  function interviewTabTarget(page, selected) {
-    return ['calendar', 'today', 'patients'].includes(page) && /^\d+$/.test(String(selected || '')) ? String(selected) : '';
+  function interviewTabTarget(page, selected, stopPatientId) {
+    const id = (value) => /^\d+$/.test(String(value || '')) ? String(value) : '';
+    if (['calendar', 'today', 'patients'].includes(page) && id(selected)) return id(selected);
+    return page === 'calendar' ? id(stopPatientId) : '';
   }
   function taskGroups(tasks) {
     return tasks

@@ -343,7 +343,7 @@ document.addEventListener('click', async (event) => {
   // stop names sit inside <summary>: open the patient instead of toggling the row
   if (b.matches('summary [data-drawer-patient]')) event.preventDefault();
   try {
-    if (b.dataset.page === 'interview' && H.interviewTabTarget(page, selected)) return await openInterview(H.interviewTabTarget(page, selected));
+    if (b.dataset.page === 'interview' && H.interviewTabTarget(page, selected, highlightedStopPatient)) return await openInterview(H.interviewTabTarget(page, selected, highlightedStopPatient));
     if (b.dataset.page) return await navigate(b.dataset.page);
     if (b.dataset.removeOneOff !== undefined) {
       oneOffNames = await hmr.oneOff('remove', page, Number(b.dataset.removeOneOff));

@@ -15,6 +15,14 @@ test('Interview tab targets the open patient detail on calendar, today and patie
   assert.equal(H.interviewTabTarget('interview', '2'), '');
 });
 
+test('Interview tab uses the highlighted calendar stop patient when no detail is open', () => {
+  assert.equal(H.interviewTabTarget('calendar', null, '2'), '2');
+  assert.equal(H.interviewTabTarget('calendar', '5', '2'), '5');
+  assert.equal(H.interviewTabTarget('calendar', null, ''), '');
+  assert.equal(H.interviewTabTarget('today', null, '2'), '');
+  assert.equal(H.interviewTabTarget('patients', null, '2'), '');
+});
+
 test('the default interview id still ignores a selection (documents the old path)', () => {
   const visits = [{ id: 1, visit_date: '2026-11-20', visit_time: '09:00', state: 'confirmed' }, { id: 2, visit_date: '2026-11-20', visit_time: '11:00', state: 'confirmed' }];
   assert.equal(H.defaultInterviewId(visits, new Date(2026, 10, 20, 8, 0)), '1');
