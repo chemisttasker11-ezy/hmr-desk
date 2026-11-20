@@ -196,7 +196,7 @@ def _save(conn, patient, data):
     if expected is not None and not isinstance(expected, str): raise ValueError('invalid expected_revision')
     data = with_trusted_policy(conn, patient, data)
     validate(data)
-    data = manual_defaults.apply_followup_decision({k: v for k, v in data.items() if k not in ('interview_newer', 'pathology_newer', 'revision', 'expected_revision', 'demographic_mismatches', 'demographic_conflicts', 'suggestion_context_sha256')})
+    data = manual_defaults.apply_followup_decision({k: v for k, v in data.items() if k not in ('interview_newer', 'pathology_newer', 'revision', 'expected_revision', 'demographic_mismatches', 'demographic_conflicts', 'medication_recommendations', 'suggestion_context_sha256')})
     if expected is not None:
         # Compare and write in one write transaction so two saves cannot both pass the check.
         if not conn.in_transaction: conn.execute('BEGIN IMMEDIATE')
