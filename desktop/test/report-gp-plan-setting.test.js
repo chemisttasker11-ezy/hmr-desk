@@ -17,7 +17,7 @@ test('GP Plan toggle appears in dedicated Reports settings and defaults off', ()
   assert.match(html, /<h2>Reports<\/h2>/);
   assert.match(html, /id="setting-report_include_gp_plan"/);
   assert.doesNotMatch(html, /id="setting-report_include_gp_plan" type="checkbox" checked/);
-  assert.match(html, /only newly generated reports/);
+  assert.match(html, /new HMR medicine tables/);
   const active = vm.runInContext(`practiceSettings[0].value = true; practiceFields();`, context);
   assert.match(active, /id="setting-report_include_gp_plan" type="checkbox" checked/);
 });
