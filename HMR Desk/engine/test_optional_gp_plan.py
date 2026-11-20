@@ -87,12 +87,13 @@ def test_owner_prototype_supports_both_settings_without_changing_source(tmp_path
     assert template.read_bytes() == untouched
 
 
-def test_unknown_fifth_owner_column_never_silently_removed(tmp_path):
+@pytest.mark.parametrize('enabled', (False, True))
+def test_unknown_fifth_owner_column_never_silently_removed(tmp_path, enabled):
     template = tmp_path / 'template.docx'
     _prototype_template(template, 5)
     doc = Document(template)
     doc.tables[0].rows[0].cells[-1].text = 'Critical other data'
     doc.save(template)
     with pytest.raises(ValueError, match='GP Plan'):
-        owner_renderer.render(sample(), tmp_path / 'out.docx', template, include_gp_plan=False)
+        owner_renderer.render(sample(), tmp_path / 'out.docx', template, include_gp_plan=enabled)
     assert not (tmp_path / 'out.docx').exists()
