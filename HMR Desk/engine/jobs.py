@@ -287,6 +287,8 @@ def report_build(patient_id, pdf=False):
         import pharmacist_identity
         identity = pharmacist_identity.resolve(conn)
         data = dict(data, pharmacist_details=identity['text'])
+        import settings as hmr_settings
+        include_gp_plan = hmr_settings.get(conn, 'report_include_gp_plan')
         conn.rollback()  # end the read snapshot before rendering; later writes (events, state) must not be blocked by it
         from pathlib import PureWindowsPath
         raw = str(data['out'])
@@ -317,10 +319,10 @@ def report_build(patient_id, pdf=False):
         with tempfile.TemporaryDirectory(prefix='.hmr-docx-', dir=folder) as directory:
             draft = Path(directory) / target.name
             if approved:
-                template_report_builder.render(data, draft, approved[0])
+                template_report_builder.render(data, draft, approved[0], include_gp_plan=include_gp_plan)
                 placed = template_report_builder.has_marker(approved[0], 'PHARMACIST')
             else:
-                local_report_builder.render(data, draft)
+                local_report_builder.render(data, draft, include_gp_plan=include_gp_plan)
             if not draft.is_file(): raise RuntimeError('Draft Word report failed to render')
             if target.exists(): raise FileExistsError('Output appeared during report rendering')
             os.replace(draft, target)
@@ -361,6 +363,7 @@ def report_build(patient_id, pdf=False):
             'template_version': approved[1]['version'] if approved else '',
             'template_sha256': approved[1]['sha256'] if approved else '',
             'template_approved': bool(approved),
+            'report_include_gp_plan': include_gp_plan,
             'source_files_sha256': snapshot['source_files_sha256'],
             'clinical_snapshot_sha256': snapshot['clinical_snapshot_sha256'],
             'demographics': snapshot['demographics'],
