@@ -20,8 +20,8 @@ def test_source_saved_during_render_is_not_recorded_as_built_from(tmp_path, monk
         clinical_before = report_auth.clinical_snapshot_hash(conn, patient)
     real = local_report_builder.render
 
-    def render_then_source_changes(data, draft):
-        out = real(data, draft)
+    def render_then_source_changes(data, draft, include_gp_plan=False):
+        out = real(data, draft, include_gp_plan=include_gp_plan)
         with connection() as other:  # a pathology result is saved while the document is being rendered
             row = dict(id='a' * 32, test='Serum creatinine', value='98', unit='umol/L', reference_interval='60-110',
                        sample_date='2026-11-12', source='synthetic.pdf', verified=False, comment='')
