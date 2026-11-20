@@ -282,6 +282,8 @@ def report_build(patient_id, pdf=False):
             'clinical_snapshot_sha256': report_auth.clinical_snapshot_hash(conn, p),
             'demographics': report.demographic_status(conn, p, data),  # block name -> matches/kept/unresolved, no text
         }
+        import interaction_scope
+        data, interaction_scope_result = interaction_scope.apply_to_report(conn, p, data)
         conn.rollback()  # end the read snapshot before rendering; later writes (events, state) must not be blocked by it
         from pathlib import PureWindowsPath
         raw = str(data['out'])

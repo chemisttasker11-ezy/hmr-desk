@@ -336,6 +336,8 @@ def render(data, target):
                 _cell_text(cell, value, 9)
         _header_row(table, fill)
         _fixed_layout(table, grid)
+    if data.get("interaction_scope_note", "").strip():
+        doc.add_paragraph(data["interaction_scope_note"])
     _heading(doc, "Review Findings", HEAD_BLUE)
     for index, finding in enumerate(data["issues"], 1):
         lead = doc.add_paragraph()
