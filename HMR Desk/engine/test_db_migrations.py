@@ -40,7 +40,7 @@ def test_legacy_schema_upgrade_preserves_rows_and_does_not_reapply(tmp_path, mon
         legacy.execute("INSERT INTO messages(id,direction,body,state,created_at) VALUES ('old','in','test','received','2026-01-01')")
         assert legacy.execute('PRAGMA user_version').fetchone()[0] == 0
     with db.connect(str(target)) as upgraded:
-        assert upgraded.execute('PRAGMA user_version').fetchone()[0] == 1
+        assert upgraded.execute('PRAGMA user_version').fetchone()[0] == db.SCHEMA_VERSION
         snapshots = list((tmp_path / 'userdata' / '.migration-snapshots').glob('before-schema-*.db'))
         assert len(snapshots) == 1
         with db.open_encrypted(snapshots[0]) as previous:
@@ -50,6 +50,7 @@ def test_legacy_schema_upgrade_preserves_rows_and_does_not_reapply(tmp_path, mon
         assert upgraded.execute("SELECT body FROM messages WHERE id='old'").fetchone()[0] == 'test'
         assert 'ai_intent' in {r[1] for r in upgraded.execute('PRAGMA table_info(messages)')}
         assert 'format' in {r[1] for r in upgraded.execute('PRAGMA table_info(tasks)')}
+        assert {'gp_provider', 'clinic_address', 'clinic_phone'} <= {r[1] for r in upgraded.execute('PRAGMA table_info(patients')}
     with db.connect(str(target)) as again:
         assert again.execute("SELECT COUNT(*) FROM patients").fetchone()[0] == 1
     assert len(list((tmp_path / 'userdata' / '.migration-snapshots').glob('before-schema-*.db'))) == 1
