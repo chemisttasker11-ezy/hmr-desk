@@ -241,11 +241,11 @@ const H = (() => {
     const reasonText = {
       document_changed: 'the Word file changed', pdf_changed: 'the PDF changed or is missing', report_content_changed: 'the report content changed since it was built',
       interview_changed: 'the interview changed', pathology_changed: 'the pathology changed', source_files_changed: 'the original referral or pathology files changed',
-      clinical_record_changed: 'the clinical record changed', cannot_verify: 'the report could not be checked',
+      clinical_record_changed: 'the clinical record changed', pharmacist_identity_changed: 'the pharmacist details in Settings changed', cannot_verify: 'the report could not be checked',
     };
     const reasons = (Array.isArray(status.reasons) ? status.reasons : []).map((r) => reasonText[r] || 'a change was detected');
     let line;
-    if (status.status === 'current') line = 'Matches the saved interview and pathology.';
+    if (status.status === 'current') line = 'Matches the saved interview and pathology, and the report text saved when it was built. Changes not yet saved in the editor are not included.';
     else if (status.status === 'outdated') line = `Outdated: ${reasons.join('; ') || 'a change was detected'}. Rebuild before sign-off.`;
     else if (status.status === 'not_generated') line = 'No report has been built yet.';
     else line = 'Report status could not be checked.';

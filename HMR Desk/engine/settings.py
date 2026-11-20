@@ -18,6 +18,7 @@ DEFS = {
     'pharmacist_name': ('Pharmacist name', 'text', ''),
     'pharmacist_phone': ('Pharmacist phone', 'text', ''),
     'pharmacist_credential': ('Pharmacist credential', 'text', 'Credentialed Consultant Pharmacist'),
+    'pharmacist_credential_confirmed': ('Pharmacist credential above is confirmed for reports', 'bool', False),
     'referral_valid_days': ('Referral valid days', 'int', 90, 30, 365),
     'referral_warn_days': ('Referral warning days', 'int', 30, 1, 90),
     'followup_first_after_days': ('First follow-up after days', 'int', 30, 1, None),

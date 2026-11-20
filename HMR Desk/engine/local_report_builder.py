@@ -194,14 +194,14 @@ def _title_table(doc, assess, report):
     return table
 
 
-def _details_table(doc, patient, doctor):
+def _details_table(doc, patient, doctor, pharmacist=""):
     """Three columns: patient, doctor, accredited pharmacist. Pharmacist data is not in the report spec."""
     table = doc.add_table(rows=2, cols=3)
     _borders(table)
     for cell, label, value in zip(table.rows[0].cells, ("Patient Details", "Doctor Details", "Accredited Pharmacist Details"),
                                   (None, None, None)):
         _cell_text(cell, label, 9, True)
-    for cell, value in zip(table.rows[1].cells, (patient, doctor, "Not supplied in the report data")):
+    for cell, value in zip(table.rows[1].cells, (patient, doctor, pharmacist or "Not supplied in the report data")):
         _cell_text(cell, value, 9)
     _fixed_layout(table, DETAILS_GRID)
     return table
@@ -304,7 +304,7 @@ def render(data, target):
     marker = doc.add_paragraph()
     _run(marker, PROVISIONAL_LABEL, 9, True)
     marker.paragraph_format.space_before = Pt(6)
-    _details_table(doc, data["patient"], data["doctor"])
+    _details_table(doc, data["patient"], data["doctor"], str(data.get("pharmacist_details", "") or "").strip())
     _heading(doc, "Patient Profile", HEAD_BLUE)
     # Reference profile table: 2 columns, 3 rows. Row labels are the earlier host heading wording. The row-to-field
     # correspondence is inferred from the row count and is unconfirmed.
@@ -362,6 +362,8 @@ def render(data, target):
         _plan_block(doc, (("Follow-up: ", data["followup"]),))
     _run(doc.add_paragraph(), "Yours Sincerely,", PLAN_PT, True)
     signoff = doc.add_paragraph()
-    _run(signoff, "Pharmacist name, credentials, phone and email: not supplied in the report data (provisional).", PLAN_PT, True)
+    pharmacist = str(data.get("pharmacist_details", "") or "").strip()
+    signoff_text = (pharmacist.replace("\n", ", ") + " (provisional).") if pharmacist else "Pharmacist name, credentials, phone and email: not supplied in the report data (provisional)."
+    _run(signoff, signoff_text, PLAN_PT, True)
     doc.save(target)
     return target

@@ -284,6 +284,9 @@ def report_build(patient_id, pdf=False):
         }
         import interaction_scope
         data, interaction_scope_result = interaction_scope.apply_to_report(conn, p, data)
+        import pharmacist_identity
+        identity = pharmacist_identity.resolve(conn)
+        data = dict(data, pharmacist_details=identity['text'])
         conn.rollback()  # end the read snapshot before rendering; later writes (events, state) must not be blocked by it
         from pathlib import PureWindowsPath
         raw = str(data['out'])
@@ -315,6 +318,7 @@ def report_build(patient_id, pdf=False):
             draft = Path(directory) / target.name
             if approved:
                 template_report_builder.render(data, draft, approved[0])
+                placed = template_report_builder.has_marker(approved[0], 'PHARMACIST')
             else:
                 local_report_builder.render(data, draft)
             if not draft.is_file(): raise RuntimeError('Draft Word report failed to render')
@@ -322,6 +326,10 @@ def report_build(patient_id, pdf=False):
             os.replace(draft, target)
         output = ('Built approved-layout Word draft ' + approved[1]['version']
                   if approved else 'Built a provisional local Word report (not owner-approved)')
+        if identity['text'] and approved and not placed:
+            output += '. Pharmacist details were not placed: the approved layout has no pharmacist placeholder.'
+        if identity['name'] and identity['note']:
+            output += '. ' + identity['note']
         if pdf:
             try:
                 converted = pdf_export.convert(target, pdf_target)
@@ -352,6 +360,7 @@ def report_build(patient_id, pdf=False):
             'source_files_sha256': snapshot['source_files_sha256'],
             'clinical_snapshot_sha256': snapshot['clinical_snapshot_sha256'],
             'demographics': snapshot['demographics'],
+            'pharmacist_identity_sha256': pharmacist_identity.digest(identity),
         }
         db.log(conn, patient_id, 'report_build', evidence, 'job')
         return output

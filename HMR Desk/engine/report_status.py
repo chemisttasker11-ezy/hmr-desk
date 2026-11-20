@@ -39,6 +39,11 @@ def _latest_build(conn, patient):
     return detail if isinstance(detail, dict) and detail else None
 
 
+def _identity_digest(conn):
+    import pharmacist_identity
+    return pharmacist_identity.digest(pharmacist_identity.resolve(conn))
+
+
 def _reasons(conn, patient, detail):
     reasons = []
     root = jobs.patient_folder(patient).resolve()
@@ -58,6 +63,8 @@ def _reasons(conn, patient, detail):
             reasons.append('interview_changed')
         if pathology_records.revision(conn, patient) != detail.get('pathology_revision'):
             reasons.append('pathology_changed')
+        if detail.get('pharmacist_identity_sha256') and detail['pharmacist_identity_sha256'] != _identity_digest(conn):
+            reasons.append('pharmacist_identity_changed')
         if detail.get('source_files_sha256') != report_auth.source_snapshot(conn, patient):
             reasons.append('source_files_changed')
         if detail.get('clinical_snapshot_sha256') != report_auth.clinical_snapshot_hash(conn, patient):

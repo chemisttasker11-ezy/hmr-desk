@@ -30,7 +30,8 @@ TEXT_FIELDS = {
     'OBS': 'obs', 'FOLLOWUP': 'followup',
 }
 # Optional text markers: filled when present in the approved layout, never required.
-OPTIONAL_TEXT_FIELDS = {'PATIENT_NAME': 'patient_name', 'PATH_DATE': 'path_date', 'INTERACTION_SCOPE': 'interaction_scope_note'}
+OPTIONAL_TEXT_FIELDS = {'PATIENT_NAME': 'patient_name', 'PATH_DATE': 'path_date', 'INTERACTION_SCOPE': 'interaction_scope_note',
+                        'PHARMACIST': 'pharmacist_details'}
 ISSUES_END = '{{HMR_ISSUES_END}}'
 LINE_PROTO = '{{HMR_LINE}}'
 ISSUE_FIELDS = {
@@ -292,6 +293,12 @@ def _table(doc, rows, labels):
             cell.text = value
     _paginate_rows(table)
     return table
+
+
+def has_marker(template, name):
+    """True when the approved layout carries the optional {{HMR_<name>}} placeholder."""
+    marker = '{{HMR_' + name + '}}'
+    return any(marker in p.text for p in _paragraphs(Document(Path(template))))
 
 
 def render(data, target, template):
