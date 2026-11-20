@@ -320,6 +320,10 @@ async function call(name, args, fetcher = fetch, read = fs.readFile) {
   const RESTRICTED_ACTIONS = ['signed_off', 'report_sent', 'claimed', 'claim_now'];
   if (process.env.HMR_MCP_RESTRICT === '1' && (RESTRICTED_TOOLS.includes(name) || (name === 'hmr_patient_action' && RESTRICTED_ACTIONS.includes(args.action))))
     throw Error('Restricted: sending and clinical authorisation are disabled for this session');
+  if (process.env.HMR_MCP_RESTRICT === '1') {
+    const why = require('./tool-policy').refusal(name, args);
+    if (why) throw Error('Restricted: ' + why + ' is not allowed by the default policy for this session');
+  }
   const [, , , , method, template] = defs[index];
   const app = name.startsWith('app_');
   let route = template.replace(':id', encodeURIComponent(args.id)).replace(':number', encodeURIComponent(args.number)).replace(':date', encodeURIComponent(args.date));
