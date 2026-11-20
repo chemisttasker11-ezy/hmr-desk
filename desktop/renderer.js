@@ -213,7 +213,7 @@ async function health() {
   const inactive = portals.filter(portal => portal.state === 'not open');
   $('health').innerHTML = chip(`Engine ${s ? 'connected' : 'unavailable'}`, s ? 'ok' : 'bad') +
     chip(`Phone ${phone}`, phone === 'online' ? 'ok' : 'warn') +
-    chip(`Outbox ${s?.outbox_mode ? String(s.outbox_mode).toUpperCase() : 'unknown'}`, s?.outbox_mode === 'live' ? 'ok' : 'warn') +
+    chip(`Outbox ${s?.outbox_mode ? String(s.outbox_mode).toUpperCase() : 'unknown'}`, s?.outbox_mode === 'live' ? 'ok' : 'warn').replace('<span ', `<span title="${s?.outbox_mode === 'live' ? 'Live: text messages can reach patients' : 'Test: text messages go only to the configured test phone, and are sent there when the phone gateway is online. Not a no-send mode. Reports, claims and portal actions are not limited by this setting.'}" `) +
     portals.filter(portal => portal.state !== 'not open').map(portal => portal.html).join('') +
     (inactive.length ? `<details class="portal-inactive" ${expanded ? 'open' : ''}><summary>Portals: ${inactive.length} not open</summary><div>${inactive.map(portal => portal.html).join('')}</div></details>` : '');
   if (focusTarget && (document.activeElement === focused || document.activeElement === document.body)) {
@@ -343,6 +343,7 @@ document.addEventListener('click', async (event) => {
   // stop names sit inside <summary>: open the patient instead of toggling the row
   if (b.matches('summary [data-drawer-patient]')) event.preventDefault();
   try {
+    if (b.dataset.page === 'interview' && H.interviewTabTarget(page, selected, highlightedStopPatient)) return await openInterview(H.interviewTabTarget(page, selected, highlightedStopPatient));
     if (b.dataset.page) return await navigate(b.dataset.page);
     if (b.dataset.removeOneOff !== undefined) {
       oneOffNames = await hmr.oneOff('remove', page, Number(b.dataset.removeOneOff));

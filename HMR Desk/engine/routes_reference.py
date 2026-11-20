@@ -16,12 +16,18 @@ def handle(conn, method, path, query, body):
                 q = (query.get('q') or [''])[0]
                 try:
                     return 200, reference_library.search(q)
-                except reference_library.ReferenceUnavailable:
+                except reference_library.ReferenceUnavailable as first_error:
                     # Packaged tier: serve the reviewed packaged tables, explicitly
                     # labelled as unverified extraction - never as the user's own PDF.
                     import brainstorm_tables_lookup
                     try:
-                        return 200, brainstorm_tables_lookup.search(q)
+                        result = brainstorm_tables_lookup.search(q)
+                        # Say whether the user's own original was never registered or is registered but now unavailable.
+                        # This only labels the result: packaged hits stay unverified and are never page-verified.
+                        result['registered_original'] = (
+                            {'state': 'registered_unavailable', 'reason': str(first_error)}
+                            if reference_library.registry_path().exists() else {'state': 'never_registered', 'reason': ''})
+                        return 200, result
                     except brainstorm_tables_lookup.TablesUnavailable as tables_exc:
                         if 'too long' in str(tables_exc):
                             raise reference_library.ReferenceUnavailable(str(tables_exc)) from None

@@ -72,7 +72,7 @@ def test_readiness_reuses_recorded_state_and_keeps_unknown_visible(tmp_path, mon
     s = report_status.report_status(conn, patient)
     got = items(s)
     assert got['medicines_reconciled'] == 'met' and got['demographics_match'] == 'met'
-    assert got['consent_recorded'] == 'unknown'  # the synthetic record carries no consent block
+    assert got['consent_recorded'] == 'met'  # the shared sign-off fixture now includes valid interview consent
     assert s['readiness']['clinically_ready'] is None and 'not clinical sign-off' in s['readiness']['note'].lower()
     record = report_status.interview.load(conn, patient)
     record['consent'] = {'signed': False, 'date': '', 'by': 'patient', 'relationship': 0, 'authorised_name': ''}

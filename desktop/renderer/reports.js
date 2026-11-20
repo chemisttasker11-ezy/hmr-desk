@@ -101,6 +101,7 @@ function renderMedicines() {
     <p>These are the medicines the patient is taking, copied from the interview. Check the generic names (and add brands if useful) &#8212; this list is used for the eMIMS interaction check. Stopped medicines are left out.</p>
     ${medicineData.proposed && (medicineData.meds.length || medicineData.allergies.length) ? `<p>Copied from the interview &#8212; ${medicineData.meds.length} medicines, ${medicineData.allergies.length} allergies</p>` : ''}
     ${(medicineData.interview_usage || []).length ? `<p>Review interview medicine use below. Confirm only medicines currently used; a different strength or formulation may still be used when another has stopped.</p><ul>${medicineData.interview_usage.map(item => `<li>${esc(item.source)} — ${esc(item.name)}: ${esc(item.detail)} ${esc((item.directions || []).filter(Boolean).join(" | "))}</li>`).join('')}</ul>` : ''}
+    ${(medicineData.interaction_scope?.statement || []).length ? `<div class="notice" role="status" data-interaction-scope>${medicineData.interaction_scope.statement.map(line => `<p>${esc(line)}</p>`).join('')}</div>` : ''}
     ${medicineData.medicine_snapshot_changed ? '<p class="error" role="alert">The interview medicine identity, directions, use or allergies changed since this list was confirmed. Review the current interview list below before saving; previous interaction results are not current.</p>' : ''}
     ${medicineData.medicine_snapshot?.items?.length ? `<details open><summary>Current interview medicine identities and use</summary><ul>${medicineData.medicine_snapshot.items.map(item => { const ref = item.metadata?.reference; return `<li>${esc(item.values[0])}${ref ? ` | ${esc(ref.display)} (${ref.source === 'pbs' ? 'PBS' : esc(ref.source.toUpperCase()) + ' ' + esc(ref.code)}, release ${esc(ref.release)})` : ' | Free text, no catalogue identity'} | ${esc(item.metadata?.use_status || 'Use not confirmed')}</li>`; }).join('')}</ul><p>These are interview source identities, not proof of an eMIMS mapping. Keep any mapping changes explicit.</p></details>` : ''}
     <div id="medicine-rows">${medicineData.meds
@@ -133,6 +134,21 @@ function readMedicines() {
     .split(/\r?\n/)
     .map((x) => x.trim())
     .filter(Boolean);
+}
+// An engine job queued from a Reports card finishes after the card was drawn, so the card kept its old
+// "report spec missing" state until the user left the page. Redraw once the job has stopped queued or running.
+// A job waiting on an external site is not polled here; the Run page owns that.
+async function refreshReportsAfterTask(step, patientId, tries = 30, pauseMs = 1000) {
+  for (let i = 0; i < tries; i++) {
+    await new Promise((done) => setTimeout(done, pauseMs));
+    if (page !== 'reports') return false;
+    const queue = await hmr.api('GET', '/api/run');
+    const active = (queue.tasks || []).some((t) => t.patient_id === patientId && t.step === step && ['queued', 'running'].includes(t.state));
+    if (!active) break;
+  }
+  if (page !== 'reports' || medicinePatient || formOpen) return false;
+  await reports();
+  return true;
 }
 async function reportClick(b) {
   if (b.dataset.reportOpen) {
@@ -173,7 +189,10 @@ async function reportClick(b) {
     if (b.dataset.reportStep === 'interactions' && /^[1-9]\d* task\(s\) queued/.test(runMessage)) {
       if (runMessage.includes('\n')) alert(runMessage);
       await navigate('emims');
-    } else $('report-message').textContent = runMessage;
+    } else {
+      $('report-message').textContent = runMessage;
+      if (/^[1-9]\d* task\(s\) queued/.test(runMessage)) void refreshReportsAfterTask(b.dataset.reportStep, Number(b.dataset.id)).catch(() => {});
+    }
     return true;
   }
   if (b.dataset.reportFolder) {

@@ -88,6 +88,9 @@ jobs:
         run: python scripts/smoke-frozen-pdf.py "HMR Desk/engine/dist/hmr-engine/hmr-engine.exe"
       - name: Synthetic short and long template-bound DOCX-to-PDF layout regression
         run: python scripts/smoke-template-pdf.py
+      - name: Synthetic referral-to-signed-and-sent HMR journey (real PDF, DOCX and offline PDF)
+        working-directory: HMR Desk/engine
+        run: python -m pytest -q test_synthetic_patient_journey.py
       - name: Build NSIS installer with engine resources
         working-directory: desktop
         run: npm run dist

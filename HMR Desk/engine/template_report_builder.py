@@ -30,7 +30,7 @@ TEXT_FIELDS = {
     'OBS': 'obs', 'FOLLOWUP': 'followup',
 }
 # Optional text markers: filled when present in the approved layout, never required.
-OPTIONAL_TEXT_FIELDS = {'PATIENT_NAME': 'patient_name', 'PATH_DATE': 'path_date'}
+OPTIONAL_TEXT_FIELDS = {'PATIENT_NAME': 'patient_name', 'PATH_DATE': 'path_date', 'INTERACTION_SCOPE': 'interaction_scope_note'}
 ISSUES_END = '{{HMR_ISSUES_END}}'
 LINE_PROTO = '{{HMR_LINE}}'
 ISSUE_FIELDS = {
@@ -302,6 +302,11 @@ def render(data, target, template):
     doc = Document(template)
     occurrences = {}
     all_paragraphs = list(_paragraphs(doc))
+    note = data.get('interaction_scope_note', '')
+    if isinstance(note, str) and note.strip() and not any('{{HMR_INTERACTION_SCOPE}}' in p.text for p in all_paragraphs):
+        # The approved layout has no marker for the interaction scope. Never drop the warning and never change the
+        # layout: it is appended to the intro paragraph (same formatting), which sits above the medicine tables.
+        data = dict(data, intro=(data.get('intro', '').rstrip() + '\n\n' if data.get('intro', '').strip() else '') + note)
     for paragraph in all_paragraphs:
         original = paragraph.text
         matches = list(MARKER.finditer(original))
