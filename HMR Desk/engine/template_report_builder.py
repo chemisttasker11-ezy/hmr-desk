@@ -272,6 +272,8 @@ def _adapt_gp_plan_prototype(table, include_gp_plan):
     resulting Word/PDF before clinical sign-off.
     """
     count = len(table.columns)
+    if count == 5 and (not table.rows or ''.join(table.rows[0].cells[-1].text.casefold().split()) not in ('gpplan', 'gpplan/feedback')):
+        raise ValueError('Five-column owner template must label its last column GP Plan')
     if include_gp_plan and count == 4:
         original = [int(col.width or Emu(800000)) for col in table.columns]
         total = sum(original)
@@ -293,8 +295,6 @@ def _adapt_gp_plan_prototype(table, include_gp_plan):
     elif not include_gp_plan and count == 5:
         # Remove only a clearly labelled GP Plan column. Never discard an unrelated
         # fifth column from an approved template.
-        if not table.rows or ''.join(table.rows[0].cells[-1].text.casefold().split()) not in ('gpplan', 'gpplan/feedback'):
-            raise ValueError('Five-column owner template must label its last column GP Plan to turn it off')
         for row in table.rows:
             row._tr.remove(row.cells[-1]._tc)
         table._tbl.tblGrid.remove(table._tbl.tblGrid[-1])
