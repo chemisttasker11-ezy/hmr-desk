@@ -41,7 +41,7 @@ async function messagesBoard() {
 function renderMessageBoard(data) {
   const q = (messageFilterQuery || '').toLowerCase().trim();
   const matches = (m) => !q || [m.patient_name, m.name, m.phone, m.body].some(v => String(v || '').toLowerCase().includes(q));
-  $('screen').innerHTML = `<p class="outbox-banner">${data.outbox_mode === 'test' ? 'Test mode - only the test phone receives messages' : 'Live'}</p>
+  $('screen').innerHTML = `<p class="outbox-banner">${data.outbox_mode === 'test' ? 'Test mode - only the test phone receives messages. Text messages to the test phone can still be sent. This mode does not stop reports, claims or portal actions.' : 'Live'}</p>
     <div class="message-search"><label class="search">Search messages<input id="message-search" placeholder="Search by patient name, phone or message text..." value="${esc(messageFilterQuery)}"></label></div>
     <div class="actions board-toolbar"><button class="primary" data-check-messages>Check messages now</button><span id="check-status" role="status">${checkStatus}</span></div>
     <div class="message-board">${[['needs_you', 'Needs you'], ['waiting', 'Waiting for reply'], ['upcoming', 'Upcoming visits'], ['recent', 'Recent']].map(([key, title]) => {
