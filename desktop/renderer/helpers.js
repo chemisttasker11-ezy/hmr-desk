@@ -11,6 +11,24 @@ const H = (() => {
     const match = String(value).match(/^(\d{4})-(\d\d)-(\d\d)/);
     return match ? `${match[3]}/${match[2]}/${match[1]}` : String(value);
   }
+  // Advisory only: compares the report date with the pharmacist's own local calendar day (the day on this PC, not UTC).
+  // Never changes the date. Accepts DD/MM/YYYY (as stored) or an ISO date.
+  function reportDateReview(value, now = new Date()) {
+    const text = String(value ?? '').trim();
+    const today = `${String(now.getDate()).padStart(2, '0')}/${String(now.getMonth() + 1).padStart(2, '0')}/${now.getFullYear()}`;
+    if (!text) return { state: 'missing', today, text: 'No report date is set. Set one before building.' };
+    const m = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/) || text.match(/^(\d{4})-(\d\d)-(\d\d)(?:$|T)/);
+    const [d, mo, y] = !m ? [] : (m[0].includes('/') ? [+m[1], +m[2], +m[3]] : [+m[3], +m[2], +m[1]]);
+    const real = m && new Date(y, mo - 1, d);
+    if (!m || real.getFullYear() !== y || real.getMonth() !== mo - 1 || real.getDate() !== d) {
+      return { state: 'malformed', today, text: `"${text}" is not a valid date. Write it as DD/MM/YYYY.` };
+    }
+    const shown = `${String(d).padStart(2, '0')}/${String(mo).padStart(2, '0')}/${y}`;
+    const diff = real.getTime() - new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    if (diff < 0) return { state: 'old', today, shown, text: `Report date is ${shown}. Today is ${today}. Keep it, or set it to today.` };
+    if (diff > 0) return { state: 'future', today, shown, text: `Report date ${shown} is after today (${today}). Keep it only if that is intended.` };
+    return { state: 'ok', today, shown, text: '' };
+  }
   function interviewOutstanding(record) {
     const referral = record.meds || [], found = record.other_meds || [];
     const meds = record.details?.meds || [], other = record.details?.other_meds || [];
@@ -805,6 +823,7 @@ const H = (() => {
   return {
     medicineItemId,
     localDate,
+    reportDateReview,
     esc,
     date,
     attentionLabel,
