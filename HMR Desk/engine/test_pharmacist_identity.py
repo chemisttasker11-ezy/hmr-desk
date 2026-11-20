@@ -91,3 +91,82 @@ def test_pharmacist_change_after_build_marks_report_outdated_only_when_evidence_
     s = report_status.report_status(conn, patient)
     assert s['status'] == 'outdated' and 'pharmacist_identity_changed' in s['reasons']
     conn.close()
+
+
+# ---- end to end through jobs.report_build (synthetic) ----
+import hashlib
+
+import jobs
+import report
+import template_report_builder
+from test_report_save_revision import _setup, _saved_report
+
+
+def _install_template(tmp_path, monkeypatch, with_placeholder):
+    root = tmp_path / 'tpl'; root.mkdir()
+    path = root / 'approved-hmr.docx'
+    make_template(path)
+    if with_placeholder:
+        doc = Document(path); doc.add_paragraph('Reviewed by {{HMR_PHARMACIST}}'); doc.save(path)
+    (root / 'approved-hmr.json').write_text(json.dumps({
+        'version': 'synthetic-test', 'sha256': hashlib.sha256(path.read_bytes()).hexdigest(),
+        'approved_by': 'Synthetic QA', 'approved_on': '2026-11-16'}))
+    monkeypatch.setattr(template_report_builder, 'active_template_root', lambda: root)
+
+
+def _build(tmp_path, monkeypatch, with_template=None, **identity):
+    connection = _setup(tmp_path, monkeypatch)
+    if with_template is not None:
+        _install_template(tmp_path, monkeypatch, with_template)
+    with connection() as conn:
+        patient, loaded = _saved_report(conn)
+        loaded.update(followup_decision='required', followup='Synthetic plan: review again in three months.', expected_revision=loaded['revision'])
+        report.save(conn, patient, loaded)
+        if identity:
+            settings.update(conn, identity)
+        conn.commit()
+    output = jobs.report_build(patient['id'])
+    with connection() as conn:
+        folder = jobs.patient_folder(patient)
+        doc = Document(sorted(folder.glob('*.docx'))[0])
+        detail = json.loads(conn.execute("SELECT detail FROM events WHERE patient_id=? AND type='report_build' ORDER BY id DESC LIMIT 1",
+                                         (patient['id'],)).fetchone()['detail'])
+    return connection, patient, output, text(doc), detail
+
+
+def test_build_without_template_prints_identity_and_records_hash(tmp_path, monkeypatch):
+    c, p, output, out, detail = _build(tmp_path, monkeypatch, pharmacist_name='SIMULATED Pharmacist', pharmacist_phone='0000 000 000')
+    assert 'SIMULATED Pharmacist' in out and 'not confirmed' in output and detail['pharmacist_identity_sha256']
+    assert 'Credentialed Consultant Pharmacist' not in out
+
+
+def test_approved_template_without_placeholder_discloses_and_omits(tmp_path, monkeypatch):
+    c, p, output, out, detail = _build(tmp_path, monkeypatch, with_template=False, pharmacist_name='SIMULATED Pharmacist')
+    assert 'Built approved-layout Word draft' in output
+    assert 'Pharmacist details were not placed: the approved layout has no pharmacist placeholder' in output
+    assert 'SIMULATED Pharmacist' not in out
+
+
+def test_approved_template_with_placeholder_places_confirmed_credential(tmp_path, monkeypatch):
+    c, p, output, out, detail = _build(tmp_path, monkeypatch, with_template=True, pharmacist_name='SIMULATED Pharmacist',
+                                       pharmacist_credential_confirmed=True)
+    assert 'Reviewed by SIMULATED Pharmacist' in out and 'Credentialed Consultant Pharmacist' in out
+    assert 'not placed' not in output and 'not confirmed' not in output
+
+
+def test_every_printed_identity_change_makes_the_build_outdated(tmp_path, monkeypatch):
+    c, p, output, out, detail = _build(tmp_path, monkeypatch, pharmacist_name='SIMULATED Pharmacist', pharmacist_phone='0000 000 000',
+                                       pharmacist_credential_confirmed=True)
+    with c() as conn:
+        base = report_status.report_status(conn, p)['reasons']
+        assert 'pharmacist_identity_changed' not in base, base
+    changes = [{'pharmacist_name': 'SIMULATED Other'}, {'pharmacist_name': ''}, {'pharmacist_phone': '1111'}, {'pharmacist_phone': ''},
+               {'pharmacist_credential': 'Other credential'}, {'pharmacist_credential_confirmed': False}]
+    for change in changes:
+        with c() as conn:
+            before = {k: settings.get(conn, k) for k in change}
+            settings.update(conn, change); conn.commit()
+            s = report_status.report_status(conn, p)
+            assert 'pharmacist_identity_changed' in s['reasons'], (change, s)
+            settings.update(conn, before); conn.commit()
+            assert 'pharmacist_identity_changed' not in report_status.report_status(conn, p)['reasons'], change
