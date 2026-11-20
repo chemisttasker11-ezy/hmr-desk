@@ -172,7 +172,7 @@ async function interviewScreen() {
   interviewAi = settingsData.status === 'fulfilled' && settingsData.value.settings?.find(x => x.key === 'ai_interview_assist')?.value === true;
   const agentData = agents.status === 'fulfilled' ? agents.value : {};
   interviewAgent = agentData.per_step?.interview_assist || agentData.default || 'No agent selected';
-  interviewId ||= H.defaultInterviewId(todayData.status === 'fulfilled' ? todayData.value.visits : [], new Date());
+  // No explicit patient: show the picker. Never guess a scheduled patient (a wrong-record risk).
   $('screen').innerHTML = interviewPicker();
   if (list.status === 'rejected') {
     $('screen').innerHTML += `<p class="error">Could not load patients: ${esc(errorText(list.reason))}. Local drafts are available in the patient list.</p>`;

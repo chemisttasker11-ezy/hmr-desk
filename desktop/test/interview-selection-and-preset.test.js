@@ -39,3 +39,32 @@ test('applying a usage preset to an other-medicine row keeps the previous direct
   vm.runInContext(`interviewApplyPreset('other_meds', 0, ['PRN', 'When required'])`, context);
   assert.doesNotMatch(vm.runInContext('interviewRecord.other_meds[0][3]', context), /Previous directions: When required/);
 });
+
+test('interview screen with no explicit patient shows the picker and loads no record', async () => {
+  const calls = [], screen = { innerHTML: '' };
+  const document = { querySelector: () => null, addEventListener() {}, getElementById: () => null };
+  const hmr = { api: async (method, path) => { calls.push(path); if (path === '/api/patients') return { patients: [{ id: 1, name: 'A' }, { id: 2, name: 'B' }] }; if (path === '/api/today') return { visits: [{ id: 1, visit_date: '2026-11-20', visit_time: '09:00', state: 'confirmed' }] }; return {}; } };
+  const context = vm.createContext({ patients: [], H: { ...H, autosaver: () => ({ changed() {} }) }, esc: H.esc, page: 'interview', document, hmr, window: {}, $: id => id === 'screen' ? screen : null, errorText: String, navigate: async () => {} });
+  vm.runInContext(fs.readFileSync(require.resolve('../renderer/interview.js'), 'utf8'), context);
+  await vm.runInContext('interviewScreen()', context);
+  assert.ok(!calls.some(p => /\/interview$/.test(p)), calls.join(','));
+  assert.match(screen.innerHTML, /Pick a patient to open their interview form/);
+  assert.equal(vm.runInContext('interviewRecord', context), null);
+  assert.equal(vm.runInContext('interviewId', context), '');
+});
+
+test('calendar stop highlight remembers a single-patient stop and resets on render', () => {
+  const rows = [{ dataset: { stop: '0' }, classList: { toggle() {} } }, { dataset: { stop: '1' }, classList: { toggle() {} } }];
+  const document = { querySelectorAll: () => rows, getElementById: () => null };
+  const context = vm.createContext({ H, esc: H.esc, document, patients: [], hmr: {}, window: {}, $: () => null, L: undefined, dayMap: null });
+  vm.runInContext(fs.readFileSync(require.resolve('../renderer/today.js'), 'utf8'), context);
+  vm.runInContext(`selectedDay = '2026-11-20'; renderDayMap({ stops: [{ names: ['A'], patient_ids: [1] }, { names: ['B', 'C'], patient_ids: [2, 3] }, { names: ['D'] }] });`, context);
+  assert.equal(vm.runInContext('highlightedStopPatient', context), '');
+  vm.runInContext('highlightStop(0, [])', context);
+  assert.equal(vm.runInContext('highlightedStopPatient', context), '1');
+  vm.runInContext('highlightStop(1, [])', context);
+  assert.equal(vm.runInContext('highlightedStopPatient', context), '');
+  vm.runInContext('highlightStop(0, [])', context);
+  vm.runInContext(`renderDayMap({ stops: [{ names: ['A'], patient_ids: [1] }] })`, context);
+  assert.equal(vm.runInContext('highlightedStopPatient', context), '');
+});
