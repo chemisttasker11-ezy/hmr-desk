@@ -50,7 +50,7 @@ def test_legacy_schema_upgrade_preserves_rows_and_does_not_reapply(tmp_path, mon
         assert upgraded.execute("SELECT body FROM messages WHERE id='old'").fetchone()[0] == 'test'
         assert 'ai_intent' in {r[1] for r in upgraded.execute('PRAGMA table_info(messages)')}
         assert 'format' in {r[1] for r in upgraded.execute('PRAGMA table_info(tasks)')}
-        assert {'gp_provider', 'clinic_address', 'clinic_phone'} <= {r[1] for r in upgraded.execute('PRAGMA table_info(patients')}
+        assert {'gp_provider', 'clinic_address', 'clinic_phone'} <= {r[1] for r in upgraded.execute('PRAGMA table_info(patients)')}
     with db.connect(str(target)) as again:
         assert again.execute("SELECT COUNT(*) FROM patients").fetchone()[0] == 1
     assert len(list((tmp_path / 'userdata' / '.migration-snapshots').glob('before-schema-*.db'))) == 1
