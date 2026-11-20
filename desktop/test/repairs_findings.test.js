@@ -40,7 +40,7 @@ test('report sign-off: supports built report in visited state and respects prere
   // 1. Verified current Word+PDF report in visited state -> sign off UI enabled
   const visitedBuilt = context.reportRow(
     { id: 1, name: 'Alex', state: 'visited', stage: 'report' },
-    { steps: [{ name: 'report_build', done: true, ready: true }], reportCurrency: { status: 'current', reasons: [], signed_off: false, readiness: { items: [] } }, reportSpec: { issues: [{ title: 'Finding' }] } },
+    { steps: [{ name: 'report_build', done: true, ready: true }], reportCurrency: { status: 'current', reasons: [], signed_off: false, readiness: { items: ['consent_recorded', 'medicines_reconciled', 'demographics_match'].map(key => ({ key, state: 'met' })) } }, reportSpec: { issues: [{ title: 'Finding' }] } },
     'Agent'
   );
   assert.match(visitedBuilt, /data-sign-off="1"/);
