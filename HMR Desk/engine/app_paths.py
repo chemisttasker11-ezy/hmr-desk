@@ -16,6 +16,11 @@ def data_root():
     explicit = os.environ.get('HMR_DATA_DIR')
     if explicit:
         return Path(explicit).expanduser().resolve()
+    # HMR_DB alone places the database (and its key) in its own folder. The log, API token, templates and
+    # other app-owned files must follow it, not fall back to the user's default data folder.
+    database = os.environ.get('HMR_DB')
+    if database:
+        return Path(database).expanduser().resolve().parent
     home = Path.home()
     return (home / 'HMR-Desk-data').resolve()
 
