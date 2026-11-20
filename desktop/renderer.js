@@ -52,7 +52,7 @@ const actionFields = {
   claimed: ['date'],
   followup1: ['date'],
   followup2: ['date'],
-  update: ['phone', 'address', 'suburb', 'postcode', 'medicare', 'irn', 'ihi', 'dob', 'sex'],
+  update: ['phone', 'address', 'suburb', 'postcode', 'medicare', 'irn', 'ihi', 'dob', 'sex', 'gp', 'gp_provider', 'clinic', 'clinic_address', 'clinic_phone', 'referral_date'],
 };
 const actionLabels = {
   call: 'Log call',

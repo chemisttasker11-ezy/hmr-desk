@@ -452,12 +452,16 @@ async function reportEditorClick(b) {
   const d = b.dataset;
   if (d.demoAction !== undefined) return resolveDemographic(d.demoAction, d.demoKey);
   if (d.reportRefresh !== undefined) {
-    if (!confirm("This replaces the report's conditions, allergies, observations, medicine tables and pathology with the current interview. Patient, GP and date blocks follow the patient record unless you edited them; you will be asked about each edited block. Your findings and letter text are kept. A backup of the current report is saved.")) return true;
+    if (!confirm("Refreshes the report from the latest interview and pathology. Medicine recommendations are kept ONLY when medicine, actual use and source notes are exactly unchanged and unique; otherwise they require re-entry. Other table edits may be replaced. Your findings and letter text are kept, and the previous report is backed up. Continue?")) return true;
     const id = reportId, screen = $('screen');
     screen.inert = true;
     try {
       if (!(await reportSaver.save())) return true;
       let result = await hmr.api('POST', `/api/patients/${encodeURIComponent(id)}/report/refresh`);
+      const medicineNotes = result?.medication_recommendations;
+      if (medicineNotes?.needs_reentry) {
+        alert(`${medicineNotes.needs_reentry} previous medication recommendation(s) could not be safely carried forward because the medicine, directions, notes or duplicate identity changed. Re-review and re-enter these recommendations from the previous report backup before building.`);
+      }
       // Blocks the pharmacist edited are kept; each difference from the patient record is offered, never replaced silently.
       const replace = (result?.demographic_conflicts || []).filter((c) => confirm(`The ${c.label} in this report was edited and differs from the current patient record.\n\nIn the report:\n${c.report}\n\nIn the patient record:\n${c.record}\n\nOK replaces the report text with the patient record. Cancel keeps your edited text.`)).map((c) => c.key);
       if (replace.length) await hmr.api('POST', `/api/patients/${encodeURIComponent(id)}/report/refresh`, { replace_demographics: replace });
