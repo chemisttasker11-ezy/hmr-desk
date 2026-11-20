@@ -390,7 +390,11 @@ async function call(name, args, fetcher = fetch, read = fs.readFile) {
     if (typeof png !== 'string' || !png) throw Error('Invalid consent preview');
     return [{type:'image',data:png,mimeType:'image/png'}, {type:'text',text:JSON.stringify(metadata)}];
   }
-  if (name === 'app_screenshot') return [{ type: 'image', data: data.png, mimeType: 'image/png' }];
+  if (name === 'app_screenshot') {
+    const { png, ...meta } = data;
+    if (data.ok === false || typeof png !== 'string' || !png) throw Error('Screenshot refused (' + (data.reason || 'no image') + '); window ' + JSON.stringify(data.window || {}) + '. Refocus the screen and capture again. This check detects only some stale frames; it does not prove a capture is current.');
+    return [{ type: 'image', data: png, mimeType: 'image/png' }, { type: 'text', text: JSON.stringify(meta) }];
+  }
   if (['app_auth_status', 'app_proda_login'].includes(name)) {
     return [{ type: 'text', text: JSON.stringify(filterAuthStatus(data)) }];
   }

@@ -192,6 +192,54 @@ function redactUrl(rawUrl) {
   }
 }
 
+
+// A capture can be a stale frame: Chromium may hand back the last composited frame when a window is occluded or has not
+// painted (observed once: a capture byte-identical to an earlier screen while the page had changed). This adds two checks
+// and does NOT prove a capture is the current frame: (1) wait, bounded, for two painted frames; if the renderer does not
+// paint within the cap the capture is refused, never hung on; (2) if the PNG is byte-identical to the previous capture of
+// the same target while the page content fingerprint changed, retry, then refuse. A first capture, a stale DOM, or a changed
+// but still outdated PNG are not detected. The fingerprint is a hash of visible text and ordinary field values (password,
+// hidden and secret-like fields skipped). It is derived from clinical text, so it stays in this process: it is never
+// returned, logged or written, and only a changed/unchanged boolean leaves this function.
+const PAINT_CAP_MS = 2000;
+const FRAME_SCRIPT = `new Promise(resolve => { const t = setTimeout(() => resolve(false), ${PAINT_CAP_MS});
+  requestAnimationFrame(() => requestAnimationFrame(() => { clearTimeout(t); resolve(true); })); })`;
+const FINGERPRINT_SCRIPT = `(() => { let h = 5381; const add = s => { for (let i = 0; i < s.length; i++) h = ((h * 33) ^ s.charCodeAt(i)) >>> 0; };
+  const secret = e => /pass|otp|token|secret|key|code|pin|ssn|card/i.test([e.name, e.id, e.autocomplete, e.type].join(' '));
+  add(document.body?.innerText || '');
+  for (const e of document.querySelectorAll('input,textarea,select')) {
+    if (e.type === 'password' || e.type === 'hidden' || secret(e) || !e.getClientRects().length) continue;
+    add(String(e.type === 'checkbox' || e.type === 'radio' ? e.checked : e.value)); }
+  return h.toString(16); })()`;
+const withCap = (promise, ms, what) => {
+  let timer;
+  const cap = new Promise((_, reject) => { timer = setTimeout(() => reject(Error(what + ' did not answer within ' + ms + ' ms')), ms); });
+  return Promise.race([promise, cap]).finally(() => clearTimeout(timer));
+};
+async function captureFresh(ctx, key, wc, win) {
+  const last = (ctx.lastShot ||= {})[key];
+  let png, hash, fp, painted = false, attempts = 0;
+  for (; attempts < 3;) {
+    attempts += 1;
+    painted = (await withCap(Promise.resolve(wc.executeJavaScript(FRAME_SCRIPT)), PAINT_CAP_MS + 1000, 'renderer paint check')) === true;
+    if (!painted) break;
+    wc.invalidate?.();
+    fp = String(await withCap(Promise.resolve(wc.executeJavaScript(FINGERPRINT_SCRIPT)), 3000, 'fingerprint'));
+    png = (await withCap(Promise.resolve(wc.capturePage()), 5000, 'capturePage')).toPNG();
+    hash = crypto.createHash('sha256').update(png).digest('hex');
+    if (!(last && last.hash === hash && last.fp !== fp)) break;
+  }
+  const flag = (name) => { try { return win?.[name]?.() === true; } catch { return false; } };
+  const windowState = win ? { visible: flag('isVisible'), minimized: flag('isMinimized'), focused: flag('isFocused') } : undefined;
+  if (!painted) return { png: undefined, ok: false, frame_painted: false, stale_detected: false, attempts, window: windowState,
+    reason: 'the renderer did not paint within ' + PAINT_CAP_MS + ' ms (window may be occluded, minimized or hidden)' };
+  const identical = !!(last && last.hash === hash), stale = identical && last.fp !== fp;
+  ctx.lastShot[key] = { hash, fp };
+  return { png: stale ? undefined : png.toString('base64'), ok: !stale, frame_painted: true, stale_detected: stale, attempts,
+    identical_to_previous: identical, content_changed_since_previous: last ? last.fp !== fp : null, png_sha256: hash, window: windowState,
+    reason: stale ? 'frame identical to the previous capture although the page content changed' : undefined };
+}
+
 function createHandler(ctx, token) {
   async function page(site, op, arg) {
     const view = Object.hasOwn(ctx.views, site) ? ctx.views[site] : null;
@@ -285,7 +333,7 @@ function createHandler(ctx, token) {
           const site = body.site || ctx.state.active;
           if (site) await page(site, 'check');
           const target = body.site ? ctx.views[body.site].webContents : win.webContents;
-          result = { png: (await target.capturePage()).toPNG().toString('base64') };
+          result = await captureFresh(ctx, body.site || '', target, body.site ? null : win);
           break;
         }
         case '/results':
@@ -369,4 +417,4 @@ function start(ctx) {
   return server;
 }
 
-module.exports = { createHandler, start, pageScript, uiScript, UI_BLOCKED, sanitizeAuthResult, redactUrl, isPrivateApiRoute, WHITELISTED_STATUSES, WHITELISTED_REASONS };
+module.exports = { captureFresh, createHandler, start, pageScript, uiScript, UI_BLOCKED, sanitizeAuthResult, redactUrl, isPrivateApiRoute, WHITELISTED_STATUSES, WHITELISTED_REASONS };

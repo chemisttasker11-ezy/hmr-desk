@@ -5,11 +5,23 @@
 //  - find: picks the ref from the most recent app_ui_snapshot step; every given property (label, type, id, tag, text, or data.<name>)
 //    must match exactly one control, otherwise the plan stops. A plan re-snapshots by including another app_ui_snapshot step.
 //  - save: writes the tool result to outdir/<file>; images are decoded to PNG files. Nothing else is written, and tokens are never read here.
-//  - The run stops at the first failing step (tool error or failed expect) unless the step is marked optional.
+//  - The run stops at the first failing step (tool error, a tool-level {ok:false}/error result, or failed expect) unless the step is marked optional.
+//    "allowToolFailure": true accepts a tool-level failure; "require" demands one.
 // The server applies its own refusals (sending, authorisation, sensitive fields); this runner adds none and removes none.
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
+
+// A tool can answer successfully at the transport level and still report {"ok":false,"error":...} (for example a screen that
+// cannot open yet). That is a failed step, not a pass. A step may opt out with "allowToolFailure": true, or require the failure
+// with "allowToolFailure": "require".
+function toolLevelFailure(text) {
+  let value; try { value = JSON.parse(text); } catch { return ''; }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return '';
+  if (value.ok === false) return String(value.error || 'ok is false');
+  if (typeof value.error === 'string' && value.error) return value.error;
+  return '';
+}
 
 async function run(planPath, outDir, serverPath = path.join(__dirname, 'hmr-desk-mcp.js')) {
   const plan = JSON.parse(fs.readFileSync(planPath, 'utf8'));
@@ -45,6 +57,9 @@ async function run(planPath, outDir, serverPath = path.join(__dirname, 'hmr-desk
         if (!result) throw Error(JSON.stringify(reply.error || reply));
         const text = result.content.filter((c) => c.type === 'text').map((c) => c.text).join('\n');
         if (result.isError) throw Error(text);
+        const toolFailure = toolLevelFailure(text);
+        if (toolFailure && !step.allowToolFailure) throw Error('tool-level failure (transport ok): ' + toolFailure);
+        if (!toolFailure && step.allowToolFailure === 'require') throw Error('expected a tool-level failure but the tool reported success');
         const image = result.content.find((c) => c.type === 'image');
         if (image) {
           const file = path.join(outDir, step.save || `step${n + 1}.png`);
@@ -67,7 +82,7 @@ async function run(planPath, outDir, serverPath = path.join(__dirname, 'hmr-desk
   fs.writeFileSync(path.join(outDir, 'plan-report.json'), JSON.stringify(report, null, 2));
   return { failed, report };
 }
-module.exports = { run };
+module.exports = { run, toolLevelFailure };
 if (require.main === module) {
   const [plan, out] = process.argv.slice(2);
   if (!plan || !out) { console.error('usage: node run-plan.js plan.json outdir'); process.exit(2); }
