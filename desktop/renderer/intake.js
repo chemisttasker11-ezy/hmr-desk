@@ -5,7 +5,7 @@ function listingNotice(listing) {
   const n = listing.found, p = listing.pdfs;
   return `Discovered ${n} item${n === 1 ? '' : 's'} in the folder: ${p} PDF${p === 1 ? '' : 's'} submitted for review, ${listing.skippedTotal} not submitted.`;
 }
-const REFERRAL_IDENTITY_KEYS = ['name','dob','gp','referral_date','clinic','phone',
+const REFERRAL_IDENTITY_KEYS = ['name','dob','gp','gp_provider','clinic','clinic_address','clinic_phone','referral_date','phone',
   'address','suburb','sex','medicare','irn','ihi'];
 function referralReviewFields(form) {
   const data = new Map(new FormData(form));
@@ -38,7 +38,7 @@ async function intake() {
 function renderReferrals() {
   const target = $('referral-results');
   if (!target) return;
-  const labels = {name:'Patient name', dob:'Date of birth', gp:'GP', referral_date:'Referral date', medicare:'Medicare', irn:'IRN', ihi:'IHI'};
+  const labels = {name:'Patient name', dob:'Date of birth', gp:'GP', gp_provider:'GP provider number', clinic_address:'Practice address', clinic_phone:'Practice phone', referral_date:'Referral date', medicare:'Medicare', irn:'IRN', ihi:'IHI'};
   const shown = referralRows.filter(row => !row.userSkipped);
   const counts = ['review', 'manual', 'duplicate', 'rejected', 'error', 'added'].map(status => `${status}: ${shown.filter(row => row.status === status).length}`).concat(referralRows.length - shown.length ? [`skipped by you: ${referralRows.length - shown.length}`] : []).join(' · ');
   const listingHtml = referralListings.map(listing => `<section class="referral-listing" role="status"><p>${esc(listingNotice(listing))}</p>${listing.skippedTotal ? `<details><summary>Not submitted (${listing.skippedTotal})</summary><ul>${listing.skipped.map(item => `<li>${esc(item.name)}: ${esc(item.reason)}</li>`).join('')}${listing.skippedTotal > listing.skipped.length ? `<li>and ${listing.skippedTotal - listing.skipped.length} more</li>` : ''}</ul></details>` : ''}</section>`).join('');
@@ -48,7 +48,7 @@ function renderReferrals() {
     ${row.token ? `<button type="button" data-referral-source="${esc(row.token)}">Open original PDF for visual page comparison</button>` : ''}
     ${row.flags?.length ? `<section class="referral-extraction-warnings" aria-label="Original extraction warnings"><h4>Original extraction warnings (before your review)</h4><p>${row.status === 'added' ? 'The patient was added with the fields you reviewed. ' : ''}These warnings describe the original extraction, not a check of your corrected fields. They are kept with the source for review.</p><p class="flag">${row.flags.map(esc).join('<br>')}</p></section>` : ''}
     ${row.page_previews?.length ? `<details class="referral-source-preview"><summary>Review extracted PDF pages (${row.page_previews.length} shown)</summary><div class="referral-page-preview">${row.page_previews.map(page => `<section class="card"><h4>Source page ${esc(page.page)} — ${page.method === 'ocr' ? 'OCR (unconfirmed)' : 'PDF text (unconfirmed)'}</h4><pre style="white-space:pre-wrap;overflow-wrap:anywhere">${esc(page.text || 'No readable text; inspect the original PDF')}</pre></section>`).join('')}</div><p>Compare these unconfirmed values to the original PDF before adding the patient. OCR is not evidence of correctness.</p></details>` : ''}
-    ${row.status === 'review' || row.status === 'manual' || (row.status === 'duplicate' && row.duplicate_kind === 'identity') ? `<form data-referral-commit="${i}" class="form">${['name','dob','gp','referral_date','clinic','phone','address','suburb','sex','medicare','irn','ihi'].map(k => `<label>${esc(labels[k] || k)}<input name="${k}" value="${esc(row.fields?.[k] || '')}"></label>`).join('')}
+    ${row.status === 'review' || row.status === 'manual' || (row.status === 'duplicate' && row.duplicate_kind === 'identity') ? `<form data-referral-commit="${i}" class="form">${['name','dob','gp','gp_provider','referral_date','clinic','clinic_address','clinic_phone','phone','address','suburb','sex','medicare','irn','ihi'].map(k => `<label>${esc(labels[k] || k)}<input name="${k}" value="${esc(row.fields?.[k] || '')}"></label>`).join('')}
     <fieldset><legend>Clinical source review — not automatically inferred</legend>
       <p>Only enter facts you can verify on the original PDF page. Unknown allergies are not the same as an explicitly documented absence of allergies.</p>
       <label>Reviewing pharmacist<input name="clinical_reviewer" value="${esc(row.clinical?.reviewed_by || '')}"></label>
