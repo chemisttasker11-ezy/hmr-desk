@@ -330,10 +330,14 @@ def report_build(patient_id, pdf=False):
                 why = pdf_export.failure_text(exc)
                 db.log(conn, p['id'], 'pdf_conversion_failed', {'reason': why}, 'job'); conn.commit()
                 raise RuntimeError('Local PDF conversion failed; prior Word draft preserved. Reason: ' + why + ('; ' + pdf_export.pending_note(left) if left else '')) from exc
+            # A completed conversion must be visible even when cleanup succeeds
+            # normally. Previously, "PDF created" appeared only if cleanup
+            # was pending, misleading a pharmacist who requested Word + PDF.
+            output += '. PDF created'
             if isinstance(converted, dict) and converted.get('cleanup_pending'):
                 left = Path(converted['cleanup_pending']).name
                 db.log(conn, p['id'], 'pdf_cleanup_pending', {'folder': left, 'conversion': 'ok', 'error': converted.get('cleanup_error', '')}, 'job')
-                output += '. PDF created. ' + pdf_export.pending_note(left)
+                output += '. ' + pdf_export.pending_note(left)
         if p['state'] == 'visited' and db.can_move(p['state'], 'report_drafted'):
             db.set_state(conn, patient_id, 'report_drafted', source='job')
         import hashlib
