@@ -14,62 +14,83 @@ def _norm(value):
     return re.sub(r'[^a-z0-9]+', '', str(value or '').casefold())
 
 
+def _classify(name, keys, checked, ingredients):
+    """on_list: same name as a confirmed entry. ingredient_only: shares an ingredient with an entry, which does not
+    establish the same product, strength or combination. off_list: no shared ingredient and every lookup worked.
+    unmatched: matching was unavailable or incomplete, so nothing is claimed either way."""
+    if _norm(name) in keys: return 'on_list'
+    if not ingredients: return 'unmatched'
+    try:
+        mine = set(ingredients(name))
+        theirs = [set(ingredients(n)) for n in checked]
+    except Exception:
+        return 'unmatched'
+    if mine and any(mine & t for t in theirs): return 'ingredient_only'
+    if mine and all(theirs): return 'off_list'
+    return 'unmatched'
+
+
 def compute(confirmed, rows, evidence, ingredients=None):
-    """confirmed: names on the confirmed list, or None. rows: dicts with name, status, source, has_text."""
+    """confirmed: names on the confirmed list, or None. rows: dicts with name, status, source, has_text.
+    Membership of the confirmed list is not proof that an interaction check covered a medicine."""
     checked = [n for n in (confirmed or []) if str(n).strip()]
     keys = {_norm(n) for n in checked}
-    def on_list(name):
-        if _norm(name) in keys: return True
-        if ingredients:
-            try:
-                mine = set(ingredients(name))
-                return bool(mine) and any(mine & set(ingredients(n)) for n in checked)
-            except Exception:
-                return False
-        return False
-    included, excluded, not_using = [], [], []
+    groups = {'on_list': [], 'ingredient_only': [], 'off_list': [], 'unmatched': []}
+    not_using = []
     for row in rows:
         name, status = str(row.get('name', '')).strip(), row.get('status', '')
         if not name: continue
         if status == 'not_using':
             not_using.append(name)
         elif status == 'unknown' or (not status and row.get('has_text')):
-            (included if on_list(name) else excluded).append(name)
-    return {'evidence': evidence, 'checked': checked, 'included_unconfirmed': included,
-            'excluded_unconfirmed': excluded, 'not_using': not_using}
+            groups[_classify(name, keys, checked, ingredients)].append(name)
+    return {'evidence': evidence, 'checked': checked, 'not_using': not_using, **groups}
+
+
+GROUPS = ('on_list', 'ingredient_only', 'off_list', 'unmatched')
+
+
+def has_unconfirmed(scope):
+    return any(scope[g] for g in GROUPS)
 
 
 def lines(scope):
     ev = scope['evidence']
-    out = []
-    out.append({
-        'automated_current': 'Interaction check: an eMIMS result matching the confirmed medicine list is on file.',
-        'manual_note': 'Interaction check: only a manually saved interaction note is on file. The app has not verified that it covers the confirmed medicine list.',
+    out = [{
+        'automated_current': 'Interaction check: an eMIMS result for the current confirmed medicine list is on file. The app does not verify which products the result covered.',
+        'manual_note': 'Interaction check: only a manually saved interaction note is on file. The app has not verified what it covers.',
         'stale': 'Interaction check: the saved result does not match the current confirmed medicine list. There is no current result.',
         'none': 'Interaction check: no interaction result is on file.',
         'no_current_confirmation': 'Interaction check: the medicine list has not been confirmed for the current interview, so no interaction check applies to it.',
-    }[ev])
-    if scope['included_unconfirmed']:
-        out.append('Included in the checked list although use is not confirmed: ' + ', '.join(scope['included_unconfirmed']) + '.')
-    if scope['excluded_unconfirmed']:
-        out.append('Not in the checked list because use is not confirmed: ' + ', '.join(scope['excluded_unconfirmed']) + '. Interactions with these were not checked.')
+    }[ev]]
+    if scope['on_list']:
+        out.append('On the confirmed medicine list although use is not confirmed: ' + ', '.join(scope['on_list']) + '. List membership is not proof that an interaction check covered it' + ('.' if ev == 'automated_current' else ', and no current result verifies coverage.'))
+    if scope['ingredient_only']:
+        out.append('Share an ingredient with a confirmed entry, not established as the same product, strength or combination: ' + ', '.join(scope['ingredient_only']) + '. Coverage is not established.')
+    if scope['off_list']:
+        out.append('Not on the confirmed medicine list: ' + ', '.join(scope['off_list']) + '. Any interaction result for the list does not cover them.')
+    if scope['unmatched']:
+        out.append('Could not be matched to the confirmed medicine list (use not confirmed): ' + ', '.join(scope['unmatched']) + '. Check manually.')
     if scope['not_using']:
         out.append('Recorded as not using, not part of the check: ' + ', '.join(scope['not_using']) + '.')
-    if scope['included_unconfirmed'] or scope['excluded_unconfirmed']:
-        out.append('Medicine reconciliation is incomplete. Any interaction conclusion applies only to the checked list.')
+    if has_unconfirmed(scope):
+        out.append('Medicine reconciliation is incomplete. Any interaction conclusion is limited to the confirmed medicine list.')
     return out
 
 
 def needs_statement(scope):
-    return scope['evidence'] != 'automated_current' or bool(scope['included_unconfirmed'] or scope['excluded_unconfirmed'])
+    return scope['evidence'] != 'automated_current' or has_unconfirmed(scope)
 
 
 def row_tag(scope, name):
     key = _norm(name)
-    if key in {_norm(n) for n in scope['excluded_unconfirmed']}:
-        return 'Interaction check: NOT included (use not confirmed)'
-    if key in {_norm(n) for n in scope['included_unconfirmed']}:
-        return 'Interaction check: included although use is not confirmed'
+    for group, text in (
+        ('on_list', 'On the confirmed list, use not confirmed. Interaction coverage ' + ('rests on the eMIMS result for the list' if scope['evidence'] == 'automated_current' else 'is not verified')),
+        ('ingredient_only', 'Shares an ingredient with a confirmed entry only. Coverage not established. Use not confirmed'),
+        ('off_list', 'Not on the confirmed list, use not confirmed. Not covered by the list result'),
+        ('unmatched', 'Could not be matched to the confirmed list. Use not confirmed. Check manually'),
+    ):
+        if key in {_norm(n) for n in scope[group]}: return 'Interaction check: ' + text
     return ''
 
 
