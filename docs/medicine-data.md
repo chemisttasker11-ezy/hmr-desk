@@ -165,7 +165,7 @@ while an unknown path returns 404. It has not yet been run with the real credent
 ### Client ID and client secret setup
 
 1. Sign in to the NCTS portal (healthterminologies.gov.au) with the NCTS account for
-   this project (`Dr.eslam.galaxy@gmail.com`) and open **Clients** (top right). Create
+   this project (`<project NCTS account email>`) and open **Clients** (top right). Create
    a client credential for "HMR Desk".
 2. The Client ID and Client Secret must never be committed, pasted into chat, or put
    on a command line. They are kept in the password vault entry **"NCTS syndication
