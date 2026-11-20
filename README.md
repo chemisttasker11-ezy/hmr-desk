@@ -2,6 +2,10 @@
 
 HMR Desk is a Windows desktop application and local Python service for medication-review workflows. The repository contains source code, not a patient workspace, credentials, clinical templates, or the external report-building skill. Some features require separate local setup below.
 
+## Status
+
+This is a development baseline. It is not accepted for clinical use, has not been validated against real patient cases, and is not a release. Synthetic-fixture tests passing here are not evidence of clinical readiness. Clinical authorisation and message sending stay under pharmacist control, and the ten-case acceptance test and a Windows installed-app run on the final build are still open.
+
 ## Windows setup
 
 Install Node.js with npm and Python 3.14 for Windows. In PowerShell, from the repository root:
@@ -34,3 +38,18 @@ The Windows installer built by `npm run dist` in `desktop` packages the Electron
 ## Development
 
 Run `npm test` from `desktop`; `npm run smoke` exercises the Electron fixture and `npm run dist` builds the Windows installer. The Python tests are in `HMR Desk/engine`; run the desired `test_*.py` script from that directory with the virtual environment active. Some scripts exercise environment-specific integrations and require additional fixtures. The mock API can be started with `node dev/mock-api.js` from `desktop`; set `HMR_API=http://127.0.0.1:8767` and `HMR_TOKEN=mock` before starting the desktop app. Do not expose a live patient database to tests.
+
+### Offline suggestion library availability
+
+The current engine looks for local suggestion inputs under its application resource root,
+`assets/references`: `case-index.jsonl`, `finding-library.md` and `brainstorm-index.md`.
+`brainstorm-v2.pdf` is optional. None of that reviewed reference corpus is supplied by this
+repository. The application-owned `drug_classes.json` mapping is packaged separately; it
+is not a substitute for the missing library or a validated clinical ruleset.
+
+If required inputs are missing or unreadable, the suggestions endpoint returns an explicit
+503 unavailable error. The evidence-context endpoint remains usable. Do not treat source
+regressions with synthetic fixtures as evidence that a production suggestion library is
+installed or clinically validated. Do not copy a private case index, patient-derived files,
+or licensed references into the repository or a distributable. Any future resource source
+needs a separate provenance, privacy and distribution-rights review before use.

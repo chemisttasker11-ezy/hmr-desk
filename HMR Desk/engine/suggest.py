@@ -1,6 +1,7 @@
 """Offline, frequency-based prompts from the local de-identified case index."""
 import collections
 import datetime as dt
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -11,6 +12,7 @@ import brainstorm
 import db
 import interview
 import jobs
+import records
 import report
 
 CLASSES_PATH = Path(__file__).with_name('drug_classes.json')
@@ -108,6 +110,9 @@ def extractor(mapping, aliases, tuning=2):
 
 def context_rules(context):
  out = {}
+ # New production evidence path has no unsourced numeric or age cutoffs.
+ # Compatibility case-index evaluation below is not approved clinical logic.
+ if context.get('evidence_version') == 1: return out
  try:
   if int(context.get('age') or 0)>=75: out['topic:falls']='age '+str(context['age'])
  except (ValueError, TypeError): pass
@@ -148,23 +153,44 @@ def make_index(cases, library_text, brainstorm_text, mapping=None, tuning=1, bra
   findings.extend(case_findings)
  return {'version':2,'mapping':mapping,'aliases':aliases,'counts':dict(counts),'findings':findings,'library':lib,'brainstorm':brainstorm,'brainstorm_sections':[{**section, 'keys':sorted(k for k in extract(section['title']+' '+section['text']) if k.startswith(('med:', 'class:', 'topic:')))} for section in (brainstorm_sections or [])],'tuning':tuning}
 
+class LibraryUnavailable(ValueError):
+ """Required reviewed local reference inputs are unavailable; never invent a corpus."""
+
+INDEX_ALGORITHM_VERSION = 4
+
 def build_index():
- refs=jobs.SKILL/'references'; paths=[refs/'case-index.jsonl',refs/'finding-library.md',refs/'brainstorm-index.md',CLASSES_PATH,Path(__file__)]
+ refs=jobs.SKILL/'references'
+ paths=[refs/'case-index.jsonl',refs/'finding-library.md',refs/'brainstorm-index.md',CLASSES_PATH]
  pdf=refs/'brainstorm-v2.pdf'
- if pdf.is_file(): paths.append(pdf)
- paths.append(Path(brainstorm.__file__))
- target=Path(db.DATA_DIR)/'suggest-index.json'
- if target.is_file() and target.stat().st_mtime_ns >= max(p.stat().st_mtime_ns for p in paths):
-  return json.loads(target.read_text(encoding='utf-8'))
- cases=[json.loads(x) for x in report._read(paths[0]).splitlines() if x.strip()]
- idx=make_index(cases,report._read(paths[1]),report._read(paths[2]),brainstorm_sections=brainstorm.sections(pdf)); target.parent.mkdir(parents=True,exist_ok=True)
- fd,tmp=tempfile.mkstemp(dir=target.parent,prefix='suggest-',suffix='.tmp')
  try:
-  with os.fdopen(fd,'w',encoding='utf-8') as f: json.dump(idx,f,ensure_ascii=False)
-  os.replace(tmp,target)
- finally:
-  if os.path.exists(tmp): os.unlink(tmp)
- return idx
+  if any(not p.is_file() for p in paths): raise LibraryUnavailable()
+  if pdf.is_file(): paths.append(pdf)
+  # Frozen Python modules live in an archive. Never stat __file__ as a cache dependency.
+  source_hash=hashlib.sha256(str(INDEX_ALGORITHM_VERSION).encode())
+  for p in paths:
+   source_hash.update(p.name.encode()); source_hash.update(p.read_bytes())
+  source_key=source_hash.hexdigest()
+  target=Path(db.DATA_DIR)/'suggest-index.json'
+  if target.is_file():
+   try:
+    cached=json.loads(target.read_text(encoding='utf-8'))
+    if cached.get('source_sha256')==source_key: return cached
+   except (ValueError, OSError, AttributeError): pass
+  cases=[json.loads(x) for x in paths[0].read_text(encoding='utf-8').splitlines() if x.strip()]
+  if not cases: raise LibraryUnavailable()
+  idx=make_index(cases,paths[1].read_text(encoding='utf-8'),paths[2].read_text(encoding='utf-8'),brainstorm_sections=brainstorm.sections(pdf))
+  idx['source_sha256']=source_key
+  target.parent.mkdir(parents=True,exist_ok=True)
+  fd,tmp=tempfile.mkstemp(dir=target.parent,prefix='suggest-',suffix='.tmp')
+  try:
+   with os.fdopen(fd,'w',encoding='utf-8') as f: json.dump(idx,f,ensure_ascii=False)
+   os.replace(tmp,target)
+  finally:
+   if os.path.exists(tmp): os.unlink(tmp)
+  return idx
+ except LibraryUnavailable: raise
+ except (OSError, ValueError, TypeError, KeyError, AttributeError):
+  raise LibraryUnavailable() from None
 
 def suggest(context, index=None):
  index=index or build_index(); mapping=index['mapping']; aliases=index['aliases']; extract=extractor(mapping,aliases,index.get('tuning',2))
@@ -202,9 +228,24 @@ def suggest(context, index=None):
     if match and match not in names: names.append(match)
    if names: reason='Takes '+ ' and '.join(names)+' together.'
   why=[reason, f'Raised in {count} of {exposed} past patients with this key.']
+  supporting=[]
+  if context.get('evidence_version') == 1:
+   for e in context['evidence']:
+    if not e['eligible']: continue
+    ekeys=med_keys([e['text']],mapping,aliases) if e['kind']=='medicine' else extract(e['text'])
+    relevant_keys=({key} | set(f['keys']) | (set('class:'+x for x in key[6:].split(' + ')) if key.startswith('combo:') else set()))
+    if relevant_keys & ekeys: supporting.append(e)
+   reason=('Medicine/class text match: ' if not key.startswith('topic:') else 'Topic text match, not an asserted finding: ')+label
+   why=[reason, f'Template appeared in {count} of {exposed} indexed past cases with this key; not a probability or guideline.', 'Check original evidence, negation, history and current relevance. Past-case wording may not apply.']
   missing=[]
   if (key.startswith('med:') or key.startswith('class:') or key=='topic:renal') and not re.search(r'\begfr\b',notes,re.I): missing.append('no eGFR on file')
   if key in ('topic:hypotension','topic:blood pressure') and not re.search(r'\b(?:bp|blood pressure)\b',notes,re.I): missing.append('no BP recorded')
+  if context.get('evidence_version') == 1:
+   missing=['Clinical relevance and original context require pharmacist review']
+   for e in supporting:
+    missing.extend(e['id']+': '+flag for flag in e.get('flags',[]))
+    if e['kind']=='medicine' and e.get('use_status') not in ('taking','prn'):
+     missing.append(e['id']+': actual use is not established')
   lib=next((x['title'] for x in index['library'] if key in x['keys']),'')
   relevant={key} | set(f['keys'])
   matches=[(len(relevant & set(section['keys'])), section) for section in index.get('brainstorm_sections', [])]
@@ -218,7 +259,7 @@ def suggest(context, index=None):
     if kind=='topic': patterns.append(TOPICS[value])
     elif kind=='class': patterns.append(SYNONYMS.get(value, r'(?<!\w)'+re.escape(value)+r's?(?!\w)'))
     elif kind=='med': patterns.append(r'(?<!\w)'+re.escape(value)+r'(?!\w)')
-   brain={'title':section['title'],'page':section['page'],'snippet':brainstorm.snippet(section['text'],patterns)}
+   brain=brainstorm.passage(section,patterns)
   elif not index.get('brainstorm_sections'):
    line=next((x['line'] for x in index['brainstorm'] if key in x['keys']),None)
    if line: brain={'title':line,'page':None,'snippet':line[:300]}
@@ -228,26 +269,17 @@ def suggest(context, index=None):
     alternatives.append({k:other[k] for k in ('title','rec','rationale')})
     if len(alternatives)==2: break
   result.append({**{k:f[k] for k in ('title','rec','rationale')},'source':'past cases','why':why,'missing':missing,'alternatives':alternatives,'library':lib,'brainstorm':brain,'key':key})
+  if context.get('evidence_version') == 1:
+   result[-1].update(evidence=supporting, context_snapshot_sha256=context['context_snapshot_sha256'], review_status='pharmacist_review_required')
   if len(result)==15: break
  return result
 
 def context_for(conn, patient):
- p=dict(patient); folder=jobs.patient_folder(patient); path=folder/'interview.json'
- if path.is_file(): record=interview.load(conn,patient)
- else: record={'header':{},'meds':[],'other_meds':[],'conditions':'','obs':[],'pathology':[],'notes':'','mobility':''}
- confirmed=folder/'confirmed_meds.json'
- meds=[r[0] for r in json.loads(confirmed.read_text(encoding='utf-8')).get('meds',[]) if r] if confirmed.is_file() else [r[0] for r in record['meds']+record['other_meds'] if r and r[0] and not re.search(r'\b(?:ceased|stopped)\b',' '.join(r),re.I)]
- interactions='\n'.join(x.read_text(encoding='utf-8',errors='replace') for x in sorted(folder.glob('MIMS interactions*.txt')))
- age=record['header'].get('age','')
- if not age and p.get('dob'):
-  for fmt in ('%Y-%m-%d','%d/%m/%Y'):
-   try:
-    born=dt.datetime.strptime(p['dob'][:10],fmt).date(); today=dt.date.today(); age=today.year-born.year-((today.month,today.day)<(born.month,born.day)); break
-   except ValueError: pass
- import report
- return {'age':age,'sex':p.get('sex',''),'meds':meds,'conditions':record['conditions'],'obs':report.observations(record)+' '+' '.join(' '.join(x) for x in record['obs'])+' '+record.get('notes','')+' '+record.get('mobility',''),'labs':[' '.join(x) for x in record['pathology']],'interactions':interactions}
+ import suggestion_context
+ return suggestion_context.build(conn,patient)
 
 def context_gaps(context):
+ if context.get('evidence_version') == 1: return context['context_gaps']
  gaps=[]; text=context.get('obs','')+' '+' '.join(context.get('labs',[]))
  if not context.get('meds'): gaps.append('no medicines on file')
  if not context.get('age'): gaps.append('no age on file')

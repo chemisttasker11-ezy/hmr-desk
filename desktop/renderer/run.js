@@ -107,7 +107,7 @@ async function runScreen() {
     const recent = runTasks.filter((t) => !older(t)), old = runTasks.filter(older);
     $('screen').innerHTML = `<div class="actions"><button class="primary" data-run-ready ${runPending ? 'disabled' : ''}>Run everything that is ready</button><button data-run-pick>Run steps for...</button></div>
       <p class="muted">The flow never sends SMS, sends reports or submits claims.</p><div id="run-picker-area"></div>
-      <p class="queue-message" role="status" aria-live="polite">${esc(runMessage)}</p><h2>Tasks</h2>${recent.length ? table(recent) : '<p class="empty">No tasks yet. Steps you run for a patient show here.</p>'}${old.length ? `<details><summary>Older (${old.length})</summary>${table(old)}</details>` : ''}`;
+      <p class="queue-message" role="status" aria-live="polite">${esc(H.runStatusText(runMessage, runTasks))}</p><h2>Tasks</h2>${recent.length ? table(recent) : '<p class="empty">No tasks yet. Steps you run for a patient show here.</p>'}${old.length ? `<details><summary>Older (${old.length})</summary>${table(old)}</details>` : ''}`;
     if (pickerOpen) renderRunPicker(true);
   } catch (error) {
     if (page === 'run') $('screen').innerHTML = `<p class="error">${esc(errorText(error))}</p>`;

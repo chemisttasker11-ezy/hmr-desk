@@ -74,8 +74,6 @@ def sign_locked(conn, patient, encoded, revision):
         if not widget or widget.rect.is_empty: raise ValueError('signature field missing')
         page.insert_image(widget.rect, stream=image, keep_proportion=True, overlay=True)
         content = pdf.tobytes()
-    record_path = folder / 'interview.json'
-    original = record_path.read_bytes() if record_path.exists() else None
     created = False
     try:
         with target.open('xb') as out:
@@ -87,15 +85,6 @@ def sign_locked(conn, patient, encoded, revision):
         conn.commit()
     except Exception:
         conn.rollback()
-        if original is None:
-            record_path.unlink(missing_ok=True)
-        else:
-            fd, temp = tempfile.mkstemp(dir=folder)
-            try:
-                with os.fdopen(fd, 'wb') as out: out.write(original)
-                os.replace(temp, record_path)
-            finally:
-                if os.path.exists(temp): os.unlink(temp)
         if created: target.unlink(missing_ok=True)
         raise
     return {'file': target.name}

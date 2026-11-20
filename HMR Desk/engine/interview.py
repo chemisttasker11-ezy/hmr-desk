@@ -1,5 +1,7 @@
-﻿import datetime as dt
+import datetime as dt
 import hashlib
+import copy
+import medicine_snapshot
 from contextlib import contextmanager
 import threading
 import importlib.util
@@ -11,8 +13,10 @@ import shutil
 import subprocess
 import tempfile
 
+import clinical_review
 import db
 import jobs
+import records
 import referral
 import settings
 
@@ -42,7 +46,7 @@ def medicine_rows(data):
     rows = [r[:] for r in data['meds']]
     for i, meta in enumerate((data.get('details') or {}).get('meds', [])):
         if i < len(rows):
-            rows[i][4] = '\n'.join(filter(None, (rows[i][4], 'DAA: ' + meta['packed'] if meta['packed'] else '', use_text(meta), 'How often used: ' + meta['prn_use'] if meta.get('prn_use') else '')))
+            rows[i][4] = '\n'.join(filter(None, (rows[i][4], 'DAA: ' + meta['packed'] if meta['packed'] else '', use_text(meta), reference_text(meta), 'How often used: ' + meta['prn_use'] if meta.get('prn_use') else '')))
     return rows
 
 USE_REASONS = ('', 'finished_course', 'stopped_gp', 'stopped_specialist', 'self_ceased', 'ran_out_of_scripts', 'side_effects', 'other', 'unknown')
@@ -56,7 +60,62 @@ def use_text(meta):
     if status == 'not_using' and meta.get('use_details'): text += ': ' + meta['use_details']
     return text
 
+REFERENCE_KEYS = {'source', 'code', 'display', 'release'}
+# Optional, catalogue-owned identity names copied from the chosen listing when every listing in the chosen group
+# agrees. Never derived from the display text. Saved references without them stay valid (nothing is migrated).
+REFERENCE_OPTIONAL_KEYS = {'generic_name', 'brand_name'}
+
+def valid_reference(ref):
+    return (isinstance(ref, dict) and REFERENCE_KEYS <= set(ref) <= REFERENCE_KEYS | REFERENCE_OPTIONAL_KEYS
+            and all(isinstance(v, str) and 0 < len(v) <= 400 for v in ref.values()))
+
+def reference_identity(meta):
+    # The catalogue's own generic/brand for a linked row, or None for a part it did not record or could not settle.
+    ref = (meta or {}).get('reference')
+    if not valid_reference(ref): return {'generic_name': None, 'brand_name': None}
+    return {k: ref.get(k) for k in ('generic_name', 'brand_name')}
+
+def reference_text(meta):
+    ref = (meta or {}).get('reference')
+    if not valid_reference(ref): return ''
+    # PBS listing codes are billing identifiers with no use to the pharmacist or patient: they stay in the stored
+    # reference (provenance) but are not printed. Other sources keep their concept code.
+    ident = 'PBS' if ref['source'] == 'pbs' else ref['source'].upper() + ' ' + ref['code']
+    return 'Reference: ' + ref['display'] + ' (' + ident + ', release ' + ref['release'] + ')'
+
+PROPOSAL_CANDIDATE_KEYS = {'source', 'code', 'display', 'kind', 'generic_name', 'brand_name', 'dose_form', 'release'}
+
+def valid_prefill_proposal(p):
+    # An unconfirmed intake-prepared proposal: identity text plus one catalogue
+    # candidate. It is never a confirmed reference and never attaches by itself.
+    if not isinstance(p, dict) or set(p) != {'input_text', 'candidate'}: return False
+    if not isinstance(p['input_text'], str) or not 0 < len(p['input_text']) <= 400: return False
+    c = p['candidate']
+    if not isinstance(c, dict) or set(c) != PROPOSAL_CANDIDATE_KEYS: return False
+    for k in PROPOSAL_CANDIDATE_KEYS:
+        # Catalogue descriptive fields can be NULL; identity fields cannot.
+        if c[k] is None and k in ('kind', 'generic_name', 'brand_name', 'dose_form'): continue
+        if not isinstance(c[k], str) or len(c[k]) > 400: return False
+    return all(c[k] for k in ('source', 'code', 'display', 'release'))
+
 def valid_use(m, base, optional):
+    if 'source_evidence' in m:
+        evidence = m['source_evidence']
+        if not isinstance(evidence, dict) or set(evidence) != {'kind', 'lines', 'page_candidates', 'text_sha256'}: return False
+        if evidence['kind'] != 'referral_text' or not isinstance(evidence['text_sha256'], str) or not re.fullmatch('[a-f0-9]{64}', evidence['text_sha256']): return False
+        lines, pages = evidence['lines'], evidence['page_candidates']
+        if not isinstance(lines, list) or not 1 <= len(lines) <= 80 or any(not isinstance(line, str) or len(line) > 20000 for line in lines): return False
+        if not isinstance(pages, list) or len(pages) != len(lines) or any(not isinstance(group, list) or len(group) > 500 or any(type(page) is not int or not 1 <= page <= 500 for page in group) for group in pages): return False
+        m = {k: v for k, v in m.items() if k != 'source_evidence'}
+    if 'item_id' in m:
+        if not medicine_snapshot.valid_id(m['item_id']): return False
+        m = {k: v for k, v in m.items() if k != 'item_id'}
+    if 'reference' in m:
+        if not valid_reference(m['reference']): return False
+        m = {k: v for k, v in m.items() if k != 'reference'}
+    if 'prefill_proposal' in m:
+        if not valid_prefill_proposal(m['prefill_proposal']): return False
+        m = {k: v for k, v in m.items() if k != 'prefill_proposal'}
     if any(k in m and (not isinstance(m[k], str) or len(m[k]) > 20000 or (k == 'kind' and m[k] not in ('', 'prescribed', 'otc', 'complementary'))) for k in optional): return False
     m = {k: v for k, v in m.items() if k not in optional}
     extra = {'use_status', 'use_reason', 'use_details'}
@@ -68,7 +127,7 @@ def referral_text(folder):
     files = sorted(f for f in folder.iterdir() if f.is_file() and f.suffix.lower() == '.pdf' and not f.name.lower().startswith(('ppa consent - ', 'hmr interview - ')))
     files = [f for f in files if re.search(r'_ [A-Z]{2,4}\.pdf$', f.name)] or [f for f in files if 'referral' in f.name.lower()]
     if files:
-        specmod = importlib.util.spec_from_file_location('hmr_intake', Path(db.BASE) / 'scripts' / 'intake' / 'intake.py')
+        specmod = importlib.util.spec_from_file_location('hmr_intake', __import__('app_paths').resource_root() / 'scripts' / 'intake' / 'intake.py')
         module = importlib.util.module_from_spec(specmod); specmod.loader.exec_module(module)
         with module.fitz.open(files[0]) as doc: pages = [page.get_text() for page in doc]
         if any(len(t.strip()) < 200 for t in pages):
@@ -106,8 +165,9 @@ def blank(conn, patient):
     text, clarify = referral_text(folder)
     found = referral.parse(text) if text is not None else None
     record['clarify'].extend(clarify)
-    if spec.is_file():
-        data = json.loads(spec.read_text(encoding='utf-8-sig'))
+    stored_spec = records.get_json(conn, patient['id'], 'interview_spec.json')
+    if stored_spec is not None or spec.is_file():
+        data = stored_spec if stored_spec is not None else json.loads(spec.read_text(encoding='utf-8-sig'))
         for k in TEXT:
             source = 'alcohol' if k == 'alcohol_smoking' else k
             if isinstance(data.get(source), str): record[k] = data[source]
@@ -145,14 +205,102 @@ def blank(conn, patient):
     record['details']['meds'] = [{'packed': '', 'as_instructed': False} for _ in record['meds']]
     if found is not None:
         for i in ceased: record['details']['meds'][i].update(use_status='not_using', use_reason='', use_details='Ceased per referral')
+        # Attach only rows actually derived from this referral, not an older spec.
+        if stored_spec is None and not spec.is_file():
+            pages = [page.splitlines() for page in text.split('\f')]
+            for meta, lines in zip(record['details']['meds'], found.get('medicine_source_lines', [])):
+                meta['source_evidence'] = {
+                    'kind': 'referral_text', 'lines': lines,
+                    'page_candidates': [[n + 1 for n, page in enumerate(pages) if any(raw.strip() == line.strip() for raw in page)] for line in lines],
+                    'text_sha256': hashlib.sha256(text.encode('utf-8')).hexdigest(),
+                }
+
+    # Clinical fields entered at intake are not automatically promoted unless
+    # a named pharmacist confirmed them against an exact original PDF page.
+    reviewed_source = folder / 'referral_source.json'
+    if reviewed_source.is_file():
+        reviewed = json.loads(reviewed_source.read_text(encoding='utf-8')).get('clinical_review', {})
+        if clinical_review.is_reviewed(reviewed):
+            reviewer = reviewed.get('reviewed_by', '')
+            # Each fact cites its own original PDF page.
+            if reviewed.get('conditions'):
+                origin = clinical_review.origin(reviewed, 'conditions')
+                record['conditions'] = reviewed['conditions']
+                record['sources'].append('Conditions confirmed: ' + origin + '; ' + reviewer)
+            allergy_state = reviewed.get('allergies_status', 'unknown')
+            origin = clinical_review.origin(reviewed, 'allergies')
+            if allergy_state == 'explicit_none':
+                record['allergies'] = 'No known allergies — explicitly documented in ' + origin
+                record['sources'].append('Allergy negative confirmed: ' + origin + '; ' + reviewer)
+            elif allergy_state == 'listed' and reviewed.get('allergies'):
+                record['allergies'] = reviewed['allergies']
+                record['sources'].append('Allergies confirmed: ' + origin + '; ' + reviewer)
+            if reviewed.get('medicines'):
+                origin = clinical_review.origin(reviewed, 'medicines')
+                record['clarify'].append('Confirmed prescribed referral list from ' + origin +
+                                         ' (actual use still to reconcile): ' + reviewed['medicines'][:9000])
+                # Reuse the pharmacist's confirmed list so it is not typed twice. Only when the referral text gave no
+                # medicine rows. Each non-empty line becomes one row exactly as entered: no name or directions are
+                # split out, use is left unconfirmed (so nothing counts as Taking until the pharmacist says so).
+                lines = [line.strip() for line in str(reviewed['medicines']).splitlines() if line.strip()]
+                fresh = stored_spec is None and not spec.is_file()
+                replaced = False
+                if fresh and record['meds'] and 0 < len(lines) <= 60 and all(len(line) <= 400 for line in lines):
+                    # First preparation only: the pharmacist's confirmed list outranks parser rows. Parser rows are not
+                    # merged or appended; they are kept as text in Clarify. Ceased-per-referral rows are kept.
+                    keep = {i for i, meta in enumerate(record['details']['meds']) if meta.get('use_status') == 'not_using'}
+                    parsed = [r for i, r in enumerate(record['meds']) if i not in keep]
+                    norm = lambda t: ' '.join(str(t).split()).casefold()
+                    same = {norm(' '.join(x for x in r[:2] if x)) for r in parsed} == {norm(x) for x in lines}
+                    if parsed and not same:
+                        kept_rows = [(r, record['details']['meds'][i]) for i, r in enumerate(record['meds']) if i in keep and r[0].strip().casefold() not in {x.casefold() for x in lines}]
+                        record['meds'] = [r for r, _ in kept_rows]; record['details']['meds'] = [m for _, m in kept_rows]
+                        record['clarify'].append('Referral parser read different medicine rows; replaced by the confirmed list. Parser read: ' + '; '.join(' '.join(x for x in r[:2] if x) for r in parsed)[:3000])
+                        record['sources'] = [x for x in record['sources'] if x != 'meds from referral - check']
+                        replaced = True
+                if (replaced or not record['meds']) and 0 < len(lines) <= 60 and all(len(line) <= 400 for line in lines):
+                    for line in lines:
+                        record['meds'].append([line, '', '', '', ''])
+                        record['details']['meds'].append({'packed': '', 'as_instructed': False})
+                    record['sources'].append('Medicine rows made from the confirmed intake list (' + origin + '); text exactly as entered, edit name and directions; use not confirmed - check')
+            if reviewed.get('observations'):
+                origin = clinical_review.origin(reviewed, 'observations')
+                record['obs'].append(['Referral observation', reviewed['observations'], origin])
+        elif any(reviewed.get(k) for k in ('conditions','medicines','observations','allergies')):
+            record['clarify'].append('Unconfirmed source material was entered during intake; review original PDF')
     return record
+
+
+def prepare_prefill_proposals(record):
+    """Attach unconfirmed exact-unique reference proposals to referral-derived medicines.
+
+    Only the intake materialization path (referral_entry.commit) calls this, so a
+    persisted proposal always means 'prepared at intake'. Records built on first
+    interview open or for pre-existing patients never carry one; the interview
+    then shows the normal live lookup with no intake provenance. This never
+    attaches or confirms a medicine: the pharmacist always picks. Missing
+    reference data or any lookup failure leaves the record untouched.
+    """
+    try:
+        import medicine_reference
+        metas = record.get('details', {}).get('meds', [])
+        derived = [(i, row[0]) for i, (meta, row) in enumerate(zip(metas, record.get('meds', []))) if meta.get('source_evidence')]
+        if derived:
+            proposals = medicine_reference.suggest_many([name for _, name in derived[:80]])
+            if proposals.get('installed'):
+                for (i, _), proposal in zip(derived[:80], proposals['results']):
+                    if proposal['state'] == 'exact_candidate' and proposal['input_text'] == record['meds'][i][0]:
+                        metas[i]['prefill_proposal'] = {'input_text': proposal['input_text'], 'candidate': proposal['candidates'][0]}
+    except Exception:
+        pass
 
 class Conflict(Exception):
     pass
 
 
-def revision(target):
-    return hashlib.sha256(target.read_bytes()).hexdigest() if target.exists() else 'missing'
+def revision(conn, patient):
+    """Conflict token for the saved interview record (sha256 of its exact bytes, or 'missing')."""
+    return records.revision(conn, patient['id'], 'interview.json')
 
 
 _lock = threading.RLock()
@@ -198,6 +346,7 @@ def validate(record):
         if 'other_meds' in d and (not isinstance(d['other_meds'], list) or len(d['other_meds']) != len(record['other_meds']) or any(not isinstance(m, dict) or not valid_use(m, {'checked', 'priority'}, {'kind'}) or type(m['checked']) is not bool or type(m['priority']) is not int or not 0 <= m['priority'] <= 1000000 for m in d['other_meds'])): raise ValueError('invalid other medicine details')
         for key, field in (('meds', 'prn_use'), ('other_meds', 'kind')):
             for m in d.get(key, []): m.setdefault(field, '')
+    medicine_snapshot.validate_ids(record)
     if 'consent_signed_draft' in record and (type(record['consent_signed_draft']) is not bool or (record['consent_signed_draft'] and c['signed'])): raise ValueError('invalid consent draft')
     if 'revision' in record and (not isinstance(record['revision'], str) or not re.fullmatch(r'missing|[0-9a-f]{64}', record['revision'])): raise ValueError('invalid revision')
     if 'saved' in record and not isinstance(record['saved'], bool): raise ValueError('invalid saved flag')
@@ -207,8 +356,8 @@ def signed_file(folder):
     return sorted(f.name for f in folder.iterdir() if f.is_file() and 'signed' in f.name.lower())
 
 def load(conn, patient):
-    target = jobs.patient_folder(patient) / 'interview.json'
-    content = target.read_bytes() if target.exists() else None
+    folder = jobs.patient_folder(patient)
+    content = records.get(conn, patient['id'], 'interview.json')
     data = json.loads(content) if content is not None else blank(conn, patient)
     data['revision'] = hashlib.sha256(content).hexdigest() if content is not None else 'missing'
     if 'details' not in data:
@@ -230,8 +379,8 @@ def load(conn, patient):
         for key, value in [('by', 'patient'), ('relationship', 0), ('authorised_name', '')]: data['consent'].setdefault(key, value)
     if isinstance(data.get('header'), dict):
         for key, setting in [('pharmacist', 'pharmacist_name'), ('pharmacist_phone', 'pharmacist_phone'), ('pharmacist_credential', 'pharmacist_credential')]: data['header'][key] = settings.get(conn, setting)
-    validate(data); data['saved'] = target.exists()
-    signed = signed_file(target.parent)
+    validate(data); data['saved'] = content is not None
+    signed = signed_file(folder)
     data['consent_file'] = signed[0] if signed else ''
     return data
 
@@ -240,8 +389,10 @@ def save(conn, patient, record, *, locked=False, signing=False):
         with record_lock(patient):
             folder = jobs.patient_folder(patient)
             name = re.sub(r'[<>:"/\\|?*]', '', patient['name']).rstrip(' .')
-            paths = [folder / 'interview.json', folder / 'interview.json.bak', folder / ('PPA Consent - ' + name + '.pdf')]
-            originals = [(path, path.read_bytes() if path.exists() else None) for path in paths]
+            # The interview records live in the encrypted database and roll back with the transaction.
+            # Only the consent PDF is still an ordinary file, so it is restored by hand.
+            pdf = folder / ('PPA Consent - ' + name + '.pdf')
+            pdf_original = pdf.read_bytes() if pdf.exists() else None
             old_revision = record.get('revision') if isinstance(record, dict) else None
             try:
                 result = save(conn, patient, record, locked=True, signing=signing)
@@ -249,35 +400,42 @@ def save(conn, patient, record, *, locked=False, signing=False):
                 return result
             except Exception:
                 conn.rollback()
-                for path, content in originals:
-                    if path.exists() and content is not None and path.read_bytes() == content: continue
-                    if content is None:
-                        path.unlink(missing_ok=True)
+                if not (pdf.exists() and pdf_original is not None and pdf.read_bytes() == pdf_original):
+                    if pdf_original is None:
+                        pdf.unlink(missing_ok=True)
                     else:
                         fd, temp = tempfile.mkstemp(dir=folder)
                         try:
-                            with os.fdopen(fd, 'wb') as out: out.write(content)
-                            os.replace(temp, path)
+                            with os.fdopen(fd, 'wb') as out: out.write(pdf_original)
+                            os.replace(temp, pdf)
                         finally:
                             if os.path.exists(temp): os.unlink(temp)
                 if isinstance(record, dict) and old_revision is not None: record['revision'] = old_revision
                 raise
     validate(record); data = {k: v for k, v in record.items() if k not in ('saved', 'consent_file', 'revision')}
-    target = jobs.patient_folder(patient) / 'interview.json'
-    if record.get('revision') != revision(target): raise Conflict('interview conflict')
-    previous = json.loads(target.read_text(encoding='utf-8')) if target.exists() else {}
+    folder = jobs.patient_folder(patient)
+    previous_bytes = records.get(conn, patient['id'], 'interview.json')
+    if record.get('revision') != records.digest(previous_bytes): raise Conflict('interview conflict')
+    previous = json.loads(previous_bytes.decode('utf-8')) if previous_bytes is not None else {}
     was_signed = previous.get('consent', {}).get('signed') is True
-    if not signing and was_signed and signed_file(target.parent) and (data['consent'] != previous['consent'] or data.get('consent_signed_draft', False)): raise ValueError('signed consent cannot be changed')
-    if target.exists():
-        fd, temp = tempfile.mkstemp(dir=target.parent); os.close(fd)
-        try: shutil.copyfile(target, temp); os.replace(temp, str(target) + '.bak')
-        finally:
-            if os.path.exists(temp): os.unlink(temp)
-    jobs.atomic_json(target, data)
-    record['revision'] = revision(target)
+    if not signing and was_signed and signed_file(folder) and (data['consent'] != previous['consent'] or data.get('consent_signed_draft', False)): raise ValueError('signed consent cannot be changed')
+    # IDs are technical metadata only. No actual-use or identity approval is inferred.
+    # Normalise only an explicit save, never a read, retaining previous exact bytes below.
+    data = copy.deepcopy(data)
+    if 'details' not in data:
+        data['details'] = empty_details()
+        data['details']['meds'] = [{'packed': '', 'as_instructed': False} for _ in data['meds']]
+    data['details'].setdefault('meds', [{'packed': '', 'as_instructed': False} for _ in data['meds']])
+    data['details'].setdefault('other_meds', [{'checked': False, 'priority': 0} for _ in data['other_meds']])
+    data = medicine_snapshot.assign_ids(data)
+    validate(data)
+    if previous_bytes is not None:
+        records.put(conn, patient['id'], 'interview.json.bak', previous_bytes)
+    records.put(conn, patient['id'], 'interview.json', json.dumps(data, ensure_ascii=False, indent=2).encode('utf-8'))
+    record['revision'] = revision(conn, patient)
     name = re.sub(r'[<>:"/\\|?*]', '', patient['name']).rstrip(' .')
-    consent_path = target.parent / ('PPA Consent - ' + name + '.pdf')
-    if consent_path.exists() and not was_signed and not data['consent']['signed'] and not signed_file(target.parent): fill_consent(conn, patient, data, consent_path)
+    consent_path = folder / ('PPA Consent - ' + name + '.pdf')
+    if consent_path.exists() and not was_signed and not data['consent']['signed'] and not signed_file(folder): fill_consent(conn, patient, data, consent_path)
     conn.execute('UPDATE patients SET has_sheet=1,updated_at=? WHERE id=?', (db.now(), patient['id']))
     db.log(conn, patient['id'], 'interview_saved', {}, 'api')
     if data['consent']['signed'] and not was_signed: db.log(conn, patient['id'], 'consent_signed', {'date': data['consent']['date']}, 'api')
@@ -290,7 +448,13 @@ def available(folder, stem, suffixes):
         candidate = stem + ' ' + dt.datetime.now().strftime('%H%M') + (f' {n}' if n > 1 else ''); n += 1
     return candidate
 
+_last = threading.local()  # notice from the latest export on this thread, read by pack()
+
 def export(conn, patient, fmt):
+    _last.note = ''
+    return export_with_note(conn, patient, fmt)
+
+def export_with_note(conn, patient, fmt):
     if fmt not in ('docx', 'pdf', 'both'): raise ValueError('invalid format')
     from docx import Document
     from docx.shared import Cm, Pt
@@ -326,18 +490,26 @@ def export(conn, patient, fmt):
     table('Medicines on referral', ['Medicine','Referral directions','Actually taking','Points to check','Notes'], medicine_rows(data), 3)
     other_rows = [r[:] for r in data['other_meds']]
     for i, meta in enumerate(data['details'].get('other_meds', [])):
-        if i < len(other_rows): other_rows[i][3] = '\n'.join(filter(None, (other_rows[i][3], use_text(meta), CHOICE_LABELS['kind'].get(meta.get('kind'), ''))))
+        if i < len(other_rows): other_rows[i][3] = '\n'.join(filter(None, (other_rows[i][3], use_text(meta), CHOICE_LABELS['kind'].get(meta.get('kind'), ''), reference_text(meta))))
     table('Other medicines found', ['Medicine','Directions','Why / who','Notes'], other_rows, 3)
     table('Pathology on file', ['Test','Result','Date','Comment'], data['pathology'], 2)
     section('To clarify', '\n'.join(data['clarify']))
     section('PPA consent', 'Signed: ' + ('Yes' if data['consent']['signed'] else 'No') + '    Date: ' + data['consent']['date'])
     with target.open('xb') as f: doc.save(f)
     if fmt in ('pdf', 'both'):
-        pdf = folder / (stem + '.pdf'); script = jobs.SKILL / 'scripts' / 'word2pdf.ps1'
+        import pdf_export
         try:
-            subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script), str(target), str(pdf)], check=True, capture_output=True, timeout=120)
-            if not pdf.is_file(): raise RuntimeError('PDF was not created')
-        except (OSError, subprocess.SubprocessError, RuntimeError) as exc: raise RuntimeError('PDF conversion failed; Microsoft Word is required. DOCX kept at ' + str(target) + ': ' + str(exc)) from exc
+            converted = pdf_export.convert(target, folder / (stem + '.pdf'))
+        except Exception as exc:
+            left = getattr(exc, 'cleanup_pending', None)
+            if left:
+                db.log(conn, patient['id'], 'pdf_cleanup_pending', {'folder': left, 'conversion': 'failed', 'error': exc.cleanup_error}, 'engine'); conn.commit()
+                raise RuntimeError(str(exc) + '; ' + pdf_export.pending_note(left)) from exc
+            raise
+        if isinstance(converted, dict) and converted.get('cleanup_pending'):
+            left = Path(converted['cleanup_pending']).name
+            db.log(conn, patient['id'], 'pdf_cleanup_pending', {'folder': left, 'conversion': 'ok', 'error': converted.get('cleanup_error', '')}, 'engine'); conn.commit()
+            _last.note = 'PDF created. ' + pdf_export.pending_note(left)
     return str(target)
 
 def consent_template():
@@ -349,7 +521,9 @@ def consent_template():
 def pack(conn, patient, fmt='docx'):
     record = load(conn, patient)
     if not record['saved']: save(conn, patient, record)
+    _last.note = ''
     output = 'Interview: ' + export(conn, patient, fmt)
+    if getattr(_last, 'note', ''): output += '\n' + _last.note
     folder = jobs.patient_folder(patient); name = re.sub(r'[<>:"/\\|?*]', '', patient['name']).rstrip(' .')
     if record['consent']['signed'] or signed_file(folder): return output + '\nSigned consent kept'
     template = consent_template()

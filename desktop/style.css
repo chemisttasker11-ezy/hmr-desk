@@ -94,6 +94,17 @@ input[type=checkbox] { min-height: 0; width: 18px; height: 18px; }
 .interview-picker label { min-width: 220px; }
 .interview-header { background: white; padding: 8px; overflow-wrap: anywhere; }
 .interview-layout { display: grid; grid-template-columns: minmax(0, 1fr) 190px; gap: 16px; align-items: start; }
+
+/* Recorded-observations panel: deliberate column minimums with panel-scoped
+   horizontal scroll; never stretches or squeezes the global table layout. */
+#section-recorded-lab-observations .observations-scroll { overflow-x: auto; }
+#section-recorded-lab-observations table { min-width: 780px; table-layout: fixed; }
+#section-recorded-lab-observations th, #section-recorded-lab-observations td { overflow-wrap: break-word; }
+#section-recorded-lab-observations .obs-interval { white-space: nowrap; min-width: 90px; }
+#section-recorded-lab-observations th:nth-child(1), #section-recorded-lab-observations td:nth-child(1) { width: 22%; }
+#section-recorded-lab-observations th:nth-child(2), #section-recorded-lab-observations td:nth-child(2) { width: 16%; }
+#section-recorded-lab-observations th:nth-child(4), #section-recorded-lab-observations td:nth-child(4) { width: 14%; }
+#section-recorded-lab-observations th:nth-child(5), #section-recorded-lab-observations td:nth-child(5) { width: 24%; }
 .interview-index { position: sticky; top: 10px; display: flex; flex-direction: column; gap: 4px; font-size: 13px; max-height: 90vh; overflow: auto; }
 .interview-index a { color: #175b4a; }
 .interview-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
@@ -735,3 +746,30 @@ main:has(.interview-context) > header { height: 96px; min-height: 96px; }
 .interview-health .interview-entry { display: grid; grid-template-columns: minmax(180px, 1fr) auto; align-items: center; gap: 4px 12px; border-bottom: 1px solid #d0ded7; }
 .interview-health [data-entry-detail] { grid-column: 1 / -1; }
 @media (max-width: 600px) { .interview-health .interview-entry { grid-template-columns: 1fr; } }
+
+.med-lookup{flex:1 1 100%;display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.med-lookup-results{flex:1 1 100%}
+.med-lookup-results p{margin:4px 0}
+.med-lookup-result{display:flex;gap:12px;align-items:center;justify-content:space-between;padding:4px 0;border-top:1px solid #d9e0dd}
+.med-ref{font-size:.95em}
+.interview-medicine-main > .med-field { flex: 1 1 125px; min-width: 100px; display: flex; flex-direction: column; gap: 2px; }
+.interview-medicine-main .med-field textarea { width: 100%; box-sizing: border-box; font-weight: 400; }
+.med-field-label { font-size: 12px; font-weight: 600; color: #3b4a43; }
+.interview-medicine-main .interview-chips, .interview-medicine-actions .interview-chips { flex-wrap: wrap; align-items: center; gap: 3px; }
+.interview-medicine-main .interview-chips legend, .interview-medicine-actions .interview-chips legend { position: static; width: auto; height: auto; overflow: visible; clip-path: none; float: left; margin: 0 6px 0 0; padding: 0; font-size: 12px; font-weight: 600; color: #3b4a43; line-height: 28px; }
+
+.field-hint { margin: 4px 0 0; font-size: 0.9em; color: #7a3b00; }
+.field-hint:empty { display: none; }
+.action-reason { display: block; margin-top: 2px; font-size: 12px; color: #59675f; }
+.action-with-reason { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 2px; vertical-align: top; max-width: 16em; }
+/* Report editor at narrow windows: let the details/table wrappers shrink so fields stay inside the card and tables scroll. */
+.report-main details, .report-main .report-table, .report-main .report-fields { min-width: 0; max-width: 100%; box-sizing: border-box; }
+.report-main .interview-table { max-width: 100%; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
+}
+@media (forced-colors: active) {
+  .status-chip { border: 1px solid CanvasText; }
+  button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid Highlight; outline-offset: 2px; }
+}

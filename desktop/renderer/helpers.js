@@ -11,6 +11,24 @@ const H = (() => {
     const match = String(value).match(/^(\d{4})-(\d\d)-(\d\d)/);
     return match ? `${match[3]}/${match[2]}/${match[1]}` : String(value);
   }
+  // Advisory only: compares the report date with the pharmacist's own local calendar day (the day on this PC, not UTC).
+  // Never changes the date. Accepts DD/MM/YYYY (as stored) or an ISO date.
+  function reportDateReview(value, now = new Date()) {
+    const text = String(value ?? '').trim();
+    const today = `${String(now.getDate()).padStart(2, '0')}/${String(now.getMonth() + 1).padStart(2, '0')}/${now.getFullYear()}`;
+    if (!text) return { state: 'missing', today, text: 'No report date is set. Set one before building.' };
+    const m = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/) || text.match(/^(\d{4})-(\d\d)-(\d\d)(?:$|T)/);
+    const [d, mo, y] = !m ? [] : (m[0].includes('/') ? [+m[1], +m[2], +m[3]] : [+m[3], +m[2], +m[1]]);
+    const real = m && new Date(y, mo - 1, d);
+    if (!m || real.getFullYear() !== y || real.getMonth() !== mo - 1 || real.getDate() !== d) {
+      return { state: 'malformed', today, text: `"${text}" is not a valid date. Write it as DD/MM/YYYY.` };
+    }
+    const shown = `${String(d).padStart(2, '0')}/${String(mo).padStart(2, '0')}/${y}`;
+    const diff = real.getTime() - new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    if (diff < 0) return { state: 'old', today, shown, text: `Report date is ${shown}. Today is ${today}. Keep it, or set it to today.` };
+    if (diff > 0) return { state: 'future', today, shown, text: `Report date ${shown} is after today (${today}). Keep it only if that is intended.` };
+    return { state: 'ok', today, shown, text: '' };
+  }
   function interviewOutstanding(record) {
     const referral = record.meds || [], found = record.other_meds || [];
     const meds = record.details?.meds || [], other = record.details?.other_meds || [];
@@ -105,7 +123,8 @@ const H = (() => {
     claim: 'Claim',
     register_xlsx: 'Export register',
   };
-  const plainSteps = { 'confirm medicines': 'Check medicines for interaction check' };
+  // Today rows and buttons do not load report currency, so plain 'sign off' would imply the report is current.
+  const plainSteps = { 'confirm medicines': 'Check medicines for interaction check', 'sign off': 'Check report, then sign off' };
   function sectionOf(page) {
     return ({ messages: 'book', intake: 'book', to_book: 'book', calendar: 'visit', interview: 'visit',
       reports: 'report', report_editor: 'report', followup_editor: 'followup', run: 'activity' })[page] || page;
@@ -135,6 +154,13 @@ const H = (() => {
     if (p.stage === 'hold' && !words.includes('On hold')) words.push('On hold');
     if (p.stage === 'archived' && !words.includes('Archived')) words.push('Archived');
     return words;
+  }
+  // When no single next action is offered, say where the real choices are and open them.
+  function nextActionHint(primaryAction, otherCount) {
+    if (primaryAction) return { text: '', openOthers: false };
+    return otherCount > 0
+      ? { text: 'Check the details, then choose what happened next below.', openOthers: true }
+      : { text: 'Review this patient before continuing.', openOthers: false };
   }
   function stageActions(p, milestones = {}) {
     const actions = {
@@ -187,6 +213,101 @@ const H = (() => {
     'report_build',
     'claim',
   ];
+  // A historical 'report_build: done' step can be true even after the clinical record changes.
+  // Keep backend workflow and pharmacist approval separate from the status shown on screens.
+  function reportWorkflowStatus(patientState, buildStep, currency) {
+    const canBuild = ['visited', 'report_drafted'].includes(patientState);
+    const current = currency?.status === 'current';
+    const reason = current ? '' : currency?.status === 'outdated'
+      ? 'The generated report is outdated. Rebuild Word and PDF before sign-off.'
+      : currency?.status === 'not_generated'
+        ? 'No current generated report. Build Word and PDF before sign-off.'
+        : 'Report currency could not be verified. Reload before sign-off.';
+    const required = {
+      consent_recorded: 'Record patient consent in the interview',
+      medicines_reconciled: 'Acknowledge the current medicine reconciliation in the interview',
+      demographics_match: 'Resolve patient, GP and date differences in the report',
+    };
+    const items = currency?.readiness?.items;
+    // Display-only checks are advisory, not backend approval. Unknown or omitted evidence cannot
+    // make the UI suggest that authorisation is ready; the API remains the final authority.
+    const missing = Object.entries(required).filter(([key]) =>
+      !Array.isArray(items) || !items.some(item => item?.key === key && item.state === 'met'));
+    const signPrereqReason = missing.length
+      ? 'Complete recorded checks before sign-off: ' + missing.map(([key, label]) => {
+          const item = Array.isArray(items) ? items.find(row => row?.key === key) : null;
+          return label + (item?.state === 'unknown' || !item ? ' (unverified)' : '');
+        }).join('; ') + '.'
+      : '';
+    return {
+      build: {
+        ...(buildStep || {}),
+        // A previous build is not evidence that the current clinical record matches it.
+        done: current,
+        // Rebuilding remains available in editable stages; this never enables sign-off.
+        ready: canBuild && Boolean(buildStep?.ready || buildStep?.done),
+        // The engine's own prerequisite (for example "confirm the medicine list first") is the real reason a Build
+        // button is grey. Report currency explains the sign-off block, so it only fills in when the engine gave no reason.
+        reason: (!buildStep?.ready && !buildStep?.done && buildStep?.reason) || reason || buildStep?.reason || '',
+      },
+      canSign: canBuild && current && missing.length === 0,
+      signReason: !canBuild ? 'This report is not awaiting sign-off.' : reason || signPrereqReason,
+    };
+  }
+  // The report editor greys both Build buttons when there are no findings. Say so beside them: a disabled button with no reason
+  // looks broken. This only explains the existing rule; it does not change which reports can be built.
+  function buildDisabledReason(findingCount) {
+    return Number(findingCount) > 0 ? '' : 'Build is off until the report has at least one finding. Add a finding to turn it on.';
+  }
+  // A medicine linked to a catalogue line carries the catalogue label (brand, strength, form) as its text. The medicines panel
+  // copies that text into Generic name and cannot split it without guessing, so say so beside the field. Text only.
+  const LINKED_CATALOGUE_NOTE = 'Linked catalogue line (brand, strength and form), not a generic name. Enter the generic name and brand before the eMIMS check.';
+  function linkedCatalogueNote(name, snapshotItems) {
+    const text = String(name || '').trim();
+    if (!text) return '';
+    const linked = (snapshotItems || []).some((item) => item?.metadata?.reference && String(item.values?.[0] || '').trim() === text);
+    return linked ? LINKED_CATALOGUE_NOTE : '';
+  }
+  // Freshness and recorded-state checklist from GET /api/patients/<id>/report-status. Display only: it never
+  // says approved or ready, and unknown or unverifiable stays visibly uncertain.
+  function reportStatusHtml(status) {
+    if (!status || typeof status !== 'object') return '';
+    const reasonText = {
+      document_changed: 'the Word file changed', pdf_changed: 'the PDF changed or is missing', report_content_changed: 'the report content changed since it was built',
+      interview_changed: 'the interview changed', pathology_changed: 'the pathology changed', source_files_changed: 'the original referral or pathology files changed',
+      clinical_record_changed: 'the clinical record changed', pharmacist_identity_changed: 'the pharmacist details in Settings changed', cannot_verify: 'the report could not be checked',
+    };
+    const reasons = (Array.isArray(status.reasons) ? status.reasons : []).map((r) => reasonText[r] || 'a change was detected');
+    let line;
+    if (status.status === 'current') line = 'Matches the saved interview and pathology, and the report text saved when it was built. Changes not yet saved in the editor are not included.';
+    else if (status.status === 'outdated') line = `Outdated: ${reasons.join('; ') || 'a change was detected'}. Rebuild before sign-off.`;
+    else if (status.status === 'not_generated') line = 'No report has been built yet.';
+    else line = 'Report status could not be checked.';
+    if (status.reasons && status.reasons.includes('cannot_verify')) line += ' Treat it as unverified.';
+    const head = status.status === 'current' ? 'Built report' : 'Report status';
+    let sign = status.signed_off ? 'A signed version exists.' : 'Not signed off.';
+    if (status.signed_off && status.signed_version_intact === false) sign = 'A signed version exists, but the signed version has changed or is no longer intact.';
+    const words = { met: 'Done', not_met: 'Not done', unknown: 'Unknown' };
+    const items = (status.readiness && Array.isArray(status.readiness.items) ? status.readiness.items : [])
+      .map((i) => `<li>${esc(String(i.label || ''))}: <strong>${esc(words[i.state] || 'Unknown')}</strong></li>`).join('');
+    return `<div class="report-status"><p><strong>${esc(head)}.</strong> ${esc(line)} ${esc(sign)}</p>${items ? `<ul>${items}</ul>` : ''}<p class="muted">Recorded state only. This is not clinical sign-off.</p></div>`;
+  }
+  // The submission note "N task(s) queued (...)" is written once. Shown later it would still say
+  // queued after the tasks finished, so describe the current state of the task list instead.
+  function runStatusText(message, tasks) {
+    const text = String(message || '');
+    const m = /^(\d+) task\(s\) queued( \([^\n]*\))?\./.exec(text);
+    if (!m || !Array.isArray(tasks)) return text;
+    const active = tasks.filter((t) => ['queued', 'running', 'waiting'].includes(t && t.state)).length;
+    const detail = m[2] || '';
+    const head = active ? `${m[1]} task(s) submitted${detail}. ${active} still queued, running or waiting.` : `${m[1]} task(s) submitted${detail}. None still queued, running or waiting.`;
+    return head + text.slice(m[0].length);
+  }
+  function buildOutcomeText(result, pdf) {
+    const first = String((result && result.output) || '').split(/\r?\n/).map((line) => line.trim()).find(Boolean) || '';
+    if (result && result.state === 'done') return `${pdf ? 'Word and PDF built' : 'Word built'}${first ? ': ' + first : ''}. The files are in the patient folder.`;
+    return `Build did not finish${first ? ': ' + first : ''}`;
+  }
   function patientPathway(p, milestones = {}, stepsList = []) {
     const stepsMap = Object.fromEntries((stepsList || p.steps || []).map((s) => [s.name, s]));
     const stage = p.stage;
@@ -209,7 +330,7 @@ const H = (() => {
         title: 'Visit & interview',
         completed: isVisited,
         current: !isVisited && (stage === 'ready' || (stage === 'booking' && p.visit_date && p.visit_date <= localDate())),
-        detail: isVisited ? 'Visit recorded' : (stage === 'ready' ? 'Ready for visit' : 'Awaiting booking'),
+        detail: isVisited ? 'Visit recorded' : (stage === 'ready' ? 'Ready for visit' : (p.visit_date ? (p.visit_date <= localDate() ? 'Visit due' : 'Booked, awaiting visit day') : 'Awaiting booking')),
       },
       {
         id: 'report',
@@ -319,19 +440,59 @@ const H = (() => {
   function showInterviewRefresh(record, detail) {
     return record?.interview_newer === true && !['sent', 'claimed'].includes(detail?.state) && !detail?.report_sent && !detail?.visits?.[0]?.report_sent;
   }
+  // A typed date such as 01102026 (no separators) can be read as 1 Oct or 10 Jan. The text is never
+  // rewritten; the pharmacist is only told to write it unambiguously.
+  function dateTextHint(value) {
+    const text = String(value ?? '').trim();
+    return /^\d{6,8}$/.test(text) ? `"${text}" has no separators. Write it as DD/MM/YYYY so the day and month cannot be misread.` : '';
+  }
+  function pathologyDateHints(rows) {
+    return (rows || []).map((row, i) => (dateTextHint(Array.isArray(row) ? row[2] : '') ? `Row ${i + 1}: ${dateTextHint(row[2])}` : '')).filter(Boolean);
+  }
   function tableInput(key, title, columns, rows, prefix) {
     return `<div class="interview-table"><table><thead><tr>${columns.map((c) => `<th scope="col">${esc(c)}</th>`).join('')}<th>Remove</th></tr></thead><tbody>${(rows || []).map((row, i) => `<tr>${columns.map((c, j) => `<td>${prefix === 'report' && !(key === 'meds' && j >= 2) ? `<input data-field="${esc(key)}" data-row="${i}" data-col="${j}" aria-label="${esc(c)} row ${i + 1}" value="${esc(row[j] || '')}">` : `<textarea data-field="${esc(key)}" data-row="${i}" data-col="${j}" aria-label="${esc(c)} row ${i + 1}">${esc(row[j] || '')}</textarea>`}${j === 0 && (key === 'meds' || (prefix === 'interview' && key === 'other_meds')) ? `<button type="button" data-amh-row aria-label="Search AMH for ${esc(c)} row ${i + 1}">AMH</button>` : ''}</td>`).join('')}<td><button type="button" data-${prefix}-remove="${esc(key)}" data-row="${i}" aria-label="Remove ${esc(title)} row ${i + 1}">Remove</button></td></tr>`).join('')}</tbody></table></div><button type="button" data-${prefix}-add="${esc(key)}">Add row</button>`;
+  }
+  function draftStorage() {
+    // Plaintext localStorage is a legacy source only. In the packaged app
+    // DPAPI-protected Electron IPC is the *sole* destination for new drafts.
+    const vault = typeof window !== 'undefined' && window.hmr?.draftStore;
+    if (!vault) return localStorage; // pure Node unit harness without Electron
+    const legacyKeys = () => Array.from({ length: localStorage.length }, (_, i) => localStorage.key(i))
+      .filter(key => key?.startsWith('hmr-draft:'));
+    const allKeys = () => [...new Set([...vault.keys(), ...legacyKeys()])];
+    return {
+      get length() { return allKeys().length; },
+      key: index => allKeys()[index] || null,
+      getItem(key) {
+        const secured = vault.getItem(key);
+        if (secured != null) return secured;
+        const old = localStorage.getItem(key);
+        if (old != null) {
+          vault.setItem(key, old); // persist encrypted before removing legacy source
+          localStorage.removeItem(key);
+        }
+        return old;
+      },
+      setItem(key, value) {
+        vault.setItem(key, value);
+        localStorage.removeItem(key);
+      },
+      removeItem(key) {
+        vault.removeItem(key);
+        localStorage.removeItem(key);
+      },
+    };
   }
   function interviewDrafts() {
     const drafts = [], prefix = 'hmr-draft:interview:';
     try {
-      for (let i = 0; i < localStorage.length; i++) {
-        const key = localStorage.key(i);
+      for (let i = 0; i < draftStorage().length; i++) {
+        const key = draftStorage().key(i);
         if (!key || !key.startsWith(prefix)) continue;
         const id = key.slice(prefix.length);
         if (!/^[1-9][0-9]*$/.test(id)) continue;
         try {
-          const entry = JSON.parse(localStorage.getItem(key));
+          const entry = JSON.parse(draftStorage().getItem(key));
           if (!entry || typeof entry.base !== 'string' || typeof entry.snapshot !== 'string' || !Array.isArray(entry.conflicts || [])) continue;
           const record = JSON.parse(entry.snapshot);
           if (!record || typeof record !== 'object' || Array.isArray(record)) continue;
@@ -347,6 +508,13 @@ const H = (() => {
     } catch (_) { return []; }
     return drafts;
   }
+  // The engine answered and refused the content (for example a finding that is still blank): that is a reason the
+  // pharmacist can act on, not an unreachable store. A dropped or unreachable connection keeps the storage wording.
+  const TRANSPORT_FAILURE = /fetch failed|UND_ERR|ECONN|EPIPE|socket|other side closed|network|timed? ?out|offline|ENOTFOUND/i;
+  function isRefusal(e) {
+    const message = String((e && e.message) || e || '');
+    return !!message && message.length < 300 && !TRANSPORT_FAILURE.test(message);
+  }
   function autosaver({ getRecord, getId, endpoint, status, errorText, draftKey, loadCurrent, onReconcile, equivalent }) {
     let saved = '', timer, saving = null, error = '', generation = 0, key = '', conflicts = [], storageError = false, unreadable = false, retries = 0, offline = false, verifying = null;
     const dirty = () => !!getRecord() && (conflicts.length > 0 || recordChanged(getRecord(), saved));
@@ -355,7 +523,7 @@ const H = (() => {
     function writeDraft() {
       if (!draftKey || !key || !getRecord()) return true;
       try {
-        localStorage.setItem(key, JSON.stringify({ base: saved, snapshot: JSON.stringify(getRecord()), conflicts }));
+        draftStorage().setItem(key, JSON.stringify({ base: saved, snapshot: JSON.stringify(getRecord()), conflicts }));
         storageError = false;
         return true;
       } catch (_) {
@@ -367,8 +535,8 @@ const H = (() => {
     function removeDraft(snapshot, draftId) {
       if (!draftId) return;
       try {
-        const entry = JSON.parse(localStorage.getItem(draftId));
-        if (entry && (entry.snapshot === snapshot || equivalent?.(entry.snapshot, snapshot)) && (!entry.conflicts || !entry.conflicts.length)) localStorage.removeItem(draftId);
+        const entry = JSON.parse(draftStorage().getItem(draftId));
+        if (entry && (entry.snapshot === snapshot || equivalent?.(entry.snapshot, snapshot)) && (!entry.conflicts || !entry.conflicts.length)) draftStorage().removeItem(draftId);
       } catch (_) { /* Preserve an unreadable draft for manual recovery. */ }
     }
     function scheduleRetry() {
@@ -377,7 +545,7 @@ const H = (() => {
       timer = setTimeout(() => { retries++; save(); }, 10000);
     }
     function readDraft(draftId) {
-      const raw = localStorage.getItem(draftId);
+      const raw = draftStorage().getItem(draftId);
       if (!raw) return null;
       const entry = JSON.parse(raw);
       if (typeof entry.base !== 'string' || typeof entry.snapshot !== 'string' || !Array.isArray(entry.conflicts || [])) throw new Error();
@@ -461,7 +629,7 @@ const H = (() => {
               await verifyCurrent();
               return false;
             }
-            error = draftKey ? 'Unable to reach storage; retrying' : errorText(e);
+            error = draftKey && !isRefusal(e) ? 'Unable to reach storage; retrying' : errorText(e);
             status(storageError ? storageMessage : `Not saved - ${error}`);
             scheduleRetry();
           }
@@ -543,6 +711,23 @@ const H = (() => {
           return true;
         } catch (_) { status(storageMessage); return false; }
       },
+      // Take server-derived fields into both the record and the saved baseline without
+      // touching edits made while the request was in flight. A field the user has
+      // changed since the last save is left alone and stays dirty.
+      adopt(patch) {
+        const record = getRecord();
+        if (!record || !patch || conflicts.length) return false;
+        let base;
+        try { base = JSON.parse(saved); } catch (_) { return false; }
+        let adopted = true;
+        for (const [field, value] of Object.entries(patch)) {
+          if (JSON.stringify(record[field]) !== JSON.stringify(base[field])) { adopted = false; continue; }
+          record[field] = JSON.parse(JSON.stringify(value));
+          base[field] = JSON.parse(JSON.stringify(value));
+        }
+        saved = JSON.stringify(base);
+        return adopted;
+      },
       dirty,
       hasConflict: () => conflicts.length > 0,
       save,
@@ -560,9 +745,9 @@ const H = (() => {
         if (!record || !draft || typeof draft !== 'object' || Array.isArray(draft)) return false;
         try {
           const archiveKey = key + ':conflict-history';
-          const history = JSON.parse(localStorage.getItem(archiveKey) || '[]');
+          const history = JSON.parse(draftStorage().getItem(archiveKey) || '[]');
           history.push({ remote: JSON.stringify(record), local: conflicts[0] });
-          localStorage.setItem(archiveKey, JSON.stringify(history));
+          draftStorage().setItem(archiveKey, JSON.stringify(history));
         } catch (_) { status(storageMessage); return false; }
         if (choice === 'restore') {
           const remote = JSON.parse(saved);
@@ -610,6 +795,12 @@ const H = (() => {
       .sort((a, b) => String(a.visit_time || '').localeCompare(String(b.visit_time || '')));
     return String((rows.find((p) => (p.visit_time || '99:99') >= now.toTimeString().slice(0, 5)) || rows[0])?.id || '');
   }
+  // The Interview tab must open the patient whose detail is open, not the day's first visit.
+  function interviewTabTarget(page, selected, stopPatientId) {
+    const id = (value) => /^\d+$/.test(String(value || '')) ? String(value) : '';
+    if (['calendar', 'today', 'patients'].includes(page) && id(selected)) return id(selected);
+    return page === 'calendar' ? id(stopPatientId) : '';
+  }
   function taskGroups(tasks) {
     return tasks
       .filter((t) => t.state === 'waiting')
@@ -641,11 +832,14 @@ const H = (() => {
       const days = Number(item.days_left);
       if (Number.isFinite(days)) parts.push(days < 0 ? `Expired ${-days} days ago` : `${days} days left`);
     }
-    if (!parts.filter(Boolean).length) parts.push(item.detail);
+    if (!parts.filter(Boolean).length) parts.push(String(item.detail || '').toLowerCase() === 'sign off' ? stepLabel('sign off') : item.detail);
     return parts.filter(Boolean).map(esc).join(' &middot; ');
   }
+  function medicineItemId() { return globalThis.crypto.randomUUID().replaceAll('-', ''); }
   return {
+    medicineItemId,
     localDate,
+    reportDateReview,
     esc,
     date,
     attentionLabel,
@@ -658,14 +852,21 @@ const H = (() => {
     group,
     sentence,
     steps,
-    sectionOf, toBook, stepLabel, stageText, stageClass, hasNextStep, flagWords, stageActions, urgencySort,
+    sectionOf, toBook, stepLabel, stageText, stageClass, hasNextStep, flagWords, stageActions, nextActionHint, urgencySort,
     plainSteps,
     stepName,
     taskGroups,
     nextVisitText,
     defaultInterviewId,
+    interviewTabTarget,
     bulkSteps,
     patientPathway,
+    buildOutcomeText,
+    runStatusText,
+    reportWorkflowStatus,
+    linkedCatalogueNote,
+    buildDisabledReason,
+    reportStatusHtml,
     commonStep,
     suburb,
     displayAddress,
@@ -680,6 +881,8 @@ const H = (() => {
     genericName,
     settingsDiff,
     consentValidation,
+    dateTextHint,
+    pathologyDateHints,
     tableInput,
     showInterviewRefresh,
     interviewDrafts,
@@ -687,3 +890,4 @@ const H = (() => {
   };
 })();
 if (typeof module !== 'undefined') module.exports = H;
+

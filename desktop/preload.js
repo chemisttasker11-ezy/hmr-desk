@@ -1,5 +1,17 @@
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
+function protectedDraft(op, key, value) {
+  const result = ipcRenderer.sendSync('draft-store', op, key, value);
+  if (!result || typeof result !== 'object' || result.error)
+    throw Error(result?.error || 'Protected draft storage unavailable');
+  return result.value;
+}
 contextBridge.exposeInMainWorld('hmr', {
+  draftStore: {
+    getItem: key => protectedDraft('get', key),
+    setItem: (key, value) => protectedDraft('set', key, value),
+    removeItem: key => protectedDraft('remove', key),
+    keys: () => protectedDraft('keys'),
+  },
   api: async (method, path, body) => {
     try {
       return await ipcRenderer.invoke('api', method, path, body);
@@ -9,12 +21,28 @@ contextBridge.exposeInMainWorld('hmr', {
   },
   signIns: (action, site, mode) => ipcRenderer.invoke('sign-ins', action, site, mode),
   onSignIn: (fn) => ipcRenderer.on('sign-in-state', (_e, r) => fn(r)),
+  onEngineState: fn => ipcRenderer.on('engine-state', (_event, state) => fn(state)),
   tab: (action, site, url) => ipcRenderer.invoke('tab', action, site, url),
   openRoute: (url) => ipcRenderer.invoke('open-route', url),
   config: () => ipcRenderer.invoke('config'),
+  storage: action => ipcRenderer.invoke('storage', action),
+  retireRecordCopies: () => ipcRenderer.invoke('records-retire'),
+  exportRecords: patientId => ipcRenderer.invoke('records-export', patientId),
+  encryptedBackup: (action, passphrase) => ipcRenderer.invoke('encrypted-backup', action, passphrase),
+  migrateWorkspace: passphrase => ipcRenderer.invoke('migrate-workspace', passphrase),
+  rollbackLastActivation: () => ipcRenderer.invoke('rollback-last-activation'),
+  activateRestored: passphrase => ipcRenderer.invoke('activate-restored', passphrase),
   openPatientFolder: (id, file) => ipcRenderer.invoke('open-patient-folder', id, file),
+  openReportVersion: (id, file, format) => ipcRenderer.invoke('open-report-version', id, file, format),
+  pickLocalReference: edition => ipcRenderer.invoke('local-reference-pick', edition),
+  openLocalReference: (hash,page) => ipcRenderer.invoke('local-reference-open', hash,page),
+  pickPathologySource: id => ipcRenderer.invoke('pathology-source-pick', id),
+  registerOwnerTemplate: details => ipcRenderer.invoke('register-owner-template', details),
+  installMedicineReference: () => ipcRenderer.invoke('install-medicine-reference'),
+  openPathologySource: (id, sourceId) => ipcRenderer.invoke('open-pathology-source', id, sourceId),
   oneOff: (action, site, value) => ipcRenderer.invoke('one-off', action, site, value),
   referralPick: (kind) => ipcRenderer.invoke('referral-pick', kind),
+  openReviewedReferral: token => ipcRenderer.invoke('open-reviewed-referral', token),
   onReferralDrop: (fn) => {
     document.addEventListener('drop', async (event) => {
       if (!event.target.closest?.('#referral-drop')) return;

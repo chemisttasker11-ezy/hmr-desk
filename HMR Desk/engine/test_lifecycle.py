@@ -1,4 +1,5 @@
 ﻿import datetime as dt
+import records
 import os, tempfile
 from pathlib import Path
 import db, api, lifecycle
@@ -27,10 +28,13 @@ with tempfile.TemporaryDirectory() as tmp:
     c.execute("INSERT INTO visits(patient_id,kind,visit_date,source) VALUES (?,'hmr',?,'app')", (p['id'],str(today-dt.timedelta(days=40))))
     assert lifecycle.stage(c,p)['step'] == 'follow-up 1 due'
     c.execute("INSERT INTO visits(patient_id,kind,visit_date,source) VALUES (?,'followup1',?,'app')", (p['id'],str(today-dt.timedelta(days=31))))
+    import records  # follow-up 1 above is dated before 1 Nov 2026: historical, no delivery documentation required
     assert lifecycle.stage(c,p)['step'] == 'follow-up 1 to claim'
     c.execute("UPDATE visits SET claimed=? WHERE patient_id=? AND kind='followup1'", (str(today),p['id']))
     assert lifecycle.stage(c,p)['step'] == 'follow-up 2 due'
     c.execute("INSERT INTO visits(patient_id,kind,visit_date,source) VALUES (?,'followup2',?,'app')", (p['id'],str(today)))
+    assert lifecycle.stage(c,p)['step'] == 'follow-up 2 documentation incomplete'
+    records.put_json(c, p['id'], 'followup2.json', dict(date=str(today), method='in person', preferred_method='in person', choice_offered_on=str(today), spoke_with='', med_changes='', recommendations=[], issues='', outcome='', notes=''))
     assert lifecycle.stage(c,p)['step'] == 'follow-up 2 to claim'
     c.execute("UPDATE visits SET claimed=? WHERE patient_id=? AND kind='followup2'", (str(today),p['id']))
     assert lifecycle.stage(c,p)['stage'] == 'done'
@@ -87,8 +91,8 @@ with tempfile.TemporaryDirectory() as tmp:
     # Notes, date boundary, test exclusion, and one backup for a multi-patient run.
     import json
     from unittest.mock import patch
-    (folder/'interview.json').write_text(json.dumps({'notes': '  useful notes  '}), encoding='utf-8')
     noted = patient('sheet_ready', folder='folder', visit_date=str(today-dt.timedelta(days=2)))
+    records.put(c, noted['id'], 'interview.json', json.dumps({'notes': '  useful notes  '}).encode('utf-8')); c.commit()
     blank = patient('pathology_ready', visit_date=str(today-dt.timedelta(days=3)))
     patient('confirmed', visit_date=str(today), folder='folder')
     patient('confirmed', visit_date=str(today-dt.timedelta(days=1)), is_test=1)

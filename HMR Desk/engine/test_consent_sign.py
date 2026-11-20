@@ -1,5 +1,6 @@
 ﻿import base64, os, tempfile
 from pathlib import Path
+import records
 import fitz, api, db, interview, steps, consent_sign
 from unittest.mock import patch
 from concurrent.futures import ThreadPoolExecutor
@@ -84,12 +85,12 @@ with tempfile.TemporaryDirectory() as tmp:
         assert old_preview['revision'] != current['revision']
         assert consent_sign.preview(conn, race)['revision'] == current['revision']
         # If audit/storage fails after JSON replacement, leave the old form and no new signature.
-        before = (folder / 'interview.json').read_bytes()
+        before = records.get(conn, race['id'], 'interview.json')
         with patch.object(db, 'log', side_effect=RuntimeError('synthetic audit failure')):
             try: consent_sign.sign(conn, race, png, current['revision']); raise AssertionError('expected audit failure')
             except RuntimeError as exc: assert str(exc) == 'synthetic audit failure'
         conn.rollback()
-        assert (folder / 'interview.json').read_bytes() == before and not interview.signed_file(folder)
+        assert records.get(conn, race['id'], 'interview.json') == before and not interview.signed_file(folder)
         assert not interview.load(conn, race)['consent']['signed']
         class CommitFailure:
             def execute(self, *args): return conn.execute(*args)
@@ -97,7 +98,7 @@ with tempfile.TemporaryDirectory() as tmp:
             def rollback(self): return conn.rollback()
         try: consent_sign.sign(CommitFailure(), race, png, current['revision']); raise AssertionError('expected commit failure')
         except RuntimeError as exc: assert str(exc) == 'synthetic commit failure'
-        assert (folder / 'interview.json').read_bytes() == before and not interview.signed_file(folder)
+        assert records.get(conn, race['id'], 'interview.json') == before and not interview.signed_file(folder)
         # A disk error after creating the signature file must not leave a partial signed artifact.
         real_open = Path.open
         class PartialWrite:
@@ -111,7 +112,7 @@ with tempfile.TemporaryDirectory() as tmp:
         with patch.object(Path, 'open', failing_open):
             try: consent_sign.sign(conn, race, png, current['revision']); raise AssertionError('expected write failure')
             except OSError as exc: assert str(exc) == 'synthetic disk full'
-        assert (folder / 'interview.json').read_bytes() == before and not interview.signed_file(folder)
+        assert records.get(conn, race['id'], 'interview.json') == before and not interview.signed_file(folder)
         # A real signed artifact locks its consent metadata but not interview notes.
         result = consent_sign.sign(conn, race, png, current['revision']); conn.commit()
         signed_record = interview.load(conn, race); signed_record['notes'] = 'additional notes'

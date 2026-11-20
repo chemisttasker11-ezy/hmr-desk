@@ -1,12 +1,12 @@
 """Local HTTP receiver and periodic engine tasks."""
 import datetime
 import contextlib
-import functools
 import http.server
 import json
 import logging
 import logging.handlers
 import os
+import re
 import secrets
 import subprocess
 import threading
@@ -14,6 +14,8 @@ import time
 from urllib.parse import urlsplit, parse_qs
 
 import api
+
+STOP_EVENT = threading.Event()
 
 import db
 import inbox
@@ -40,13 +42,16 @@ def token(conn):
 
 
 def api_token(conn):
-    value = get_meta(conn, 'api_token')
+    value = os.environ.get('HMR_SESSION_TOKEN') or get_meta(conn, 'api_token')
+    if os.environ.get('HMR_SESSION_TOKEN'):
+        set_meta(conn, 'api_token', value)
     if not value:
         value = secrets.token_urlsafe(32)
         set_meta(conn, 'api_token', value)
     os.makedirs(db.DATA_DIR, exist_ok=True)
     with open(os.path.join(db.DATA_DIR, 'api_token'), 'w', encoding='utf-8') as f:
         f.write(value)
+    if os.name != 'nt': os.chmod(os.path.join(db.DATA_DIR, 'api_token'), 0o600)
     return value
 
 
@@ -71,8 +76,8 @@ class HookHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
         except (ValueError, UnicodeError):
             self.send_error(400)
-        except Exception:
-            logging.exception('Webhook processing failed')
+        except Exception as exc:
+            logging.error('Webhook processing failed (%s)', type(exc).__name__)
             self.send_error(500)
 
     def do_GET(self):
@@ -87,11 +92,42 @@ def hook_server(port, hook_token):
     return server
 
 
-class QuietStatic(http.server.SimpleHTTPRequestHandler):
+def route_shape(path):
+    """A path with every identifier-like segment masked, safe to log (never the query string).
+    Only short lowercase words survive, so ids, dates, names and tokens become ':id'."""
+    parts = path.split('/')[1:4]
+    return '/' + '/'.join(p if re.fullmatch(r'[a-z][a-z-]{0,30}', p) else ':id' for p in parts)
+
+
+# Listen backlog for the local API. A screen can start many requests at once.
+API_BACKLOG = 64
+
+
+class QuietStatic(http.server.BaseHTTPRequestHandler):
     def log_message(self, *args):  # pythonw has no stderr
         pass
 
     def api_request(self):
+        # Any failure before a reply starts (for example the database cannot be opened) used to drop the connection with
+        # no bytes, which the app showed only as "fetch failed". Reply with a 500 that names the error type only.
+        self._replied = False
+        try:
+            self._api_request()
+        except Exception as exc:
+            logging.error('API request failed before a reply (%s)', type(exc).__name__)
+            if not self._replied:
+                try:
+                    data = json.dumps({'error': 'The engine hit an internal error (%s). It was logged; reload and try again.' % type(exc).__name__}).encode('utf-8')
+                    self._replied = True
+                    self.send_response(500)
+                    self.send_header('Content-Type', 'application/json; charset=utf-8')
+                    self.send_header('Content-Length', str(len(data)))
+                    self.end_headers()
+                    self.wfile.write(data)
+                except Exception:
+                    pass
+
+    def _api_request(self):
         parsed = urlsplit(self.path)
         with contextlib.closing(db.connect()) as conn:
             expected = get_meta(conn, 'api_token', '')
@@ -102,18 +138,33 @@ class QuietStatic(http.server.SimpleHTTPRequestHandler):
                 try:
                     body = None
                     if self.command == 'POST':
-                        if self.headers.get_content_type() != 'application/json':
-                            raise ValueError('Content-Type must be application/json')
                         length = int(self.headers.get('Content-Length', '0'))
-                        if not 0 < length <= 65536:
+                        if not 0 <= length <= 65536:
                             raise ValueError('invalid length')
-                        body = json.loads(self.rfile.read(length))
-                        if not isinstance(body, dict):
-                            raise ValueError('body must be an object')
-                    status, result = api.handle(conn, self.command, parsed.path, parse_qs(parsed.query), body)
+                        if length:
+                            if self.headers.get_content_type() != 'application/json':
+                                raise ValueError('Content-Type must be application/json')
+                            body = json.loads(self.rfile.read(length))
+                            if not isinstance(body, dict):
+                                raise ValueError('body must be an object')
+                    if self.command == 'POST' and parsed.path == '/api/engine/stop':
+                        STOP_EVENT.set()
+                        status, result = 200, {'stopping': True}
+                    else:
+                        status, result = api.handle(conn, self.command, parsed.path, parse_qs(parsed.query), body)
                 except (ValueError, UnicodeError) as exc:
                     status, result = 400, {'error': str(exc)}
+                except Exception as exc:
+                    # Anything else (a locked database, a library error) used to drop the connection
+                    # and show the app only "fetch failed". Reply instead, naming only the error type:
+                    # messages can contain patient data, so they are not logged or returned.
+                    try: conn.rollback()
+                    except Exception: pass
+                    kind = type(exc).__name__
+                    logging.error('API %s %s failed (%s)', self.command, route_shape(parsed.path), kind)
+                    status, result = 500, {'error': 'The engine hit an internal error (%s). It was logged; reload and try again.' % kind}
         data = json.dumps(result, ensure_ascii=False).encode('utf-8')
+        self._replied = True
         self.send_response(status)
         self.send_header('Content-Type', 'application/json; charset=utf-8')
         if parsed.path.startswith('/api/auth/proda/'):
@@ -126,7 +177,10 @@ class QuietStatic(http.server.SimpleHTTPRequestHandler):
         if urlsplit(self.path).path.startswith('/api/'):
             self.api_request()
         else:
-            super().do_GET()
+            self.send_error(404)
+
+    def do_HEAD(self):
+        self.send_error(404)
 
     def do_POST(self):
         if urlsplit(self.path).path.startswith('/api/'):
@@ -135,7 +189,55 @@ class QuietStatic(http.server.SimpleHTTPRequestHandler):
             self.send_error(404)
 
 
+def maintenance_import(conn):
+    """Re-import the plan file when it changed on disk."""
+    plan = get_meta(conn, 'plan_file')
+    stamp = str(os.stat(plan).st_mtime_ns) if plan and os.path.isfile(plan) else None
+    previous = get_meta(conn, 'plan_mtime_ns')
+    if stamp and previous and stamp != previous:
+        import importer
+        importer.run(conn)
+        set_meta(conn, 'plan_mtime_ns', stamp)
+    elif stamp and not previous:
+        set_meta(conn, 'plan_mtime_ns', stamp)
+
+
+def maintenance_export(conn):
+    """Export the plan when patient events advanced; skips cleanly with no plan registered."""
+    highest = conn.execute("SELECT COALESCE(MAX(id),0) FROM events WHERE patient_id IS NOT NULL").fetchone()[0]
+    if highest <= int(get_meta(conn, 'exported_event_id', '0')):
+        return
+    if not get_meta(conn, 'plan_meta'):
+        logging.debug('Plan export skipped: no plan registered')
+        return
+    import export_plan
+    export_plan.export(conn)
+    plan = get_meta(conn, 'plan_file')
+    if plan and os.path.isfile(plan):
+        set_meta(conn, 'plan_mtime_ns', os.stat(plan).st_mtime_ns)
+    set_meta(conn, 'exported_event_id', highest)
+
+
+def maintenance_backup(conn):
+    """Rolling daily backup, independent of plan import/export health."""
+    today = datetime.datetime.now()
+    if today.hour >= 2 and get_meta(conn, 'backup_date') != str(today.date()):
+        db.backup(conn)
+        set_meta(conn, 'backup_date', today.date())
+
+
+def maintenance(conn):
+    """Periodic steps, fault-isolated: one failing step never starves the others."""
+    for name, step in (('Plan re-import', maintenance_import), ('Plan export', maintenance_export), ('Daily backup', maintenance_backup)):
+        try:
+            step(conn)
+        except Exception:
+            conn.rollback()
+            logging.exception('%s failed', name)
+
+
 def main():
+    STOP_EVENT.clear()
     if os.name == 'nt':  # child tools (tailscale, the renderers) must not flash a console window every minute
         popen_init = subprocess.Popen.__init__
         def quiet(self, *a, **k):
@@ -147,39 +249,48 @@ def main():
     handler = logging.handlers.RotatingFileHandler(os.path.join(log_dir, 'engine.log'), maxBytes=1000000, backupCount=1, encoding='utf-8')
     logging.basicConfig(level=logging.INFO, handlers=[handler], format='%(asctime)s %(levelname)s %(message)s', force=True)
     conn = db.connect()
-    if not conn.execute('SELECT COUNT(*) FROM patients').fetchone()[0]:  # empty database: rebuild from the source files first
+    if os.environ.get('HMR_WORKSPACE') and not os.environ.get('HMR_IMPORT_LEGACY'):
+        # Empty, app-owned workspaces must not silently import a former source checkout.
+        pass
+    elif not conn.execute('SELECT COUNT(*) FROM patients').fetchone()[0]:  # empty database: rebuild from the source files first
         import importer
         logging.warning('Database empty at start: re-importing from the plan and logs')
         importer.run(conn)
+    try:
+        import records
+        migrated = records.migrate_all(conn, lambda row: api.jobs.patient_folder(row), api.jobs.outside_files)
+        logging.info('Record migration: %s', migrated)
+    except Exception as exc:
+        logging.error('Record migration failed (%s); plain files are untouched', type(exc).__name__)
     api_token(conn)
+    hook = None
     try:
-        hook = hook_server(8766, token(conn))
+        hook = hook_server(int(os.environ.get('HMR_WEBHOOK_PORT', '8766')), token(conn))
     except OSError:
-        print('Service port 8766 is already in use; another instance may be running.')
-        conn.close()
-        return
+        # SMS webhook ingress is an optional authenticated integration, not a
+        # dependency of the pharmacist's fully manual offline clinical workflow.
+        logging.warning('Optional SMS webhook listener unavailable')
     api.jobs.ensure_worker(recover=True)
-    threading.Thread(target=hook.serve_forever, daemon=True).start()
-    static = None
-    try:
-        static = http.server.ThreadingHTTPServer(('127.0.0.1', 8765), functools.partial(QuietStatic, directory=db.BASE))
-        threading.Thread(target=static.serve_forever, daemon=True).start()
-    except OSError:
-        logging.warning('Static server port 8765 is in use')
+    if hook: threading.Thread(target=hook.serve_forever, daemon=True).start()
+    # Never expose the patient workspace over an unauthenticated static HTTP server.
     # The app's API gets its own port, bound without address reuse: on Windows an old
     # `python -m http.server 8765` can share port 8765 and swallow API requests (seen 12 Nov).
     class ApiServer(http.server.ThreadingHTTPServer):
         allow_reuse_address = False
+        request_queue_size = API_BACKLOG  # the default of 5 can reset connections when the editor fires several calls at once
     try:
-        api_server = ApiServer(('127.0.0.1', 8767), functools.partial(QuietStatic, directory=db.BASE))
+        api_server = ApiServer(('127.0.0.1', int(os.environ.get('HMR_API_PORT', '8767'))), QuietStatic)
         threading.Thread(target=api_server.serve_forever, daemon=True).start()
     except OSError:
-        logging.warning('API port 8767 is in use')
-    logging.info('Service started: %s patients, db %s', conn.execute('SELECT COUNT(*) FROM patients').fetchone()[0], db.db_path())
+        logging.error('API port is in use; refusing to start without an authenticated listener')
+        if hook: hook.shutdown(); hook.server_close()
+        conn.close()
+        raise
+    logging.info('Local clinical engine started')
     last_poll = 0
     online = None
     try:
-        while True:
+        while not STOP_EVENT.is_set():
             try:
                 client = outbox.make_client()
                 cfg = outbox.config()
@@ -198,48 +309,25 @@ def main():
                 set_meta(conn, 'gateway_online', 'false')
             try:
                 messaging.autopilot(conn)
-            except Exception:
+            except Exception as exc:
                 conn.rollback()
-                logging.exception('Messaging autopilot failed')
+                logging.error('Messaging autopilot failed (%s)', type(exc).__name__)
             try:
                 import lifecycle
                 lifecycle.auto_visit(conn)
-            except Exception:
+            except Exception as exc:
                 conn.rollback()
-                logging.exception('Automatic visit recording failed')
-            try:
-                plan = get_meta(conn, 'plan_file')
-                stamp = str(os.stat(plan).st_mtime_ns) if plan and os.path.isfile(plan) else None
-                previous = get_meta(conn, 'plan_mtime_ns')
-                if stamp and previous and stamp != previous:
-                    import importer
-                    importer.run(conn)
-                    set_meta(conn, 'plan_mtime_ns', stamp)
-                elif stamp and not previous:
-                    set_meta(conn, 'plan_mtime_ns', stamp)
-                highest = conn.execute("SELECT COALESCE(MAX(id),0) FROM events WHERE patient_id IS NOT NULL").fetchone()[0]
-                if highest > int(get_meta(conn, 'exported_event_id', '0')):
-                    import export_plan
-                    export_plan.export(conn)
-                    plan = get_meta(conn, 'plan_file')
-                    if plan and os.path.isfile(plan):
-                        set_meta(conn, 'plan_mtime_ns', os.stat(plan).st_mtime_ns)
-                    set_meta(conn, 'exported_event_id', highest)
-                today = datetime.datetime.now()
-                if today.hour >= 2 and get_meta(conn, 'backup_date') != str(today.date()):
-                    db.backup(conn)
-                    set_meta(conn, 'backup_date', today.date())
-            except Exception:
-                logging.exception('Engine maintenance failed')
-            time.sleep(60)
+                logging.error('Automatic visit recording failed (%s)', type(exc).__name__)
+            maintenance(conn)
+            STOP_EVENT.wait(60)
     except KeyboardInterrupt:
         pass
     finally:
-        hook.shutdown()
-        hook.server_close()
-        if static:
-            static.shutdown()
-            static.server_close()
+        api_server.shutdown()
+        api_server.server_close()
+        if hook:
+            hook.shutdown()
+            hook.server_close()
         conn.close()
 
 

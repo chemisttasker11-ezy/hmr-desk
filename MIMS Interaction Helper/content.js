@@ -5,12 +5,12 @@ const until = async (fn, ms = 15000) => { for (let t = 0; t < ms; t += 250) { co
 const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
 const fields = () => document.querySelectorAll('#Interaction-Search input[role=combobox]'); // [0] medicines, [1] allergies
 
-// Prefer the plain ingredient: exact name, then name + lower-case salt ("Levothyroxine sodium"), then the first option.
+// Only a single exact displayed name is safe to select automatically.
+// Salt/form/strength/prefix and multiple-option matches require manual review.
 function pick(options, query) {
-  const q = query.toLowerCase(), t = o => (o.querySelector('[title]')?.getAttribute('title') || o.innerText).trim();
-  return options.find(o => t(o).toLowerCase() === q)
-    || options.find(o => t(o).toLowerCase().startsWith(q + ' ') && /^[a-z]/.test(t(o).slice(q.length + 1)))
-    || options.find(o => t(o).toLowerCase().startsWith(q)) || options[0];
+  const normal = s => s.trim().replace(/\s+/g, ' ').toLowerCase();
+  const exact = options.filter(o => normal(o.querySelector('[title]')?.getAttribute('title') || o.innerText) === normal(query));
+  return exact.length === 1 ? exact[0] : null;
 }
 
 async function add(input, name) {
@@ -23,7 +23,9 @@ async function add(input, name) {
   const q = new RegExp('\\b' + name.toLowerCase().slice(0, 4).replace(/[^\w]/g, '\\$&')), title = o => (o.querySelector('[title]')?.getAttribute('title') || o.innerText).toLowerCase();
   const opts = await until(() => { const o = [...(box()?.querySelectorAll('li[role=option]') || [])].filter(o => q.test(title(o))); return o.length && o; }, 6000);
   if (!opts) { setValue.call(input, ''); input.dispatchEvent(new Event('input', {bubbles: true})); return null; }
-  const o = pick(opts, name), label = (o.querySelector('[title]')?.getAttribute('title') || o.innerText).trim();
+  const o = pick(opts, name);
+  if (!o) { setValue.call(input, ''); input.dispatchEvent(new Event('input', {bubbles: true})); return null; }
+  const label = (o.querySelector('[title]')?.getAttribute('title') || o.innerText).trim();
   o.click(); await sleep(600);
   return label;
 }
@@ -38,6 +40,7 @@ async function details() {
     const icon = tr.querySelector('i'); (icon?.closest('button,a,[role=button]') || icon)?.click();
     const modal = await until(() => document.querySelector('.modal.show'), 5000);
     let text = '';
+    if (!modal) throw Error('Interaction details unavailable; result incomplete');
     if (modal) {
       const t = modal.innerText.replace(/\r/g, '').split('\n').map(s => s.trim()).filter(Boolean);
       const at = k => t.findIndex(s => s.startsWith(k));
@@ -46,7 +49,7 @@ async function details() {
       text = [`   ${summary}`, `   Action: ${block('Actions to be taken', 'Drug interactions details').join(' ')}`,
               `   Detail: ${block('Drug interactions details', 'References').join(' ')}`].join('\r\n');
       const bs = modal.querySelectorAll('.ms-auto button'); bs[bs.length - 1]?.click(); // last button is X (first is print)
-      await until(() => !document.querySelector('.modal.show'), 3000);
+      if (!await until(() => !document.querySelector('.modal.show'), 3000)) throw Error('Interaction details did not close; result incomplete');
     }
     out.push(line + (text ? '\r\n' + text : ''));
   }
@@ -58,7 +61,10 @@ const rows = () => [...document.querySelectorAll('table tr')].slice(1)
   .map(c => `${c[0]} + ${c[2]} | ${c[4]} | ${c[5]}`).filter((r, i, all) => all.indexOf(r) === i); // same pair listed per route
 
 async function runOne(list) {
-  document.getElementById('ClearAll')?.click(); await sleep(1000);
+  const clear = document.getElementById('ClearAll');
+  if (!clear || fields().length !== 2 || !Array.isArray(list.meds) || !list.meds.length) throw Error('Interaction checker UI or medicine list unavailable; check manually');
+  clear.click(); await sleep(1000);
+  if (rows().length) throw Error('Previous interaction results did not clear; check manually');
   const out = [`Folder: ${list.folder}`, `Checked: ${new Date().toLocaleString('en-AU')} (eMIMSplus MIMS Interaction Checker)`, ''];
   const entered = [], missing = [];
   for (const m of list.meds) { // m is a name or [name, fallback brand/alias, ...]: try each until MIMS finds one
@@ -67,19 +73,35 @@ async function runOne(list) {
     got ? entered.push(`${tries[0]}${used !== tries[0] ? ` (as ${used})` : ''} -> ${got}`) : missing.push(tries.slice(0, -1).join(' / '));
   }
   for (const a of list.allergies || []) { const got = await add(fields()[1], a); got ? entered.push(`allergy ${a} -> ${got}`) : missing.push(`allergy ${a}`); }
-  [...document.querySelectorAll('button')].find(b => b.innerText.trim() === 'Check Interaction').click();
-  // Results are ready when the result count or a "no interactions" message shows.
-  await until(() => /Showing results|No .*interaction|no results/i.test(document.body.innerText) && !/Loading/i.test(document.body.innerText), 20000);
+  if (missing.length) throw Error('Incomplete eMIMS check: no unique exact match for ' + missing.join('; ') + '. Review mappings manually');
+  const check = [...document.querySelectorAll('button')].find(b => b.innerText.trim() === 'Check Interaction');
+  if (!check) throw Error('Interaction checker control unavailable; check manually');
+  const emptyMessage = text => text.split(/\r?\n/).some(line => /^(?:No (?:drug )?interactions?(?: (?:found|detected|identified))?|No results(?: found)?)\.?$/i.test(line.trim()));
+  const previousEmpty = emptyMessage(document.body.innerText);
+  let sawLoading = false;
+  check.click();
+  // A timeout, missing table or unrecognised UI is never an empty check.
+  const ready = await until(() => {
+    const text = document.body.innerText;
+    if (/Loading/i.test(text)) { sawLoading = true; return null; }
+    if (/Showing results/i.test(text) && rows().length) return 'results';
+    return emptyMessage(text) && (!previousEmpty || sawLoading) ? 'empty' : null;
+  }, 20000);
+  if (!ready) throw Error('eMIMS result not verified: timed out or unrecognised UI. No completed result saved');
   [...document.querySelectorAll('button')].find(b => b.innerText.trim().startsWith('Drug Interactions'))?.click(); // previous patient may have left the Allergy tab open
   await sleep(800);
-  const det = rows().length ? await details() : ['none listed by MIMS'];
+  const resultRows = rows();
+  if ((ready === 'results' && !resultRows.length) || (ready === 'empty' && resultRows.length)) throw Error('eMIMS result state changed; check manually');
+  const det = resultRows.length ? await details() : ['none listed by MIMS'];
   out.push('DRUG INTERACTIONS (pair | severity | documentation, then MIMS wording):', ...det, '');
   if ((list.allergies || []).length) {
     const tab = [...document.querySelectorAll('button')].find(b => b.innerText.trim().startsWith('Allergy Check'));
-    tab?.click(); await sleep(2500);
+    if (!tab) throw Error('Allergy check unavailable; result incomplete');
+    tab.click(); await sleep(2500);
     const panel = tab && document.getElementById(tab.getAttribute('aria-controls'));
     const text = (panel?.innerText || '').split(/The absence of a drug allergy|Disclaimer/)[0].replace('Allergy Check Results', '').trim();
-    out.push('ALLERGY CHECK:', text || 'nothing shown', '');
+    if (!text || /Loading/i.test(text)) throw Error('Allergy result not verified; result incomplete');
+    out.push('ALLERGY CHECK:', text, '');
   }
   out.push('ENTERED:', ...entered, '', 'NOT FOUND IN MIMS (check by hand):', ...(missing.length ? missing : ['none']), '',
     'MIMS does not flag same-class duplication or cumulative sedative/anticholinergic/serotonergic/potassium load: hand-check those.');
@@ -91,16 +113,17 @@ async function runOne(list) {
 if (typeof MIMS_LISTS !== 'undefined' && MIMS_LISTS.length) {
   const b = document.createElement('button');
   b.textContent = `Run ${MIMS_LISTS.length} interaction list(s)`;
-  b.style.cssText = 'position:fixed;bottom:16px;left:16px;z-index:99999;padding:10px 14px;background:#0b5394;color:#fff;border:0;border-radius:6px;font:14px sans-serif;cursor:pointer';
+  b.style.cssText = 'position:fixed;bottom:16px;left:16px;z-index:99999;max-width:calc(100vw - 32px);max-height:40vh;overflow:auto;white-space:normal;text-align:left;padding:10px 14px;background:#0b5394;color:#fff;border:0;border-radius:6px;font:14px sans-serif;cursor:pointer';
   b.onclick = async () => {
     if (!location.pathname.startsWith('/interactions')) { location.href = '/interactions'; return; }
     b.disabled = true;
+    const failures = [];
     for (const [i, list] of MIMS_LISTS.entries()) {
       b.textContent = `Checking ${i + 1}/${MIMS_LISTS.length}: ${list.folder.split(/[\\/]/).pop()}`;
       const r = await runOne(list).catch(e => ({error: e.message}));
-      if (r?.error) console.warn('MIMS helper', list.folder, r.error);
+      if (r?.error) { failures.push(`${list.folder.split(/[\\/]/).pop()}: ${r.error}`); console.warn('MIMS helper', list.folder, r.error); }
     }
-    b.textContent = `Done: ${MIMS_LISTS.length} file(s) in Downloads\\HMR Interactions`; b.disabled = false;
+    b.textContent = failures.length ? `Incomplete: ${failures.length}/${MIMS_LISTS.length} list(s) need manual review. ${failures.join(' | ')}` : `Done: ${MIMS_LISTS.length} file(s) in Downloads\\HMR Interactions`; b.disabled = false;
   };
   document.body.appendChild(b);
-}
+                                                            }

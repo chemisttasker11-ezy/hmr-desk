@@ -1,14 +1,23 @@
 ﻿"""HMR Desk database: the single source of truth for patient state.
 Location: %USERPROFILE%\\HMR-Desk-data\\hmr.db (see DATA_DIR); override with env HMR_DB (tests).
 Run `python db.py` for a self-check."""
-import datetime, json, os, re, sqlite3
+import datetime, json, logging, os, re, time, unicodedata, tempfile
+from contextlib import closing
+from pathlib import Path
+try:
+    # SQLCipher build of the standard sqlite3 API: the patient database is encrypted at rest.
+    from sqlcipher3 import dbapi2 as sqlite3
+except ImportError as _exc:  # no silent fallback to an unencrypted database
+    raise ImportError('HMR Desk needs the sqlcipher3-wheels package for its encrypted database') from _exc
+import app_paths
+import dbkey
 
-BASE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # ...\HMR Ongoing
+BASE = str(app_paths.workspace_root())
 
 
 # Not under AppData: Claude Desktop is a packaged app, so programs it launches get a private redirected copy of
 # AppData and a database there splits into two copies. Not under OneDrive either.
-DATA_DIR = os.environ.get('HMR_DATA_DIR') or os.path.join(os.environ['USERPROFILE'], 'HMR-Desk-data')
+DATA_DIR = str(app_paths.data_root())
 
 
 def db_path():
@@ -84,21 +93,425 @@ STATES = {
 }
 
 
+SCHEMA_VERSION = 1
+
+# Migration 1 preserves historical table contents and upgrades only missing columns.
+# Future migrations must be appended as new numbered steps; never edit an applied step.
+_ADDITIVE_COLUMNS = (
+    ('tasks', 'format', "TEXT NOT NULL DEFAULT 'docx'"),
+    ('patients', 'is_test', 'INTEGER NOT NULL DEFAULT 0'),
+    ('patients', 'call_list', 'INTEGER NOT NULL DEFAULT 0'),
+    ('patients', 'archived_at', 'TEXT'),
+    ('patients', 'hold_from', 'TEXT'),
+    ('messages', 'visit_date', 'TEXT'),
+    ('messages', 'visit_time', 'TEXT'),
+    ('messages', 'ai_intent', 'TEXT'),
+    ('messages', 'ai_summary', 'TEXT'),
+    ('messages', 'ai_confidence', 'REAL'),
+    ('messages', 'ai_reply', 'TEXT'),
+    ('messages', 'ai_draft_id', 'TEXT'),
+)
+
+
+def migrate_schema(conn):
+    """Idempotent, versioned SQLite migration with atomic additive changes.
+
+    PRAGMA user_version is updated in the SAME transaction as ALTER TABLE.
+    A future database is refused rather than silently downgraded. The baseline
+    schema is created separately before this migration for older installations.
+    """
+    version = conn.execute('PRAGMA user_version').fetchone()[0]
+    if version > SCHEMA_VERSION:
+        raise RuntimeError('Database schema is newer than this version of HMR Desk; upgrade the application')
+    if version == SCHEMA_VERSION:
+        return
+    conn.execute('BEGIN IMMEDIATE')
+    try:
+        if version < 1:
+            for table, column, definition in _ADDITIVE_COLUMNS:
+                names = {row[1] for row in conn.execute(f'PRAGMA table_info({table})')}
+                if column not in names:
+                    conn.execute(f'ALTER TABLE {table} ADD COLUMN {column} {definition}')
+            conn.execute('PRAGMA user_version = 1')
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+
+def preserve_legacy_sqlite(conn):
+    """Create a verified rollback snapshot before changing a historical database.
+
+    SQLite's backup API includes WAL state. The snapshot stays in the user's
+    private application-data directory; it is not a portable encrypted backup.
+    """
+    root = os.path.join(DATA_DIR, '.migration-snapshots')
+    os.makedirs(root, mode=0o700, exist_ok=True)
+    fd, target = tempfile.mkstemp(prefix='before-schema-', suffix='.db', dir=root)
+    os.close(fd)
+    try:
+        with closing(open_encrypted(target, key=conn.hmr_key)) as snapshot:
+            conn.backup(snapshot)
+            if snapshot.execute('PRAGMA integrity_check').fetchone()[0] != 'ok':
+                raise ValueError('Migration rollback snapshot failed SQLite integrity')
+        return target
+    except Exception:
+        if os.path.exists(target):
+            os.unlink(target)
+        raise
+
+
+# ---------------------------------------------------------------------------
+# Encrypted storage (SQLCipher). Key handling lives in dbkey.py.
+# ---------------------------------------------------------------------------
+class Connection(sqlite3.Connection):
+    """sqlite3 connection that remembers the key it was opened with (for snapshots)."""
+    hmr_key = None
+
+
+def _sql_key(key):
+    return "x'%s'" % key.hex()
+
+
+def open_encrypted(path, key=None, readonly=False, timeout=30):
+    """Open an encrypted database file. No schema work. Raises KeyUnavailable if no key opens it."""
+    path = str(path)
+    keys = [key] if key else dbkey.candidates(path)
+    if not keys:
+        raise dbkey.KeyUnavailable('No database key is available on this PC. Use your recovery key.')
+    for candidate in keys:
+        target = Path(path).resolve().as_uri() + '?mode=ro' if readonly else path
+        conn = sqlite3.connect(target, timeout=timeout, uri=readonly, factory=Connection)
+        try:
+            conn.execute('PRAGMA key = "%s"' % _sql_key(candidate))
+            conn.execute('SELECT count(*) FROM sqlite_master').fetchone()
+        except sqlite3.DatabaseError:
+            conn.close()
+            continue
+        conn.hmr_key = candidate
+        return conn
+    raise dbkey.KeyUnavailable('The key on this PC does not open this database. Use your recovery key.')
+
+
+def plain_connect(path):
+    """Unencrypted SQLite file. Only for the inside of a passphrase-encrypted backup bundle."""
+    return sqlite3.connect(str(path), factory=Connection)
+
+
+def plain_snapshot(conn, target):
+    """Copy an encrypted database into a plain SQLite file (backup bundles encrypt the whole archive)."""
+    target = str(target)
+    if os.path.exists(target):
+        os.unlink(target)
+    conn.commit()  # ATTACH cannot run inside an open transaction
+    version = conn.execute('PRAGMA user_version').fetchone()[0]
+    conn.execute("ATTACH DATABASE ? AS plaintext KEY ''", (target,))
+    try:
+        conn.execute("SELECT sqlcipher_export('plaintext')")
+        conn.execute('PRAGMA plaintext.user_version = %d' % version)
+    finally:
+        conn.execute('DETACH DATABASE plaintext')
+    with closing(plain_connect(target)) as snapshot:
+        if snapshot.execute('PRAGMA integrity_check').fetchone()[0] != 'ok':
+            raise ValueError('Backup snapshot failed SQLite integrity')
+
+
+def _wipe_and_remove(path):
+    """Overwrite then delete a file that held patient data. Best effort: SSD wear levelling can keep old blocks."""
+    for suffix in ('', '-wal', '-shm', '-journal'):
+        target = path + suffix
+        try:
+            size = os.path.getsize(target)
+            with open(target, 'r+b') as handle:
+                left = size
+                while left > 0:
+                    chunk = min(left, 1 << 20)
+                    handle.write(b'\0' * chunk)
+                    left -= chunk
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.unlink(target)
+        except OSError:
+            try:
+                os.unlink(target)
+            except OSError:
+                pass
+
+
+_MIGRATION_LOCK_STALE = 600
+
+
+_LOCK_DENIED_TRIES = 20
+_LOCK_DENIED_PAUSE = 0.025
+
+
+def _create_lock_file(path):
+    """Create a lock file exclusively (FileExistsError when it is held).
+
+    On Windows, creating a file another request is deleting fails briefly with PermissionError (delete pending), not
+    FileExistsError. Retry that case a bounded number of times (about half a second); a lasting denial is a real
+    permission problem and is raised unchanged. Never treats a denial as having acquired the lock."""
+    for attempt in range(_LOCK_DENIED_TRIES):
+        try:
+            os.close(os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+            return
+        except PermissionError:
+            if attempt == _LOCK_DENIED_TRIES - 1:
+                raise
+            time.sleep(_LOCK_DENIED_PAUSE)
+
+
+class _migration_lock:
+    def __init__(self, path):
+        self.path = path + '.migrating'
+
+    def __enter__(self):
+        deadline = time.time() + 120
+        while True:
+            try:
+                _create_lock_file(self.path)
+                return self
+            except FileExistsError:
+                try:
+                    if time.time() - os.path.getmtime(self.path) > _MIGRATION_LOCK_STALE:
+                        os.unlink(self.path)
+                        continue
+                except OSError:
+                    pass
+                if time.time() > deadline:
+                    raise TimeoutError('Another HMR Desk process is encrypting the database')
+                time.sleep(0.25)
+
+    def __exit__(self, *exc):
+        try:
+            os.unlink(self.path)
+        except OSError:
+            pass
+
+
+class _rotation_lock(_migration_lock):
+    """One key rotation at a time, and no start-up cleanup of a pending key while one is running."""
+    def __init__(self, path, wait=True):
+        self.path = path + '.rotating'
+        self.wait = wait
+        self.held = False
+
+    def __enter__(self):
+        if self.wait:
+            super().__enter__()
+            self.held = True
+            return self
+        try:
+            _create_lock_file(self.path)
+            self.held = True
+        except FileExistsError:
+            try:
+                if time.time() - os.path.getmtime(self.path) > _MIGRATION_LOCK_STALE:
+                    os.unlink(self.path)
+                    _create_lock_file(self.path)
+                    self.held = True
+            except OSError:
+                pass
+        return self
+
+    def __exit__(self, *exc):
+        if self.held:
+            super().__exit__(*exc)
+
+
+def _user_tables(conn):
+    return [r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")]
+
+
+def _replace_retry(source, target, seconds=10):
+    """os.replace that waits briefly when Windows still has the file open (antivirus, indexer, a stale handle)."""
+    deadline = time.time() + seconds
+    while True:
+        try:
+            os.replace(source, target)
+            return
+        except PermissionError:
+            if time.time() > deadline:
+                raise
+            time.sleep(0.3)
+
+
+def encrypt_plain_file(path, key, keep_original=False):
+    """Encrypt an unencrypted SQLite file in place and verify it before the original is destroyed.
+
+    Steps: checkpoint and integrity-check the original, export to a sibling file with sqlcipher_export,
+    reopen it with the key, compare the schema version and every table's row count, swap the files, then
+    overwrite and delete the original (it held patient data). Any failure leaves the original untouched.
+    """
+    path = str(path)
+    tmp = path + '.encrypting'
+    for leftover in (tmp, tmp + '-wal', tmp + '-shm', tmp + '-journal'):
+        if os.path.exists(leftover):
+            os.unlink(leftover)
+    src = plain_connect(path)
+    try:
+        src.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+        if src.execute('PRAGMA integrity_check').fetchone()[0] != 'ok':
+            raise ValueError('The database failed its integrity check, so it was not encrypted')
+        version = src.execute('PRAGMA user_version').fetchone()[0]
+        counts = {t: src.execute('SELECT count(*) FROM "%s"' % t).fetchone()[0] for t in _user_tables(src)}
+        src.execute('ATTACH DATABASE ? AS enc KEY ?', (tmp, _sql_key(key)))
+        src.execute("SELECT sqlcipher_export('enc')")
+        src.execute('PRAGMA enc.user_version = %d' % version)
+        src.execute('DETACH DATABASE enc')
+    except Exception:
+        src.close()
+        for leftover in (tmp, tmp + '-wal', tmp + '-shm', tmp + '-journal'):
+            if os.path.exists(leftover):
+                os.unlink(leftover)
+        raise
+    src.close()
+    old = path + '.plain-old'
+    try:
+        with closing(open_encrypted(tmp, key=key)) as check:
+            if check.execute('PRAGMA integrity_check').fetchone()[0] != 'ok':
+                raise ValueError('Encrypted copy failed its integrity check')
+            if check.execute('PRAGMA user_version').fetchone()[0] != version:
+                raise ValueError('Encrypted copy has a different schema version')
+            if {t: check.execute('SELECT count(*) FROM "%s"' % t).fetchone()[0] for t in _user_tables(check)} != counts:
+                raise ValueError('Encrypted copy does not match the original')
+        for suffix in ('-wal', '-shm', '-journal'):
+            if os.path.exists(path + suffix):
+                os.unlink(path + suffix)
+        _replace_retry(path, old)
+        _replace_retry(tmp, path)
+    except Exception:
+        # If the original was already moved aside, put it back before anything is deleted. When that
+        # fails too, keep both files: the records sit in the .plain-old copy and the verified encrypted
+        # copy stays, so nothing is lost and no fresh empty database may replace them.
+        if os.path.exists(old) and not os.path.exists(path):
+            try:
+                _replace_retry(old, path)
+            except Exception:
+                raise RuntimeError('Encryption could not finish and the original could not be restored automatically. '
+                                   'Your records are kept in the file ending .plain-old next to the database; do not delete it.')
+        if os.path.exists(path):
+            for leftover in (tmp, tmp + '-wal', tmp + '-shm', tmp + '-journal'):
+                if os.path.exists(leftover):
+                    os.unlink(leftover)
+        raise
+    if not keep_original:
+        _wipe_and_remove(old)
+    return {'tables': len(counts), 'rows': sum(counts.values())}
+
+
+def _encrypt_siblings(path, key):
+    """Older rolling backups and migration snapshots may still be plain files with patient data."""
+    folder = os.path.dirname(os.path.abspath(path))
+    found = []
+    for pattern_dir, prefix in ((folder, 'hmr-backup-'), (os.path.join(folder, '.migration-snapshots'), '')):
+        if not os.path.isdir(pattern_dir):
+            continue
+        for name in os.listdir(pattern_dir):
+            full = os.path.join(pattern_dir, name)
+            if name.endswith('.db') and name.startswith(prefix) and full != os.path.abspath(path) and dbkey.is_plain_file(full):
+                found.append(full)
+    for full in found:
+        try:
+            encrypt_plain_file(full, key)
+        except Exception as exc:
+            logging.warning('Could not encrypt %s (%s)', os.path.basename(full), type(exc).__name__)
+
+
+def ensure_encrypted(path):
+    """Make sure the database file at `path` is encrypted and a key exists for it.
+
+    New file: create a key. Plain file (existing installation or a restored backup): encrypt it.
+    Encrypted file: nothing to do; open_encrypted raises KeyUnavailable when the key is missing.
+    """
+    kind = dbkey.file_kind(path)
+    if kind == 'encrypted':
+        return 'encrypted'
+    with _migration_lock(path):
+        kind = dbkey.file_kind(path)
+        if kind == 'encrypted':
+            return 'encrypted'
+        if kind == 'missing' and (os.path.exists(path + '.plain-old') or os.path.exists(path + '.encrypting')):
+            raise RuntimeError('An unfinished encryption left your records in a file ending .plain-old or .encrypting '
+                               'next to the database. A new empty database was not created. Keep those files and get help to recover them.')
+        keys = dbkey.candidates(path) if dbkey.has_key_file(path) else []
+        key = keys[0] if keys else dbkey.create_key(path)
+        if kind == 'plain':
+            encrypt_plain_file(path, key)
+            _encrypt_siblings(path, key)
+            return 'migrated'
+        return 'new'
+
+
+def rotate_key(conn):
+    """Give the database a brand new key and return its recovery key text.
+
+    Other open connections still hold the old key and stop working, so callers must restart the engine.
+    """
+    path = next(r[2] for r in conn.execute('PRAGMA database_list') if r[1] == 'main')
+    with _rotation_lock(path):
+        new = dbkey.begin_rotation(path)
+        try:
+            conn.commit()
+            conn.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+            conn.execute('PRAGMA rekey = "%s"' % _sql_key(new))
+        except Exception:
+            dbkey.abort_rotation(path)
+            raise
+        dbkey.finish_rotation(path)
+        conn.hmr_key = new
+        return dbkey.recovery_text(new)
+
+
+def storage_status(path=None):
+    path = path or db_path()
+    info = dbkey.status(path)
+    info['encrypted'] = info['database'] != 'plain'
+    return info
+
+
+def recover_key(text, path=None):
+    """Seal a typed recovery key for this Windows account once it is proven to open the database."""
+    path = path or db_path()
+
+    def opens(key):
+        try:
+            open_encrypted(path, key=key).close()
+            return True
+        except dbkey.KeyUnavailable:
+            return False
+    if dbkey.file_kind(path) != 'encrypted':
+        raise ValueError('There is no encrypted database to recover')
+    return dbkey.install_recovery_key(path, text, opens)
+
+
 def connect(path=None):
     path = path or db_path()
     os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
-    conn = sqlite3.connect(path, timeout=30)
+    ensure_encrypted(path)
+    conn = open_encrypted(path)
     conn.row_factory = sqlite3.Row
-    conn.execute('PRAGMA journal_mode=WAL')  # the service and one-off commands may open it together
-    conn.executescript(SCHEMA)
-    if 'format' not in {row[1] for row in conn.execute('PRAGMA table_info(tasks)')}:
-        conn.execute("ALTER TABLE tasks ADD COLUMN format TEXT NOT NULL DEFAULT 'docx'")
-    for table, column, definition in [('patients', 'is_test', 'INTEGER NOT NULL DEFAULT 0'), ('patients', 'call_list', 'INTEGER NOT NULL DEFAULT 0'), ('patients', 'archived_at', 'TEXT'), ('patients', 'hold_from', 'TEXT'), ('messages', 'visit_date', 'TEXT'), ('messages', 'visit_time', 'TEXT'), *[('messages', name, typ) for name, typ in [('ai_intent','TEXT'), ('ai_summary','TEXT'), ('ai_confidence','REAL'), ('ai_reply','TEXT'), ('ai_draft_id','TEXT')]]]:
-        if column not in {row[1] for row in conn.execute(f'PRAGMA table_info({table})')}:
-            conn.execute(f'ALTER TABLE {table} ADD COLUMN {column} {definition}')
-    conn.commit()
-    import_meetings(conn)
-    return conn
+    try:
+        with _rotation_lock(path, wait=False) as rotation:
+            if rotation.held:  # a running rotation owns the pending key; do not clean it up underneath it
+                dbkey.settle_pending(path, conn.hmr_key)
+        conn.execute('PRAGMA journal_mode=WAL')
+        # executescript has its own transaction boundary; never start a schema
+        # migration transaction until the historical base tables exist.
+        version = conn.execute('PRAGMA user_version').fetchone()[0]
+        if version > SCHEMA_VERSION:
+            raise RuntimeError('Database schema is newer than this HMR Desk application')
+        if version < SCHEMA_VERSION and conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='patients'").fetchone():
+            preserve_legacy_sqlite(conn)
+        conn.executescript(SCHEMA)
+        migrate_schema(conn)
+        import_meetings(conn)
+        return conn
+    except Exception:
+        conn.close()
+        raise
 
 
 def import_meetings(conn):
@@ -129,8 +542,15 @@ def now():
 
 def patient_key(name):
     """'Mr Alex Quinn Example' and 'alex example' -> 'alex example' (first + last word, letters only)."""
-    w = re.sub(r"[^a-z' -]", ' ', re.sub(r'^(mr|mrs|ms|miss|dr)\.?\s+', '', (name or '').strip().lower())).split()
-    return f'{w[0]} {w[-1]}' if len(w) > 1 else (w[0] if w else '')
+    original = unicodedata.normalize('NFKC', str(name or '')).casefold().strip()
+    original = re.sub(r'^(?:mr|mrs|ms|miss|dr)\.?\s+', '', original)
+    tokens = []
+    for fragment in original.split():
+        clean = ''.join(char for char in fragment
+                        if char.isalpha() or char in ("'", '-')).strip("'-")
+        if clean:
+            tokens.append(clean)
+    return f'{tokens[0]} {tokens[-1]}' if len(tokens) > 1 else (tokens[0] if tokens else '')
 
 
 def log(conn, patient_id, type_, detail=None, source='engine'):
@@ -188,12 +608,23 @@ def backup(conn=None):
     """Copy the database next to itself as hmr-backup-<weekday>.db (7 rolling copies)."""
     own = conn is None
     conn = conn or connect()
-    target = os.path.join(os.path.dirname(db_path()), f'hmr-backup-{datetime.date.today():%a}.db')
-    out = sqlite3.connect(target)
+    main = next((r[2] for r in conn.execute('PRAGMA database_list') if r[1] == 'main' and r[2]), None) or db_path()
+    target = os.path.join(os.path.dirname(os.path.abspath(main)), f'hmr-backup-{datetime.date.today():%a}.db')
+    # Write a new file and swap it in: an older copy may still be encrypted with a previous key,
+    # so it is never opened with the current one.
+    fresh = target + '.new'
+    for leftover in (fresh, fresh + '-wal', fresh + '-shm', fresh + '-journal'):
+        if os.path.exists(leftover):
+            os.unlink(leftover)
+    out = open_encrypted(fresh, key=conn.hmr_key)
     try:
         conn.backup(out)
     finally:
         out.close()
+    for stale in (target + '-wal', target + '-shm', target + '-journal'):
+        if os.path.exists(stale):
+            os.unlink(stale)
+    _replace_retry(fresh, target)
     if own:
         conn.close()
     return target
@@ -223,4 +654,3 @@ if __name__ == '__main__':
         assert c.execute('SELECT COUNT(*) FROM events').fetchone()[0] == 5
         c.close()
     print('db self-check ok')
-

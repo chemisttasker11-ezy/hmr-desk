@@ -88,7 +88,9 @@ function stopNameHtml(stop, day) {
   return list.length === 1 && stopNames(stop) === list[0].name ? `<strong class="stop-link" data-drawer-patient="${esc(list[0].id)}" title="Open patient">${esc(list[0].name)}</strong>` : `<strong>${esc(stopNames(stop))}</strong>`;
 }
 function hasPosition(ll) { return Array.isArray(ll) && ll.length === 2 && ll.every((n) => typeof n === 'number' && Number.isFinite(n)); }
+let highlightedStopPatient = '', highlightedStops = [];
 function renderDayMap(data) {
+  highlightedStopPatient = ''; highlightedStops = data.stops || [];
   if (dayMap) { dayMap.remove(); dayMap = null; }
   if (typeof L === 'undefined' || !$('day-map')) return;
   const map = L.map('day-map'); dayMap = map;
@@ -115,6 +117,8 @@ function renderDayMap(data) {
   };
 }
 function highlightStop(i, markers) {
+  const stopPatientList = highlightedStops[i] ? stopPatients(highlightedStops[i], selectedDay) : [];
+  highlightedStopPatient = stopPatientList.length === 1 && stopPatientList[0].id != null ? String(stopPatientList[0].id) : '';
   document.querySelectorAll('[data-stop]').forEach((row) => row.classList.toggle('stop-selected', Number(row.dataset.stop) === i));
   if (markers[i]) { markers[i].openPopup(); dayMap.panTo(markers[i].getLatLng()); }
 }

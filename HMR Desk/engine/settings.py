@@ -3,12 +3,13 @@ import json
 import re
 
 DEFS = {
-    'ai_interview_assist': ('AI interview assist', 'bool', True),
-    'ai_report_assist': ('AI report assist', 'bool', True),
+    'clinical_ai_privacy_ack': ('Enable clinical AI after reviewing de-identified data policy', 'bool', False),
+    'ai_interview_assist': ('AI interview assist', 'bool', False),
+    'ai_report_assist': ('AI report assist', 'bool', False),
     'ai_reply_reading': ('AI reply reading', 'select', 'ask', ['off', 'ask', 'auto']),
     'proda_auto_sms_login': ('Automatic PRODA SMS login', 'bool', False),
     'autopilot_paused': ('Pause messaging autopilot', 'bool', False),
-    **{f'auto_{kind}': (f'Automatic {kind.replace(chr(95), chr(32))}', 'select', 'auto', ['off', 'ask', 'auto']) for kind in ('confirmation', 'thanks_decline', 'follow_up', 'reminder')},
+    **{f'auto_{kind}': (f'Automatic {kind.replace(chr(95), chr(32))}', 'select', 'ask', ['off', 'ask', 'auto']) for kind in ('confirmation', 'thanks_decline', 'follow_up', 'reminder')},
     'follow_up_after_hours': ('Follow-up after hours', 'int', 24, 12, 96),
     'reminder_from_hour': ('Reminder from local hour', 'int', 16, 9, 19),
     'home_address': ('Home address / start location', 'text', ''),
@@ -17,6 +18,7 @@ DEFS = {
     'pharmacist_name': ('Pharmacist name', 'text', ''),
     'pharmacist_phone': ('Pharmacist phone', 'text', ''),
     'pharmacist_credential': ('Pharmacist credential', 'text', 'Credentialed Consultant Pharmacist'),
+    'pharmacist_credential_confirmed': ('Pharmacist credential above is confirmed for reports', 'bool', False),
     'referral_valid_days': ('Referral valid days', 'int', 90, 30, 365),
     'referral_warn_days': ('Referral warning days', 'int', 30, 1, 90),
     'followup_first_after_days': ('First follow-up after days', 'int', 30, 1, None),

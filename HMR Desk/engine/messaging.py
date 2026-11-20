@@ -31,7 +31,9 @@ def visit_time(patient, when=None):
             raise ValueError('valid visit date and time are required') from exc
     if not isinstance(when, dt.datetime) or when.tzinfo is not None:
         raise ValueError('visit time must be a naive Queensland datetime')
-    postcode = required(patient['postcode'], 'postcode')
+    if not isinstance(patient['postcode'], str) or not patient['postcode'].strip():
+        raise ValueError('postcode is required: the suburb text is not enough. Add the postcode under Edit details.')
+    postcode = patient['postcode'].strip()
     local = when + dt.timedelta(hours=db.utc_offset_hours(postcode, when) - 10)
     if local.time() <= dt.time(8):
         raise ValueError('start must be after 08:00 in patient local time')
@@ -99,8 +101,8 @@ def render(conn, patient, kind, when=None):
 
 
 def expired_warning(conn, patient, today=None):
-    import api
-    expiry = api.referral_expiry(conn, patient['referral_date'])
+    import patient_actions
+    expiry = patient_actions.referral_expiry(conn, patient['referral_date'])
     return 'Referral expired on ' + expiry.strftime('%d/%m/%Y') if expiry and expiry < (today or dt.date.today()) else ''
 
 def draft(conn, patient, data, commit=True):
@@ -313,6 +315,12 @@ def _autopilot(conn, now=None, runner=None, patient_id=None, simulated=False):
             elif patient['state'] in ('confirmed', 'pathology_ready', 'sheet_ready'):
                 if latest_reply and latest_reply['kind'] == 'YES' and not any(r['kind'] == 'confirmation' and stamp(r) >= stamp(latest_reply) for r in outgoing):
                     create(patient, 'confirmation')
+                if not (patient['postcode'] or '').strip():
+                    # Reminder timing needs the patient's postcode; without it nothing is drafted and nothing is guessed.
+                    if patient['visit_date'] and not conn.execute("SELECT 1 FROM events WHERE patient_id=? AND type='autopilot_skipped_no_postcode'", (patient['id'],)).fetchone():
+                        db.log(conn, patient['id'], 'autopilot_skipped_no_postcode', {})
+                        conn.commit()
+                    continue
                 local = now.replace(tzinfo=None) + dt.timedelta(hours=db.utc_offset_hours(patient['postcode'], now) - 10)
                 if patient['visit_date'] and visit_time(patient).date() == local.date() + dt.timedelta(days=1) and local.hour >= settings.get(conn, 'reminder_from_hour') and db.in_sending_window(patient['postcode'], now.replace(tzinfo=None)):
                     if not any(r['kind'] == 'reminder' and r['visit_date'] == patient['visit_date'] for r in outgoing):

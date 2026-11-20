@@ -8,7 +8,8 @@
     "test": "node --test",
     "smoke": "node dev/smoke.js",
     "shots": "node dev/shots.js",
-    "dist": "electron-builder --win nsis --x64"
+    "dist": "electron-builder --win nsis --x64",
+    "build:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File ../scripts/build-windows.ps1"
   },
   "devDependencies": {
     "electron": "^45.3.0",
@@ -46,7 +47,54 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "HMR Desk"
-    }
+    },
+    "extraResources": [
+      {
+        "from": "../HMR Desk/engine/dist/hmr-engine",
+        "to": "engine/hmr-engine",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "../scripts/intake",
+        "to": "scripts/intake",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "../vendor/libreoffice",
+        "to": "converter/libreoffice",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "../Pathology Chrome Helper",
+        "to": "browser-helpers/Pathology Chrome Helper",
+        "filter": [
+          "manifest.json",
+          "content.js"
+        ]
+      },
+      {
+        "from": "../MIMS Interaction Helper",
+        "to": "browser-helpers/MIMS Interaction Helper",
+        "filter": [
+          "manifest.json",
+          "content.js"
+        ]
+      },
+      {
+        "from": "../PPA Claim Helper",
+        "to": "browser-helpers/PPA Claim Helper",
+        "filter": [
+          "manifest.json",
+          "content.js"
+        ]
+      }
+    ]
   },
   "dependencies": {
     "leaflet": "^1.9.4"

@@ -9,14 +9,32 @@ function parts(filename) {
   if (p.some((x) => !x || /[<>:"|?*\x00-\x1f]/.test(x))) throw Error('Invalid filename');
   return p;
 }
+const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+// Normalise a date of birth to YYYY-MM-DD from DD-Mon-YYYY, DD/MM/YYYY or YYYY-MM-DD; null when unreadable.
+function isoDob(text) {
+  const value = String(text ?? '').trim();
+  let y, m, d, hit;
+  if ((hit = value.match(/^(\d{1,2})[-\s/]([A-Za-z]{3})[A-Za-z]*[-\s/](\d{4})$/))) [d, m, y] = [hit[1], MONTHS.indexOf(hit[2].toLowerCase()) + 1, hit[3]];
+  else if ((hit = value.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})$/))) [d, m, y] = [hit[1], hit[2], hit[3]];
+  else if ((hit = value.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/))) [y, m, d] = [hit[1], hit[2], hit[3]];
+  else return null;
+  m = Number(m); d = Number(d); y = Number(y);
+  const date = new Date(Date.UTC(y, m - 1, d));
+  if (!m || date.getUTCFullYear() !== y || date.getUTCMonth() !== m - 1 || date.getUTCDate() !== d) return null;
+  return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+}
 function patientFor(folder, queue) {
   const exact = queue.filter((p) => fileKey(p.folder).toLowerCase() === folder.toLowerCase());
   if (exact.length) return exact.length === 1 ? exact[0] : null;
+  // Never file on a name alone: the download folder must carry a date of birth that equals the patient's.
+  const carried = folder.match(/\(([^()]*)\)\s*$/);
+  const dob = carried && isoDob(carried[1]);
+  if (!dob) return null;
   const words = (s) => s.toLowerCase().match(/[a-z][a-z'-]*/g) || [];
   const name = words(folder.replace(/\s*\(.*$/, ''));
   const hits = queue.filter((p) => {
     const w = words(p.folder.replace(/^XX/, '').split('_')[0]);
-    return w.length && name.includes(w[0]) && name.includes(w[w.length - 1]);
+    return w.length && name.includes(w[0]) && name.includes(w[w.length - 1]) && isoDob(p.dob) === dob;
   });
   return hits.length === 1 ? hits[0] : null;
 }

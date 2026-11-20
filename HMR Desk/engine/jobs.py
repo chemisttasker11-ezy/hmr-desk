@@ -14,12 +14,15 @@ import uuid
 import db
 import importer
 import history
+import records as record_store
 
 INTAKE_SCRIPT = Path(db.BASE) / 'scripts' / 'intake' / 'intake.py'
-SKILL = Path(os.environ['USERPROFILE']) / '.claude' / 'skills' / 'australian-hmr-report'
-EXTRACT_SCRIPT = SKILL / 'scripts' / 'extract.py'
-BUILD_SCRIPT = SKILL / 'scripts' / 'build.py'
-INTERVIEW_SCRIPT = Path(os.environ['USERPROFILE']) / '.claude' / 'skills' / 'australian-hmr-report' / 'scripts' / 'make_interview.py'
+# Application-owned assets: never depend on an individual developer's Claude profile.
+APP_ASSETS = Path(__file__).resolve().parent / 'assets'
+SKILL = APP_ASSETS
+EXTRACT_SCRIPT = APP_ASSETS / 'scripts' / 'extract.py'
+BUILD_SCRIPT = APP_ASSETS / 'scripts' / 'build.py'
+INTERVIEW_SCRIPT = APP_ASSETS / 'scripts' / 'make_interview.py'
 FIELDS = {'name', 'sex', 'dob', 'medicare', 'irn', 'address', 'suburb', 'phone', 'gp', 'gp_initials', 'gp_provider', 'clinic', 'referral_date', 'ihi', 'notes'}
 _lock = threading.Lock()
 _jobs = {}
@@ -47,10 +50,21 @@ def correction(file, fields):
     if not isinstance(fields, dict) or not fields or not fields.keys() <= FIELDS or any(not isinstance(v, str) for v in fields.values()):
         raise ValueError('invalid fields')
     path = Path(db.BASE) / 'TO SORT' / 'intake_corrections.json'
-    with _lock:
-        data = importer.read(path) if path.exists() else {}
+    with _lock, connection() as conn:
+        data = record_store.get_json(conn, record_store.GLOBAL_PATIENT, 'intake_corrections.json')
+        if data is None:
+            data = importer.read(path) if path.exists() else {}
         data.setdefault(file, {}).update(fields)
-        atomic_json(path, data)
+        record_store.put_json(conn, record_store.GLOBAL_PATIENT, 'intake_corrections.json', data)
+
+
+def outside_files(conn):
+    """Record files that are not in a patient folder: (patient id, record name, plain path)."""
+    items = [(record_store.GLOBAL_PATIENT, 'intake_corrections.json', Path(db.BASE) / 'TO SORT' / 'intake_corrections.json'),
+             (record_store.GLOBAL_PATIENT, 'history-import-plan.json', Path(db.DATA_DIR) / 'history-import-plan.json')]
+    for p in conn.execute('SELECT * FROM patients').fetchall():
+        items.append((p['id'], 'interview_spec.json', interview_spec_path(p)))
+    return items
 
 
 def atomic_json(path, data):
@@ -59,12 +73,16 @@ def atomic_json(path, data):
     try:
         with os.fdopen(fd, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
         os.replace(temp, path)
     finally:
         if os.path.exists(temp): os.unlink(temp)
 
 
 def run_script(script, *args):
+    if not Path(script).is_file():
+        raise RuntimeError('Required application component is not bundled: ' + str(script))
     result = subprocess.run([sys.executable, str(script), *map(str, args)], capture_output=True, text=True,
                             encoding='utf-8', errors='replace', timeout=1800,
                             env={**os.environ, 'PYTHONIOENCODING': 'utf-8'})  # cp1252 console crashes on PDF symbols
@@ -133,8 +151,19 @@ def interview_assist(patient_id):
     with connection() as conn:
         p = get_patient(conn, patient_id)
         record = interview.load(conn, p)
+        import settings
+        if not settings.get(conn, 'clinical_ai_privacy_ack'):
+            raise ValueError('Clinical AI privacy approval is required in Settings')
+    import clinical_privacy
     name = agents.selected('interview_assist')
-    prompt = 'Return JSON {"points": {medicine: text}, "clarify": [..]}. Suggest points to check only. Data: ' + json.dumps({k: record[k] for k in ('meds', 'conditions', 'allergies', 'pathology')}, ensure_ascii=False)
+    selected = agents.get(name)
+    if selected['type'] != 'api':
+        raise clinical_privacy.PrivacyBlocked('Clinical AI requires a restricted API agent; CLI agents are disabled for patient data')
+    clinical = clinical_privacy.project(record, sex=p['sex'] or '')
+    prompt = ('Use only this de-identified clinical JSON. Do not infer identities. '
+              'Return JSON {"points": {medicine: text}, "clarify": [..]}. '
+              'Suggestions are for pharmacist review only. Data: '
+              + json.dumps(clinical, ensure_ascii=False))
     reply = json_object(agents.run(name, prompt))
     points, clarify = reply.get('points'), reply.get('clarify')
     if not isinstance(points, dict) or any(not isinstance(k, str) or not isinstance(v, str) for k, v in points.items()) or not isinstance(clarify, list) or any(not isinstance(x, str) for x in clarify): raise ValueError('invalid assist response')
@@ -188,8 +217,11 @@ def report_extract(patient_id):
         folder = patient_folder(get_patient(conn, patient_id))
     case, images = folder / 'case.txt', folder / 'case-images'
     if case.exists() or images.exists(): raise FileExistsError('Extraction output already exists')
-    output = run_script(EXTRACT_SCRIPT, folder, images)
-    if (folder / 'interview.json').is_file():
+    import local_referral_extraction
+    output = local_referral_extraction.extract(folder, images)
+    with connection() as conn:
+        has_record = record_store.exists(conn, get_patient(conn, patient_id)['id'], 'interview.json')
+    if has_record:
         import interview
         with connection() as conn:
             record = interview.load(conn, get_patient(conn, patient_id))
@@ -223,32 +255,118 @@ def report_start(patient_id):
 def report_build(patient_id, pdf=False):
     import report
     with connection() as conn:
+        conn.execute('BEGIN')  # one read snapshot: the spec, the checks and the evidence below all see the same committed state
         p = get_patient(conn, patient_id)
-        folder, spec = patient_folder(p), report_spec_path(p)
-        if not spec.is_file(): raise FileNotFoundError('Report spec missing: ' + str(spec))
-        data = importer.read(spec)
+        folder = patient_folder(p)
+        spec_bytes = record_store.get(conn, p['id'], 'report_spec.json')
+        if spec_bytes is None: raise FileNotFoundError('Report spec missing')
+        data = report.with_trusted_policy(conn, p, json.loads(spec_bytes.decode('utf-8-sig')))
         report.validate(data)
+        import interview, pathology_records
+        if data.get('interview_revision') and data['interview_revision'] != interview.revision(conn, p):
+            raise ValueError('Interview changed after report preparation; refresh and re-review the report before building')
+        if data.get('pathology_revision') and data['pathology_revision'] != pathology_records.revision(conn, p):
+            raise ValueError('Pathology changed after report preparation; refresh and re-review the report before building')
         if not data['issues']: raise ValueError('add at least one finding')
         pending = report.placeholders(data)
         if pending: raise ValueError('Review placeholder fields: ' + ', '.join(pending))
-        target = Path(data['out'])
-        if not target.is_absolute(): target = folder / target
-        target = target.resolve()
+        unreviewed = report.template_reviews_pending(conn, p, data)
+        if unreviewed: raise ValueError('Review imported template findings: ' + ', '.join(str(n) for n in unreviewed))
+        import report_auth
+        # One snapshot, taken before rendering: build evidence records the sources the document is built from,
+        # so a source saved during rendering or PDF conversion leaves evidence that sign-off refuses.
+        snapshot = {
+            'interview_revision': interview.revision(conn, p),
+            'pathology_revision': pathology_records.revision(conn, p),
+            'source_files_sha256': report_auth.source_snapshot(conn, p),
+            'clinical_snapshot_sha256': report_auth.clinical_snapshot_hash(conn, p),
+            'demographics': report.demographic_status(conn, p, data),  # block name -> matches/kept/unresolved, no text
+        }
+        import interaction_scope
+        data, interaction_scope_result = interaction_scope.apply_to_report(conn, p, data)
+        import pharmacist_identity
+        identity = pharmacist_identity.resolve(conn)
+        data = dict(data, pharmacist_details=identity['text'])
+        conn.rollback()  # end the read snapshot before rendering; later writes (events, state) must not be blocked by it
+        from pathlib import PureWindowsPath
+        raw = str(data['out'])
+        if not (Path(raw).is_absolute() or PureWindowsPath(raw).is_absolute()): raise ValueError('Report spec out must be an absolute path')
+        # A restored or moved workspace keeps the old root in the stored path. The output always lands in this patient's
+        # folder under the stored file name, whichever root the spec was written under.
+        name = PureWindowsPath(raw).name
+        target = (folder / name).resolve() if name not in ('', '.', '..') else folder
         if target.parent != folder or target.suffix.lower() != '.docx': raise ValueError('Report output must be a DOCX in patient folder')
-        preview = spec.with_name(spec.stem + '-sheet.png')
-        pdf_target = target.with_suffix('.pdf')
-        if target.exists() or preview.exists() or (pdf and pdf_target.exists()): raise FileExistsError('Report output or preview already exists')
-        if not Path(data['out']).is_absolute(): raise ValueError('Report spec out must be an absolute path')
-        output = run_script(BUILD_SCRIPT, spec)
-        if not target.is_file(): raise RuntimeError('Report was not created: ' + str(target))
+        # Preserve every prior DOCX/PDF and any signed revision; never overwrite.
+        original = target
+        for revision in range(1, 1001):
+            target = original if revision == 1 else original.with_name(original.stem + '-v' + str(revision) + original.suffix)
+            pdf_target = target.with_suffix('.pdf')
+            if not target.exists() and (not pdf or not pdf_target.exists()): break
+        else: raise FileExistsError('Report revision limit exceeded')
+        import local_report_builder
+        import template_report_builder
+        import pdf_export
+        template_root = template_report_builder.active_template_root()
+        approved = None
+        try:
+            approved = template_report_builder.approved_template(template_root)
+        except FileNotFoundError:
+            pass
+        # Missing owner approval always means provisional, never a final layout.
+        # An installed but invalid manifest must fail closed (do not downgrade).
+        with tempfile.TemporaryDirectory(prefix='.hmr-docx-', dir=folder) as directory:
+            draft = Path(directory) / target.name
+            if approved:
+                template_report_builder.render(data, draft, approved[0])
+                placed = template_report_builder.has_marker(approved[0], 'PHARMACIST')
+            else:
+                local_report_builder.render(data, draft)
+            if not draft.is_file(): raise RuntimeError('Draft Word report failed to render')
+            if target.exists(): raise FileExistsError('Output appeared during report rendering')
+            os.replace(draft, target)
+        output = ('Built approved-layout Word draft ' + approved[1]['version']
+                  if approved else 'Built a provisional local Word report (not owner-approved)')
+        if identity['text'] and approved and not placed:
+            output += '. Pharmacist details were not placed: the approved layout has no pharmacist placeholder.'
+        if identity['name'] and identity['note']:
+            output += '. ' + identity['note']
         if pdf:
             try:
-                subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(SKILL / 'scripts' / 'word2pdf.ps1'), str(target), str(pdf_target)], check=True, capture_output=True, timeout=120)
-                if not pdf_target.is_file(): raise RuntimeError('PDF was not created')
-            except (OSError, subprocess.SubprocessError, RuntimeError) as exc: raise RuntimeError('PDF conversion failed; DOCX kept at ' + str(target) + ': ' + str(exc)) from exc
+                converted = pdf_export.convert(target, pdf_target)
+            except (OSError, ValueError, RuntimeError) as exc:
+                left = getattr(exc, 'cleanup_pending', None)
+                if left:
+                    db.log(conn, p['id'], 'pdf_cleanup_pending', {'folder': left, 'conversion': 'failed', 'error': exc.cleanup_error}, 'job'); conn.commit()
+                why = pdf_export.failure_text(exc)
+                db.log(conn, p['id'], 'pdf_conversion_failed', {'reason': why}, 'job'); conn.commit()
+                raise RuntimeError('Local PDF conversion failed; prior Word draft preserved. Reason: ' + why + ('; ' + pdf_export.pending_note(left) if left else '')) from exc
+            # A completed conversion must be visible even when cleanup succeeds
+            # normally. Previously, "PDF created" appeared only if cleanup
+            # was pending, misleading a pharmacist who requested Word + PDF.
+            output += '. PDF created'
+            if isinstance(converted, dict) and converted.get('cleanup_pending'):
+                left = Path(converted['cleanup_pending']).name
+                db.log(conn, p['id'], 'pdf_cleanup_pending', {'folder': left, 'conversion': 'ok', 'error': converted.get('cleanup_error', '')}, 'job')
+                output += '. ' + pdf_export.pending_note(left)
         if p['state'] == 'visited' and db.can_move(p['state'], 'report_drafted'):
             db.set_state(conn, patient_id, 'report_drafted', source='job')
-        db.log(conn, patient_id, 'report_build', {'file': str(target)}, 'job')
+        import hashlib
+        evidence = {
+            'file': target.name,
+            'sha256': hashlib.sha256(target.read_bytes()).hexdigest(),
+            'pdf_sha256': hashlib.sha256(pdf_target.read_bytes()).hexdigest() if pdf else '',
+            'report_spec_sha256': hashlib.sha256(spec_bytes).hexdigest(),
+            'interview_revision': snapshot['interview_revision'],
+            'pathology_revision': snapshot['pathology_revision'],
+            'template_version': approved[1]['version'] if approved else '',
+            'template_sha256': approved[1]['sha256'] if approved else '',
+            'template_approved': bool(approved),
+            'source_files_sha256': snapshot['source_files_sha256'],
+            'clinical_snapshot_sha256': snapshot['clinical_snapshot_sha256'],
+            'demographics': snapshot['demographics'],
+            'pharmacist_identity_sha256': pharmacist_identity.digest(identity),
+        }
+        db.log(conn, patient_id, 'report_build', evidence, 'job')
         return output
 
 
@@ -262,9 +380,19 @@ def referral_text(folder):
     for file in files:
         if file.suffix.lower() == '.txt': parts.append(file.read_text(encoding='utf-8'))
         elif file.suffix.lower() == '.pdf':
-            result = subprocess.run(['pdftotext', '-layout', str(file), '-'], capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=120)
-            if result.returncode or not result.stdout.strip(): raise ValueError('Referral PDF has no readable text: ' + file.name)
-            parts.append(result.stdout)
+            import fitz
+            try:
+                with fitz.open(file) as doc:
+                    if doc.needs_pass: raise ValueError('Referral PDF is password-protected')
+                    pages = [page.get_text('text', sort=True) for page in doc]
+            except fitz.FileDataError as exc:
+                raise ValueError('Referral PDF is unreadable') from exc
+            if not any(page.strip() for page in pages):
+                import referral_entry
+                pages = referral_entry.parser().ocr_pdfs([file]).get(str(file), [])
+            if not any(page.strip() for page in pages):
+                raise ValueError('Referral PDF has no readable text; inspect the original')
+            parts.append('\n'.join(pages))
         else: raise ValueError('Unsupported referral document: ' + file.name)
     return '\n\n'.join(parts)
 
@@ -279,99 +407,89 @@ def json_object(reply):
     raise ValueError('Agent reply does not contain a valid JSON object')
 
 def agent_step(patient_id, name, output_path=None):
-    import agents
-    with connection() as conn:
-        p = get_patient(conn, patient_id)
-        folder = patient_folder(p)
-        target = output_path or (interview_spec_path(p) if name == 'interview_spec' else report_spec_path(p))
-        if target.exists(): raise FileExistsError('Spec already exists: ' + str(target))
-    agent = agents.selected('report_assist' if output_path is not None and name == 'report_draft' else name)
-    selected = agents.get(agent)
-    route = selected['route']
-    keys = INTERVIEW_KEYS if name == 'interview_spec' else REPORT_KEYS
-    if route == 'skill':
-        template = (Path(__file__).parent / 'prompts' / (name + '_skill.txt')).read_text(encoding='utf-8')
-        prompt = template.format(folder=str(folder), target=str(target), keys=', '.join(sorted(keys)))
-        target.parent.mkdir(parents=True, exist_ok=True)
-        reply = agents.skill_run(selected, prompt, Path(db.BASE) if name == 'interview_spec' else folder)
-        statuses = [line.strip()[len('HMR-STATUS:'):].strip() for line in reply.splitlines() if line.strip().startswith('HMR-STATUS:')]
-        status = statuses[-1] if statuses else ''
-        if status != 'success':
-            if target.is_file(): target.unlink()
-            reason = status[len('blocked - '):].strip() if status.startswith('blocked - ') else 'agent gave no status'
-            raise ValueError((reason or 'agent gave no status') + '\n' + '\n'.join(reply.splitlines()[-199:]))
-        try:
-            spec = json.loads(target.read_text(encoding='utf-8'))
-            if not isinstance(spec, dict) or not keys <= spec.keys(): raise ValueError('Spec missing required top-level keys')
-        except (OSError, ValueError, TypeError) as exc:
-            raise ValueError('Invalid or missing spec: ' + str(exc) + '\n' + '\n'.join(reply.splitlines()[-199:])) from None
-        with connection() as conn: db.log(conn, patient_id, name, {'agent': agent, 'route': route, 'file': str(target)}, 'job')
-        return 'Spec created by ' + agent + ' (' + route + ')'
-    template = (Path(__file__).parent / 'prompts' / (name + '.txt')).read_text(encoding='utf-8')
-    rules = '\n\n'.join((SKILL / f).read_text(encoding='utf-8') for f in ('SKILL.md', 'references/report-runbook.md'))
-    if name == 'interview_spec':
-        source = referral_text(folder)
-        pathology = folder / 'Pathology'
-        if pathology.is_dir():
-            for file in sorted(pathology.iterdir()):
-                if file.is_file() and file.suffix.lower() == '.txt':
-                    source += '\n\nPathology ' + file.name + ':\n' + file.read_text(encoding='utf-8')
-                elif file.is_file() and file.suffix.lower() == '.pdf':
-                    result = subprocess.run(['pdftotext', '-layout', str(file), '-'], capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=120)
-                    if not result.returncode and result.stdout.strip(): source += '\n\nPathology ' + file.name + ':\n' + result.stdout
-        keys = INTERVIEW_KEYS
-    else:
-        source = (folder / 'case.txt').read_text(encoding='utf-8')
-        keys = REPORT_KEYS
-        # Search using frequent words, without passing the full patient extract as command arguments.
-        import re
-        terms = list(dict.fromkeys(re.findall(r'(?i)\b[a-z]{6,}\b', source)))[:12]
-        if terms:
-            try: source += '\n\nSimilar cases:\n' + run_script(SKILL / 'scripts' / 'find_cases.py', *terms)
-            except (OSError, subprocess.SubprocessError, RuntimeError): pass
-    shape = (SKILL / 'scripts' / 'example-spec.json').read_text(encoding='utf-8') if name == 'report_draft' else json.dumps({k: ([] if k in ('meds', 'pathology', 'clarify') else 0 if k == 'age' else '') for k in sorted(keys)})
-    prompt = template + '\n\nSpec shape: ' + shape + '\n\nRequired top-level keys: ' + ', '.join(sorted(keys)) + '\nOutput path: ' + str(target) + '\n\nSkill rules:\n' + rules + '\n\nCase source:\n' + source
-    reply = agents.run(agent, prompt)
-    try:
-        spec = json_object(reply)
-        if not keys <= spec.keys(): raise ValueError('Agent reply missing required keys: ' + ', '.join(sorted(keys - spec.keys())))
-    except (ValueError, TypeError):
-        directory = Path(db.DATA_DIR) / 'agent-replies'; directory.mkdir(parents=True, exist_ok=True)
-        with (directory / (uuid.uuid4().hex + '.txt')).open('x', encoding='utf-8') as f: f.write(reply)
-        raise
-    target.parent.mkdir(parents=True, exist_ok=True)
-    with target.open('x', encoding='utf-8') as f: json.dump(spec, f, ensure_ascii=False, indent=2)
-    with connection() as conn: db.log(conn, patient_id, name, {'agent': agent, 'route': route, 'file': str(target)}, 'job')
-    return 'Spec created by ' + agent
+    # Legacy skill routes require patient-folder read/write access and raw case.txt.
+    # They must not be used for identifiable clinical records.
+    import clinical_privacy
+    raise clinical_privacy.PrivacyBlocked(
+        'Legacy patient-folder agent route disabled. Use manual report or clinical-only report assist.')
 
 
-def interview_spec(patient_id): return agent_step(patient_id, 'interview_spec')
-def report_draft(patient_id): return agent_step(patient_id, 'report_draft')
+def interview_spec(patient_id):
+    return agent_step(patient_id, 'interview_spec')
+
+
+def report_draft(patient_id):
+    return agent_step(patient_id, 'report_draft')
+
 
 def report_assist(patient_id):
+    """AI clinical findings only; patient identifiers are added by local report code."""
+    import agents
+    import clinical_privacy
+    import interview
     import report
-    with connection() as conn: folder = patient_folder(get_patient(conn, patient_id))
-    target = folder / ('report-assist-' + uuid.uuid4().hex + '.json')
-    try:
-        output = agent_step(patient_id, 'report_draft', target)
-        report.validate(json.loads(target.read_text(encoding='utf-8')))
-        os.replace(target, folder / 'report_spec.ai.json')
-        with connection() as conn: db.log(conn, patient_id, 'report_assist', {'file': str(folder / 'report_spec.ai.json')}, 'job')
-        return output
-    finally:
-        if target.exists(): target.unlink()
+    with connection() as conn:
+        patient = get_patient(conn, patient_id)
+        import settings
+        if not settings.get(conn, 'clinical_ai_privacy_ack'):
+            raise ValueError('Clinical AI privacy approval is required in Settings')
+        folder = patient_folder(patient)
+        record = interview.load(conn, patient)
+        clinical = clinical_privacy.project(record, sex=patient['sex'] or '')
+        source_revision = record['revision']
+        source_hash = clinical_privacy.fingerprint(clinical)
+        selected_name = agents.selected('report_assist')
+        selected = agents.get(selected_name)
+        if selected['type'] != 'api':
+            raise clinical_privacy.PrivacyBlocked(
+                'Clinical AI requires a restricted API agent; CLI agents are disabled for patient data')
+    prompt = ('You are assisting an Australian HMR pharmacist. Use only the clinical JSON. '
+              'Return ONLY JSON with exactly one key: findings, an array of up to 15 objects '
+              'each containing exactly title, recommendation, rationale, evidence_ids. '
+              'Evidence IDs must be drawn from the input. Do not invent missing clinical facts. '
+              'Recommendations are suggestions for pharmacist review, not prescribing decisions. '
+              'Do not include names, dates of birth, contact details, provider details or identifiers. '
+              'Clinical JSON: ' + json.dumps(clinical, ensure_ascii=False))
+    reply = json_object(agents.run(selected_name, prompt))
+    findings = clinical_privacy.validate_findings(reply, clinical)
+    with connection() as conn:
+        patient = get_patient(conn, patient_id)
+        latest = interview.load(conn, patient)
+        if latest['revision'] != source_revision or clinical_privacy.fingerprint(
+                clinical_privacy.project(latest, sex=patient['sex'] or '')) != source_hash:
+            raise ValueError('Clinical interview changed during AI analysis; rerun assistance')
+        folder = patient_folder(patient)
+        if record_store.exists(conn, patient['id'], 'report_spec.ai.json'):
+            raise FileExistsError('Existing AI draft must be reviewed or removed before rerunning')
+        manual = report.load(conn, patient)
+        if manual.get('saved') is False:
+            # Only an absent report carries saved=False; an existing report has no saved flag.
+            # Start the manual report locally using the existing deterministic composer.
+            manual = report.start(conn, patient)
+        candidate = {k: v for k, v in manual.items() if k not in ('saved', 'interview_newer')}
+        candidate['issues'] = findings
+        report.validate(candidate)
+        record_store.put_json(conn, patient['id'], 'report_spec.ai.json', candidate)
+        db.log(conn, patient_id, 'report_assist', {
+            'agent': selected_name, 'clinical_snapshot': source_hash,
+            'finding_count': len(findings)}, 'job')
+    return 'Clinical-only AI findings ready for pharmacist review'
 
 def import_history(patient_id):
     if patient_id is not None: raise ValueError('batch job takes no patient')
-    with connection() as conn: records = history.plan(conn)
-    atomic_json(Path(db.DATA_DIR) / 'history-import-plan.json', records)
-    return json.dumps(history.summary(records), ensure_ascii=False)
+    with connection() as conn:
+        plan = history.plan(conn)
+        record_store.put_json(conn, record_store.GLOBAL_PATIENT, 'history-import-plan.json', plan)
+    return json.dumps(history.summary(plan), ensure_ascii=False)
 
 
 def import_history_apply(patient_id):
     if patient_id is not None: raise ValueError('batch job takes no patient')
-    records = json.loads((Path(db.DATA_DIR) / 'history-import-plan.json').read_text(encoding='utf-8'))
-    with connection() as conn: count = history.apply(conn, records)
+    with connection() as conn:
+        plan = record_store.get_json(conn, record_store.GLOBAL_PATIENT, 'history-import-plan.json')
+        if plan is None:
+            plan = json.loads((Path(db.DATA_DIR) / 'history-import-plan.json').read_text(encoding='utf-8'))
+        count = history.apply(conn, plan)
     return json.dumps({'visits_added': count})
 
 

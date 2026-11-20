@@ -2,6 +2,7 @@
 import datetime
 import argparse
 import csv
+from contextlib import closing
 import json
 import os
 from pathlib import Path
@@ -131,7 +132,10 @@ def run(conn, base=db.BASE, source='importer'):
 
     referrals = set()
     intake = newest(sorting.glob('intake_report_*.json'))
-    corrections = read(sorting / 'intake_corrections.json') if (sorting / 'intake_corrections.json').exists() else {}
+    import records
+    corrections = records.get_json(conn, records.GLOBAL_PATIENT, 'intake_corrections.json')
+    if corrections is None:
+        corrections = read(sorting / 'intake_corrections.json') if (sorting / 'intake_corrections.json').exists() else {}
     if intake:
         for entry in read(intake):
             if entry.get('kind') != 'referral':
@@ -264,8 +268,7 @@ if __name__ == '__main__':
         with tempfile.TemporaryDirectory(dir=Path(__file__).parent) as tmp:
             conn = db.connect(str(Path(tmp) / 'dry.db'))
             if Path(db.db_path()).exists():
-                import sqlite3
-                with sqlite3.connect(db.db_path()) as original:
+                with closing(db.open_encrypted(db.db_path(), readonly=True)) as original:
                     original.backup(conn)
             print(format_report(run(conn))); conn.close()
     else:

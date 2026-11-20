@@ -6,8 +6,9 @@ import sys
 from urllib.parse import urlparse
 
 import db
+import app_paths
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'Android_SMS_Integration')))
+sys.path.insert(0, str(app_paths.resource_root() / 'Android_SMS_Integration'))
 from sms_bridge import (BridgeError, BridgeHTTPError, BridgeNetworkError, BridgeStorage,
                         SMSGateClient, get_active_state_dir, normalize_phone_number, verify_tailscale_peer)
 

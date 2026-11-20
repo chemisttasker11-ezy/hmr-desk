@@ -1,5 +1,20 @@
 const { esc, date, group, sentence } = H;
 const $ = (id) => document.getElementById(id);
+if (typeof hmr.onEngineState === 'function') hmr.onEngineState(state => {
+  let notice = document.getElementById('hmr-engine-connection-state');
+  if (!notice) {
+    notice = document.createElement('p');
+    notice.id = 'hmr-engine-connection-state';
+    notice.setAttribute('role', 'status');
+    notice.className = 'error';
+    notice.style.cssText = 'position:sticky;top:0;z-index:10000;padding:12px;background:#f6d8d8;color:#571515;font-weight:600';
+    // Inside <main>: body is a flex row, so a direct child of body becomes a pane beside the sidebar.
+    (document.querySelector('main') || document.body).prepend(notice);
+  }
+  notice.hidden = !!state.ready;
+  notice.textContent = state.ready ? '' : (state.reason || 'Clinical engine is temporarily unavailable');
+});
+
 const labels = {
   today: 'Today', book: 'Book', visit: 'Visit', claim: 'Claim', activity: 'Activity', to_book: 'To book', report_editor: 'Edit report', followup_editor: 'Follow-up form',
   calendar: 'Calendar',
@@ -198,7 +213,7 @@ async function health() {
   const inactive = portals.filter(portal => portal.state === 'not open');
   $('health').innerHTML = chip(`Engine ${s ? 'connected' : 'unavailable'}`, s ? 'ok' : 'bad') +
     chip(`Phone ${phone}`, phone === 'online' ? 'ok' : 'warn') +
-    chip(`Outbox ${s?.outbox_mode ? String(s.outbox_mode).toUpperCase() : 'unknown'}`, s?.outbox_mode === 'live' ? 'ok' : 'warn') +
+    chip(`Outbox ${s?.outbox_mode ? String(s.outbox_mode).toUpperCase() : 'unknown'}`, s?.outbox_mode === 'live' ? 'ok' : 'warn').replace('<span ', `<span title="${s?.outbox_mode === 'live' ? 'Live: text messages can reach patients' : 'Test: text messages go only to the configured test phone, and are sent there when the phone gateway is online. Not a no-send mode. Reports, claims and portal actions are not limited by this setting.'}" `) +
     portals.filter(portal => portal.state !== 'not open').map(portal => portal.html).join('') +
     (inactive.length ? `<details class="portal-inactive" ${expanded ? 'open' : ''}><summary>Portals: ${inactive.length} not open</summary><div>${inactive.map(portal => portal.html).join('')}</div></details>` : '');
   if (focusTarget && (document.activeElement === focused || document.activeElement === document.body)) {
@@ -223,7 +238,7 @@ async function refresh() {
     if (!isCurrent()) return;
     if (page === 'calendar') {
       // drawer open: refresh the day around it instead of rebuilding the screen
-      if ($('detail') && !$('detail').hidden) {
+      if ($('calendar') && $('day-content') && /^\d{4}-\d{2}-\d{2}$/.test(selectedDay || '') && $('detail') && !$('detail').hidden) {
         await Promise.all([loadDay(selectedDay), loadCalendar(), loadSummary()]);
         if (!isCurrent()) return;
         await showPatient(selected);
@@ -238,14 +253,15 @@ async function refresh() {
       const [res, queue] = await Promise.all([hmr.api('GET', filter === 'Archived' ? '/api/patients?archived=1' : '/api/patients'), hmr.api('GET', '/api/run').catch(() => null)]);
       if (queue) { runTasks = queue.tasks || []; runStepsCatalog = queue.steps || []; }
       if (!isCurrent()) return;
+      const interacting = !!$('detail')?.querySelector?.('details[open]');
       patients = res.patients;
       if (!$('search')) patientShell();
       renderPatients();
-      if (selected && !formOpen && !($('detail')?.contains(document.activeElement) && document.activeElement.matches('input, textarea, select'))) {
-        await showPatient(selected);
+      if (selected && !formOpen && !interacting && !($('detail')?.contains(document.activeElement) && document.activeElement.matches('input, textarea, select'))) {
+        await reselectActivePatient(selected, true);
       }
       clearTimeout(runTimer);
-      const pollPatients = () => { if (page !== 'patients') return; if (formOpen) runTimer = setTimeout(pollPatients, 5000); else refresh(); };
+      const pollPatients = () => { if (page !== 'patients') return; if (formOpen || $('detail')?.querySelector?.('details[open]')) runTimer = setTimeout(pollPatients, 5000); else refresh(); };
       runTimer = setTimeout(pollPatients, 5000);
     }
     if (!isCurrent()) return;
@@ -264,7 +280,7 @@ async function refresh() {
       if (!$('search')) patientShell();
       renderPatients();
       if (selected && !formOpen && !($('detail')?.contains(document.activeElement) && document.activeElement.matches('input, textarea, select'))) {
-        await showPatient(selected);
+        await reselectActivePatient(selected, false);
       }
     }
     if (!isCurrent()) return;
@@ -327,6 +343,7 @@ document.addEventListener('click', async (event) => {
   // stop names sit inside <summary>: open the patient instead of toggling the row
   if (b.matches('summary [data-drawer-patient]')) event.preventDefault();
   try {
+    if (b.dataset.page === 'interview' && H.interviewTabTarget(page, selected, highlightedStopPatient)) return await openInterview(H.interviewTabTarget(page, selected, highlightedStopPatient));
     if (b.dataset.page) return await navigate(b.dataset.page);
     if (b.dataset.removeOneOff !== undefined) {
       oneOffNames = await hmr.oneOff('remove', page, Number(b.dataset.removeOneOff));
@@ -524,6 +541,7 @@ document.addEventListener('submit', async (event) => {
         allergies: medicineData.allergies,
         interview_usage: medicineData.interview_usage || [],
         alternatives: medicineData.alternatives,
+        medicine_snapshot_sha256: medicineData.medicine_snapshot_sha256,
       });
       medicinePatient = null;
       medicineData = null;

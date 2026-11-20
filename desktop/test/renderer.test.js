@@ -67,10 +67,13 @@ test('report buttons use engine readiness and keep medicine confirmation editabl
   assert.doesNotMatch(row, /Check medicines for interaction check &#10003; Done/);
   const confirmed = context.reportRow(
     { id: 2, name: 'Test', state: 'visited' },
-    { steps: [{ name: 'interactions', ready: true, done: false, reason: '' }] },
+    { steps: [{ name: 'confirm_medicines', done: true }, { name: 'interactions', ready: true, done: false, reason: '' }] },
     'Agent',
   );
   assert.match(confirmed, /data-medicines="2"[^>]*>Check medicines for interaction check &#10003; Done/);
+  const stale = context.reportRow({ id: 2, name: 'Test', state: 'visited' },
+    { steps: [{ name: 'confirm_medicines', done: false }, { name: 'interactions', ready: true, reason: '' }] }, 'Agent');
+  assert.doesNotMatch(stale, /Check medicines for interaction check &#10003; Done/);
 });
 
 test('interview snapshots and row edits detect unsaved changes without mutating originals', () => {
@@ -147,6 +150,7 @@ test('consent signing hides for signed records and posts a drawn PNG', async () 
       if (args[0] === 'GET') return { consent: { signed: true }, consent_file: 'signed.pdf' };
       return {};
     } } });
+  vm.runInContext(fs.readFileSync(require.resolve('../renderer/followup-context.js'), 'utf8'), context);
   vm.runInContext(fs.readFileSync(require.resolve('../renderer/interview.js'), 'utf8'), context);
   vm.runInContext("interviewId = '1'; interviewRecord = { consent: { by: 'patient' }, consent_file: '' }; renderInterview()", context);
   assert.match(screen.innerHTML, /Sign consent form/);
@@ -181,6 +185,7 @@ test('touchpad signing draws separate strokes after a pause and exits on Escape'
     setTimeout(fn, ms) { assert.equal(ms, 700); timers.set(++timerId, fn); return timerId; },
     clearTimeout(id) { timers.delete(id); },
     hmr: { api: async () => ({ png: 'image' }) } });
+  vm.runInContext(fs.readFileSync(require.resolve('../renderer/followup-context.js'), 'utf8'), context);
   vm.runInContext(fs.readFileSync(require.resolve('../renderer/interview.js'), 'utf8'), context);
   vm.runInContext("interviewId = '1'; interviewRecord = { consent: { by: 'patient' } }", context);
   await context.openConsentDialog();
@@ -289,8 +294,9 @@ test('call action posts the selected outcome and note', async () => {
 test('follow-up form saves the edited record and recommendation shape', async () => {
   const vm = require('node:vm'), fs = require('node:fs'), H = require('../renderer/helpers');
   const handlers = {}, calls = [], nodes = {screen: {}, 'followup-status': {}};
-  const record = {date: '', method: 'phone', spoke_with: '', med_changes: '', recommendations: [['Take medicine', '', '']], issues: '', outcome: '', notes: ''};
+  const record = {date: '', method: '', preferred_method: '', choice_offered_on: '', spoke_with: '', med_changes: '', recommendations: [['Take medicine', '', '']], issues: '', outcome: '', notes: ''};
   const context = vm.createContext({ H, esc: H.esc, $: id => nodes[id], document: {addEventListener: (name, fn) => { handlers[name] = fn; }}, page: 'followup_editor', hmr: {api: async (...args) => { calls.push(args); if (args[0] === 'GET') return record; }}, errorText: String, setTimeout, clearTimeout, confirm: () => false });
+  vm.runInContext(fs.readFileSync(require.resolve('../renderer/followup-context.js'), 'utf8'), context);
   vm.runInContext(fs.readFileSync(require.resolve('../renderer/interview.js'), 'utf8'), context);
   vm.runInContext("followupId = '4'; followupNumber = '1'", context);
   await context.followupScreen();
@@ -414,4 +420,37 @@ test('report medicine notes use textareas and suggestions show specific gaps', (
   vm.runInContext(fs.readFileSync(require.resolve('../renderer/report-editor.js'), 'utf8'), context);
   vm.runInContext("reportGaps = ['Interview notes missing', 'Medicines not confirmed']", context);
   assert.match(context.suggestionsHtml(), /<li>Interview notes missing<\/li><li>Medicines not confirmed<\/li>/);
+});
+
+test('report editor shows the follow-up decision only for specs that carry it, and no timing text', () => {
+  const vm = require('node:vm'), fs = require('node:fs'), H = require('../renderer/helpers');
+  const context = vm.createContext({ H, esc: H.esc, document: { addEventListener() {} }, page: 'report_editor', errorText: String });
+  vm.runInContext(fs.readFileSync(require.resolve('../renderer/report-editor.js'), 'utf8'), context);
+  vm.runInContext("reportRecord = { followup: '' }", context);
+  assert.equal(vm.runInContext('followupDecisionHtml()', context), '');
+  vm.runInContext("reportRecord = { followup: 'x' }", context);  // earlier draft: review box only, no decision select
+  const legacy = vm.runInContext('followupDecisionHtml()', context);
+  assert.match(legacy, /data-followup-reviewed/); assert.doesNotMatch(legacy, /data-followup-decision/);
+  vm.runInContext("reportRecord = { followup_decision: 'not_required', followup_text_reviewed: false }", context);
+  const html = vm.runInContext('followupDecisionHtml()', context);
+  assert.match(html, /data-followup-decision/); assert.match(html, /data-followup-reviewed/); assert.doesNotMatch(html, /12 months|few months/);
+  vm.runInContext("reportRecord = { followup_decision: '' }", context);
+  assert.match(vm.runInContext('followupDecisionHtml()', context), /data-followup-decision/);
+});
+
+test('report autosave sends the revision it read as expected_revision and adopts the one returned', async () => {
+  const vm = require('node:vm'), fs = require('node:fs'), H = require('../renderer/helpers');
+  const posts = [], store = {};
+  const context = vm.createContext({ H, esc: H.esc, document: { addEventListener() {} }, page: 'report_editor', $: () => null,
+    localStorage: { getItem: k => store[k] ?? null, setItem: (k, v) => { store[k] = v; }, removeItem: k => { delete store[k]; } },
+    hmr: { api: async (method, url, body) => { posts.push([method, url, body]); return { ...body, revision: 'r' + posts.length }; } },
+    errorText: String });
+  vm.runInContext(fs.readFileSync(require.resolve('../renderer/report-editor.js'), 'utf8'), context);
+  vm.runInContext("reportId = '7'; reportRecord = { revision: 'a'.repeat(64), reason: 'one', issues: [] }; reportSaver.reset(reportRecord);", context);
+  vm.runInContext("reportRecord.reason = 'two'; reportSaver.changed()", context);
+  assert.equal(await vm.runInContext('reportSaver.save(true)', context), true);
+  assert.equal(posts[0][2].expected_revision, 'a'.repeat(64));
+  vm.runInContext("reportRecord.reason = 'three'; reportSaver.changed()", context);
+  assert.equal(await vm.runInContext('reportSaver.save(true)', context), true);
+  assert.equal(posts[1][2].expected_revision, 'r1');
 });

@@ -172,3 +172,54 @@ test('record visit patient navigation keeps the interview in Back history', asyn
   assert.equal(c.interviewId, '42');
   assert.equal(main.scrollTop, 350);
 });
+
+function refreshSetup({ calendarReady = false, selectedDay = null, disclosure = false } = {}) {
+  const calls = [], timers = [];
+  const detail = { hidden: false, contains: () => false, querySelector: () => disclosure ? {} : null };
+  const screen = { dataset: {}, innerHTML: '' }, main = { scrollTop: 0 };
+  const nodes = { detail, screen, search: {} };
+  if (calendarReady) Object.assign(nodes, { calendar: {}, 'day-content': {} });
+  const c = vm.createContext({ page: 'calendar', formOpen: false, navToken: 0, selectedDay, selected: '1', filter: 'All', runTimer: null,
+    $: id => nodes[id], document: { querySelector: () => main, activeElement: null },
+    health: async () => {}, hmr: { api: async () => ({ patients: [] }) },
+    loadDay: async day => { calls.push(['day', day]); if (!day) throw Error('invalid date'); },
+    loadCalendar: async () => {}, loadSummary: async () => {}, today: async () => { calls.push(['initialize']); },
+    showPatient: async (...args) => { calls.push(['patient', ...args]); }, reselectActivePatient: async (...args) => { calls.push(['patient', ...args]); }, renderPatients() {},
+    setTimeout: fn => { timers.push(fn); return timers.length; }, clearTimeout() {}, esc: String, errorText: e => e.message });
+  const source = fs.readFileSync(require.resolve('../renderer.js'), 'utf8');
+  vm.runInContext(source.slice(source.indexOf('async function refresh()'), source.indexOf('\nasync function runJob(')), c);
+  return { c, calls, timers, screen, detail, setDisclosure: value => { disclosure = value; } };
+}
+
+test('Visit initializes calendar rather than using an unrelated open patient drawer', async () => {
+  for (const selectedDay of [null, '2026-11-17']) {
+    const { c, calls, screen } = refreshSetup({ selectedDay });
+    await c.refresh();
+    assert.deepEqual(calls, [['initialize']]);
+    assert.equal(screen.innerHTML, '');
+  }
+});
+
+test('initialized calendar keeps its selected day and open drawer during refresh', async () => {
+  const { c, calls } = refreshSetup({ calendarReady: true, selectedDay: '2026-11-17' });
+  await c.refresh();
+  assert.deepEqual(calls, [['day', '2026-11-17'], ['patient', '1']]);
+});
+
+test('patient polling waits while actions are expanded and resumes after they close', async () => {
+  const { c, calls, timers, setDisclosure } = refreshSetup();
+  c.page = 'patients';
+  await c.refresh();
+  calls.length = 0;
+  setDisclosure(true);
+  timers.at(-1)();
+  assert.equal(calls.length, 0);
+  assert.equal(timers.length, 2);
+  // Also cover an already-started refresh reaching the expanded disclosure.
+  await c.refresh();
+  assert.equal(calls.length, 0);
+  setDisclosure(false);
+  timers.at(-1)();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(calls, [['patient', '1', true]]);
+});

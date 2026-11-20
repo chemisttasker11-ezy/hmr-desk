@@ -55,9 +55,11 @@ def sections(text):
     return result
 
 def clean(line):
-    return re.sub(r'^[\s\u2022\u25cf\u25a0*\-]+', '', line).strip()
+    # Common bullet glyphs from PDF text extraction; keep the class exhaustive
+    # for observed variants rather than interpreting document structure.
+    return re.sub(r'^[\s\u2022\u25cf\u25a0\u00b7\u2219\u2023\u25aa\u2043*\-]+', '', line).strip()
 
-def medicines(lines):
+def medicines(lines, source_rows=None):
     rows = []; leftovers = False
     for raw in lines:
         line = clean(raw)
@@ -67,10 +69,13 @@ def medicines(lines):
             m = re.search(r'\s+(?=(?:take|apply|use|inject|inhale|\d+\s+(?:tablet|capsule|puff))\b)', line[strength.end():], re.I)
             cut = strength.end() + m.start() if m else None
             rows.append([line[:cut].strip(), line[cut:].strip()] if m else [line, ''])
+            if source_rows is not None: source_rows.append([raw])
         elif rows and DIRECTION.match(line):
             rows[-1][1] = ' '.join(filter(None, (rows[-1][1], line)))
+            if source_rows is not None: source_rows[-1].append(raw)
         elif rows and rows[-1][1] and not rows[-1][1].endswith('.') and not DATE.fullmatch(line) and len(line) < 90 and not re.match(r'(?i)^(?:dr|patient|name|dob|address|phone)\b', line):
             rows[-1][1] += ' ' + line
+            if source_rows is not None: source_rows[-1].append(raw)
         else:
             leftovers = True
     return rows, leftovers
@@ -82,17 +87,23 @@ def parse(text):
     if result['layout'] == 'scan / other':
         result['unparsed'] = [k for k in sec if k != 'other']
         return result
-    result['meds'], bad = medicines(sec.get('meds', []))
+    result['medicine_source_lines'] = []
+    result['meds'], bad = medicines(sec.get('meds', []), result['medicine_source_lines'])
     if 'meds' in sec and (bad or not result['meds']): result['unparsed'].append('meds')
     ceased, bad = medicines(sec.get('ceased', [])); result['ceased'] = [' '.join(filter(None, row)) for row in ceased]
     if 'ceased' in sec and (bad or not ceased): result['unparsed'].append('ceased')
     for key in ('conditions', 'allergies'):
         lines = [clean(x) for x in sec.get(key, []) if not DATE.fullmatch(x) and not NOISE.fullmatch(x)]
-        if key == 'allergies' and any(re.fullmatch(r'(?i)(?:nil|none|no(?:ne)? known|nil known|no known allergies|nkda)\.?', x) for x in lines):
+        nil = [bool(re.fullmatch(r'(?i)(?:nil|none|no(?:ne)? known|nil known|no known allergies|nkda)\.?', x)) for x in lines]
+        if key == 'allergies' and any(nil) and all(nil):
             result[key] = ['nil known']
+        elif key == 'allergies' and any(nil):
+            # A nil line next to a real allergy is a conflict: keep every positive line, never report "nil known".
+            result[key] = [x for x, is_nil in zip(lines, nil) if not is_nil and x and len(x) <= 100 and not re.search(r'(?i)\b(?:patient|phone|address|dob|medicare)\s*:', x)]
+            result['unparsed'].append(key)
         else:
             result[key] = [x for x in lines if x and len(x) <= 100 and not re.search(r'(?i)\b(?:patient|phone|address|dob|medicare)\s*:', x)]
-        if key in sec and len(result[key]) < len(lines): result['unparsed'].append(key)
+        if key in sec and len(result[key]) < len(lines) and key not in result['unparsed']: result['unparsed'].append(key)
         if key in sec and not result[key] and key not in result['unparsed']: result['unparsed'].append(key)
     lines = sec.get('obs', [])
     for i, line in enumerate(lines):

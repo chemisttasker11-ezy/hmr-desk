@@ -1,6 +1,7 @@
 ﻿import json, os, tempfile
 from pathlib import Path
 from docx import Document
+import records
 import api, db
 
 with tempfile.TemporaryDirectory() as tmp:
@@ -22,9 +23,9 @@ with tempfile.TemporaryDirectory() as tmp:
     assert call('POST','messages',{'kind':'custom'})[0] == 400
     status, draft = call('POST','messages',{'kind':'custom','body':'My text'})
     assert status == 200 and draft['body'] == 'My text' and draft['state'] == 'draft'
-    (folder / 'report_spec.json').write_text(json.dumps({'issues':[{'rec':'Review medicine'}]}), encoding='utf-8')
+    records.put(conn, 1, 'report_spec.json', (json.dumps({'issues':[{'rec':'Review medicine'}]})).encode('utf-8')); conn.commit()
     status, data = call('GET','followup/1'); assert status == 200 and data['recommendations'] == [['Review medicine','','']]
-    data['date'] = '2026-02-10'; data['recommendations'][0][1] = 'partly'
+    data['date'] = '2026-02-10'; data['method'] = 'phone'; data['recommendations'][0][1] = 'partly'
     assert call('POST','followup/1', data)[0] == 200
     assert call('POST','followup/1', data)[0] == 200
     assert conn.execute("SELECT count(*) FROM visits WHERE kind='followup1'").fetchone()[0] == 1
@@ -38,7 +39,7 @@ with tempfile.TemporaryDirectory() as tmp:
     assert 'import_change' not in labels and labels.index('Pathology: 4 reports saved') < labels.index('Reply: "YES" (YES)')
     assert (m['referral_date'], m['referral_expiry'], m['first_contact'], m['last_reply'], m['confirmed']) == ('2026-01-01','2026-04-01','2026-01-02','2026-01-03','2026-01-03')
     assert (m['visit'],m['report_sent'],m['claimed'],m['call_attempts']) == ('2026-01-10','2026-01-11','2026-01-12',1)
-    assert (m['followup1_due'],m['followup1_done'],m['followup1_claimed'],m['followup2_due'],m['followup2_done']) == ('2026-02-09','2026-02-10','2026-02-11','2026-03-12',None)
+    assert (m['followup1_due'],m['followup1_done'],m['followup1_claimed'],m['followup2_due'],m['followup2_done']) == ('2026-02-10','2026-02-10','2026-02-11','2026-03-10',None)
     conn.execute("UPDATE patients SET visit_date='2026-11-14',visit_time='09:30' WHERE id=1")
     conn.execute("INSERT INTO messages(id,patient_id,direction,body,kind,state,created_at) VALUES ('utc',1,'in','YES','YES','received','2026-11-11T08:45:00+00:00')")
     extra = [

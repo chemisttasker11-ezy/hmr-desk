@@ -3,11 +3,16 @@ import json
 import os
 import tempfile
 from unittest.mock import patch
-import api, db, inbox, messaging, outbox, scenarios
+import api, db, inbox, messaging, outbox, scenarios, settings
 
 with tempfile.TemporaryDirectory() as tmp:
     db.BASE = tmp
     conn = db.connect(os.path.join(tmp, 'db.sqlite'))
+    # The product has no default pharmacist name or phone (messages refuse to render without them), so the fixture sets both.
+    settings.update(conn, {'pharmacist_name': 'Consultant Pharmacist', 'pharmacist_phone': '0400000000'})
+    # Autopilot now defaults to 'ask' (drafts for approval, nothing auto-sends; commit db0a5bb). These scenarios assert the
+    # automatic path, so the fixture opts in explicitly; every send here goes to the test number or a fake client.
+    settings.update(conn, {'auto_confirmation': 'auto', 'auto_thanks_decline': 'auto', 'auto_follow_up': 'auto'})
     outbox.config = lambda: {'test_number': '0412345678', 'sim_number': 1}
     def fake_claude(prompt):
         intent = 'new_time' if 'Tuesday at 2pm' in prompt else 'question'

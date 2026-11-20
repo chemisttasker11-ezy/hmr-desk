@@ -20,9 +20,9 @@ with tempfile.TemporaryDirectory() as tmp:
  jobs.SKILL=root/'skill'; db.BASE=str(root); db.DATA_DIR=str(root/'data')
  try:
   sections=brainstorm.sections(pdf); assert len(sections)==2 and [x['title'] for x in sections]==['Apixaban','Metformin'] and all(x['page']==1 for x in sections)
-  cache=Path(db.DATA_DIR)/'brainstorm-sections.json'; cached=cache.stat().st_mtime_ns
+  cache=Path(db.DATA_DIR)/'brainstorm-sections-v3.json'; cached=cache.stat().st_mtime_ns
   assert brainstorm.sections(pdf)==sections and cache.stat().st_mtime_ns==cached
-  os.utime(cache, ns=(cached-10000000000,cached-10000000000)); assert brainstorm.sections(pdf)==sections and cache.stat().st_mtime_ns != cached-10000000000
+  os.utime(cache, ns=(cached-10000000000,cached-10000000000)); assert brainstorm.sections(pdf)==sections and cache.stat().st_mtime_ns == cached-10000000000
   idx=suggest.build_index(); assert len(idx['brainstorm_sections'])==2; assert suggest.normalise('Eliquis 5 mg tablet',idx['aliases'])=='apixaban'
   assert suggest.normalise('apixaban/aspirin 5 mg',idx['aliases'])=='apixaban/aspirin'
   keys=suggest.med_keys(['Eliquis','aspirin'],idx['mapping'],idx['aliases'])
@@ -42,7 +42,7 @@ with tempfile.TemporaryDirectory() as tmp:
   future=time.time()+2; os.utime(refs/'finding-library.md',(future,future)); assert 'stale' not in suggest.build_index()
   conn=db.connect(str(root/'db.sqlite')); conn.execute("INSERT INTO patients(key,name,folder) VALUES ('a','A','patient')"); conn.commit()
   status,result=api.handle(conn,'GET','/api/patients/1/suggestions',{},None)
-  assert status==200 and set(result)=={'suggestions','context_gaps'}
+  assert status==200 and set(result)=={'suggestions','context_gaps','context_snapshot_sha256'}
   status,result=api.handle(conn,'GET','/api/library',{'q':['metformin']},None)
   assert status==200 and any(x['source']=='Brainstorm V2 p.1' and x['title']=='Metformin' and 'Metformin' in x['snippet'] for x in result['results'])
   conn.close()
