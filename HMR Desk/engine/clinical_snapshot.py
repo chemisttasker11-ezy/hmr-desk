@@ -126,6 +126,10 @@ def canonical(identity, interview_record, pathology, report_spec, referral_sourc
         'name': _text(identity.get('name','')),
         'dob': _text(identity.get('dob','')),
         'gp': _text(identity.get('gp','')),
+        'clinic': _text(identity.get('clinic','')),
+        'gp_provider': _text(identity.get('gp_provider','')),
+        'clinic_address': _text(identity.get('clinic_address','')),
+        'clinic_phone': _text(identity.get('clinic_phone','')),
         'referral_date': _text(identity.get('referral_date','')),
     }
     if not person['name'].strip():
