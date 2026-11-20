@@ -120,6 +120,10 @@ const defs = [
   ],
   ['hmr_agents', 'List agents without keys.', {}, [], 'GET', '/api/agents'],
   ['app_state', 'Get the current screen, tabs and queued one-off count.', {}, [], 'POST', '/state'],
+  ['app_identity', 'Which running copy this control endpoint belongs to: app process id, data folder, profile. Check before any other app_* call.', {}, [], 'POST', '/identity'],
+  ['app_ui_snapshot', 'Structured list of the visible controls in the app window (ref, label, value, options, disabled, blocked) plus page text. Refs come from the latest snapshot.', { max: { type: 'integer', minimum: 1, maximum: 200000 } }, [], 'POST', '/ui/snapshot'],
+  ['app_ui_click', 'Click a control by ref from app_ui_snapshot. Controls that send, sign off, claim or sign in are refused.', { ref: { type: 'string', pattern: '^s[0-9]{1,6}[.][0-9]{1,6}$' } }, ['ref'], 'POST', '/ui/click'],
+  ['app_ui_fill', 'Set a text field, select (option value or text) or checkbox by ref. Give value, or checked for checkboxes. Password, code and key fields are refused.', { ref: { type: 'string', pattern: '^s[0-9]{1,6}[.][0-9]{1,6}$' }, value: { type: 'string' }, checked: { type: 'boolean' } }, ['ref'], 'POST', '/ui/fill'],
   ['app_navigate', 'Navigate to a rail screen or browser tab.', { page: { type: 'string', enum: ['today', 'book', 'visit', 'report', 'claim', 'followup', 'activity', 'calendar', 'My calendar', 'my calendar', 'my-calendar', 'messages', 'run', 'patients', 'interview', 'intake', 'reports', 'mhr', 'emims', 'ppa', 'amh', 'sheet', 'settings'] } }, ['page'], 'POST', '/navigate'],
   [
     'app_tab',
@@ -239,13 +243,13 @@ async function resolveBase(app, root, read) {
   endpointFileUsed = false;
   const env = process.env[app ? 'HMR_CONTROL' : 'HMR_API'];
   if (env) return { base: env.replace(/\/$/, '') };
-  if (!app) {
+  {
     let rec = null;
-    try { rec = JSON.parse(await read(path.join(root, 'engine_endpoint.json'), 'utf8')); } catch {}
+    try { rec = JSON.parse(await read(path.join(root, app ? 'control_endpoint.json' : 'engine_endpoint.json'), 'utf8')); } catch {}
     if (rec && typeof rec === 'object') {
-      if (typeof rec.url !== 'string' || !/^http:\/\/127\.0\.0\.1:\d{2,5}$/.test(rec.url)) throw Error('engine_endpoint.json is invalid; relaunch the app or set HMR_API');
+      if (typeof rec.url !== 'string' || !/^http:\/\/127\.0\.0\.1:\d{2,5}$/.test(rec.url)) throw Error((app ? 'control_endpoint.json' : 'engine_endpoint.json') + ' is invalid; relaunch the app or set HMR_API');
       if (Number.isInteger(rec.pid)) {
-        try { process.kill(rec.pid, 0); } catch (error) { if (error.code === 'ESRCH') throw Error('engine_endpoint.json is stale: its engine process is not running; relaunch the app or set HMR_API'); }
+        try { process.kill(rec.pid, 0); } catch (error) { if (error.code === 'ESRCH') throw Error((app ? 'control_endpoint.json' : 'engine_endpoint.json') + ' is stale: its process is not running; relaunch the app or set ' + (app ? 'HMR_CONTROL' : 'HMR_API')); }
       }
       endpointFileUsed = true;
       return { base: rec.url };
@@ -302,12 +306,20 @@ async function call(name, args, fetcher = fetch, read = fs.readFile) {
   }
   if (['hmr_report_refresh','hmr_report_demographics'].includes(name) && (args.replace_demographics ?? args.keys) && new Set(args.replace_demographics ?? args.keys).size !== (args.replace_demographics ?? args.keys).length) throw Error('Invalid arguments');
   if (name === 'hmr_agent_select' && (!Object.keys(args).length || (args.per_step && !Object.keys(args.per_step).length && !args.default))) throw Error('Invalid arguments');
+  if (name === 'app_ui_fill' && ((args.value === undefined) === (args.checked === undefined))) throw Error('Invalid arguments');
   if (name === 'app_patient_focus' && (((args.view === 'followup') !== (args.number !== undefined)) || (args.view !== 'patient' && (args.tab !== undefined || args.layout !== undefined)))) throw Error('Invalid arguments');
   if (
     name === 'hmr_settings_set' &&
     Object.keys(args.values).some((k) => /outbox|mode|key|token|secret|password/i.test(k))
   )
     throw Error('Restricted setting');
+  // Sending and clinical authorisation are refused when the server runs as the stdio MCP (HMR_MCP_RESTRICT=1, set by the
+  // entry point unless HMR_MCP_ALLOW_RESTRICTED=1). TEST outbox mode is not a safety control: it can still send to the
+  // test number. Allow only for a run the user has explicitly approved.
+  const RESTRICTED_TOOLS = ['hmr_message_approve', 'hmr_messages_check'];
+  const RESTRICTED_ACTIONS = ['signed_off', 'report_sent', 'claimed', 'claim_now'];
+  if (process.env.HMR_MCP_RESTRICT === '1' && (RESTRICTED_TOOLS.includes(name) || (name === 'hmr_patient_action' && RESTRICTED_ACTIONS.includes(args.action))))
+    throw Error('Restricted: sending and clinical authorisation are disabled for this session');
   const [, , , , method, template] = defs[index];
   const app = name.startsWith('app_');
   let route = template.replace(':id', encodeURIComponent(args.id)).replace(':number', encodeURIComponent(args.number)).replace(':date', encodeURIComponent(args.date));
@@ -342,9 +354,11 @@ async function call(name, args, fetcher = fetch, read = fs.readFile) {
   try {
     const token = (await read(path.join(root, app ? 'app_control_token' : 'api_token'), 'utf8')).trim();
     const base = target.base;
-    if (!app && endpointFileUsed) {
+    if (endpointFileUsed) {
       // A live process id is not proof: the id may be reused, or the record may belong to another profile.
-      const probe = await fetcher(base + '/api/health', {method:'GET', headers:{'X-HMR-Token':token}});
+      const probe = app
+        ? await fetcher(base + '/identity', {method:'POST', headers:{'X-HMR-Control':token, 'Content-Type':'application/json'}, body:'{}'})
+        : await fetcher(base + '/api/health', {method:'GET', headers:{'X-HMR-Token':token}});
       if (!probe.ok) throw Error('endpoint probe rejected');
     }
     if (name === 'hmr_message_approve' || name === 'hmr_messages_check') {
@@ -362,7 +376,7 @@ async function call(name, args, fetcher = fetch, read = fs.readFile) {
     );
   } catch (error) {
     if (error.message === 'Messaging actions require test outbox mode') throw error;
-    if (!app && endpointFileUsed) throw Error('engine is not responding at the endpoint recorded in engine_endpoint.json (stale file, reused process id, another profile, or app closed); relaunch the app or set HMR_API');
+    if (endpointFileUsed) throw Error((app ? 'app control is not responding at the endpoint recorded in control_endpoint.json' : 'engine is not responding at the endpoint recorded in engine_endpoint.json') + ' (stale file, reused process id, another profile, or app closed); relaunch the app or set HMR_API');
     throw Error(app ? 'HMR Desk app is not open' : 'engine is not running');
   }
   const data = await response.json();
@@ -404,7 +418,8 @@ async function handle(message, fetcher, read) {
   } else reply.error = { code: -32601, message: 'Method not found' };
   return reply;
 }
-if (require.main === module)
+if (require.main === module) {
+  if (process.env.HMR_MCP_ALLOW_RESTRICTED !== '1') process.env.HMR_MCP_RESTRICT = '1';
   readline.createInterface({ input: process.stdin }).on('line', async (line) => {
     let reply;
     try {
@@ -414,4 +429,5 @@ if (require.main === module)
     }
     if (reply) process.stdout.write(JSON.stringify(reply) + '\n');
   });
+}
 module.exports = { handle, call, tools, filterAuthStatus, WHITELISTED_AUTH_STATUSES, WHITELISTED_AUTH_REASONS };
