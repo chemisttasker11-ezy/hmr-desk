@@ -135,6 +135,21 @@ function readMedicines() {
     .map((x) => x.trim())
     .filter(Boolean);
 }
+// An engine job queued from a Reports card finishes after the card was drawn, so the card kept its old
+// "report spec missing" state until the user left the page. Redraw once the job has stopped queued or running.
+// A job waiting on an external site is not polled here; the Run page owns that.
+async function refreshReportsAfterTask(step, patientId, tries = 30, pauseMs = 1000) {
+  for (let i = 0; i < tries; i++) {
+    await new Promise((done) => setTimeout(done, pauseMs));
+    if (page !== 'reports') return false;
+    const queue = await hmr.api('GET', '/api/run');
+    const active = (queue.tasks || []).some((t) => t.patient_id === patientId && t.step === step && ['queued', 'running'].includes(t.state));
+    if (!active) break;
+  }
+  if (page !== 'reports' || medicinePatient || formOpen) return false;
+  await reports();
+  return true;
+}
 async function reportClick(b) {
   if (b.dataset.reportOpen) {
     await openReport(b.dataset.reportOpen);
@@ -174,7 +189,10 @@ async function reportClick(b) {
     if (b.dataset.reportStep === 'interactions' && /^[1-9]\d* task\(s\) queued/.test(runMessage)) {
       if (runMessage.includes('\n')) alert(runMessage);
       await navigate('emims');
-    } else $('report-message').textContent = runMessage;
+    } else {
+      $('report-message').textContent = runMessage;
+      if (/^[1-9]\d* task\(s\) queued/.test(runMessage)) void refreshReportsAfterTask(b.dataset.reportStep, Number(b.dataset.id)).catch(() => {});
+    }
     return true;
   }
   if (b.dataset.reportFolder) {
