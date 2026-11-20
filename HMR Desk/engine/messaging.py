@@ -31,7 +31,9 @@ def visit_time(patient, when=None):
             raise ValueError('valid visit date and time are required') from exc
     if not isinstance(when, dt.datetime) or when.tzinfo is not None:
         raise ValueError('visit time must be a naive Queensland datetime')
-    postcode = required(patient['postcode'], 'postcode')
+    if not isinstance(patient['postcode'], str) or not patient['postcode'].strip():
+        raise ValueError('postcode is required: the suburb text is not enough. Add the postcode under Edit details.')
+    postcode = patient['postcode'].strip()
     local = when + dt.timedelta(hours=db.utc_offset_hours(postcode, when) - 10)
     if local.time() <= dt.time(8):
         raise ValueError('start must be after 08:00 in patient local time')

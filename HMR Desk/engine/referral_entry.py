@@ -250,6 +250,10 @@ def commit(conn, token, fields, distinct_person=False, manual_referral=False, cl
             key = key + ' @' + uuid.uuid4().hex[:12]
         cols = list(FIELDS)
         values = [fields.get(col, '').strip() or None for col in cols]
+        # Visit timing reads the postcode column, not the suburb text. Take it only when the suburb text starts with an
+        # explicit 4-digit postcode (the shape the header shows); never from street numbers. Otherwise leave it empty.
+        postcode = re.match(r'^(\d{4})\b', fields.get('suburb', '') or '')
+        cols.append('postcode'); values.append(postcode.group(1) if postcode else None)
         cursor = conn.execute('INSERT INTO patients (key,folder,' + ','.join(cols) + ') VALUES (' + ','.join('?' for _ in range(len(cols)+2)) + ')', [key, os.path.relpath(folder, db.BASE), *values])
         pid = cursor.lastrowid
         db.log(conn, pid, 'referral_received', {'file': Path(item['source']).name, 'source': item['source'], 'sha256': item['sha256'], 'folder': os.path.relpath(folder, db.BASE)}, 'intake')
