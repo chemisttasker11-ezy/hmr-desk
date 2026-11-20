@@ -54,11 +54,22 @@ $sha = (& git -C $root rev-parse HEAD).Trim()
 $mergeSha = if ($env:HMR_MERGE_SHA) { $env:HMR_MERGE_SHA } else { $sha }
 $headSha = if ($env:HMR_PR_HEAD_SHA) { $env:HMR_PR_HEAD_SHA } else { $sha }
 $pf = Invoke-NativeCapture @($pyExe, '-m', 'pip', 'freeze')
-if ($pf.ok -and $pf.lines.Count -gt 0) { $pythonFreeze = @($pf.lines); $pythonFreezeStatus = 'captured from ' + $pyExe }
+$pythonFreeze = @(); $pythonFreezeStatus = ''
+if ($pf.ok -and $pf.lines.Count -gt 0) { $pythonFreeze = @($pf.lines); $pythonFreezeStatus = 'pip freeze from ' + $pyExe }
 else {
-  $m = Get-NativeFailure 'pip freeze' $pf
-  if (-not $diagnostic) { throw $m }
-  $pythonFreeze = @(); $pythonFreezeStatus = 'unavailable'; $incomplete += $m
+  $pipFailure = Get-NativeFailure 'pip freeze' $pf
+  # pip itself can be broken in a build venv. The installed-package list is then read from the interpreter's own
+  # package metadata (stdlib, no pip). It is labelled as such and the pip failure is recorded, never hidden.
+  $code = "import importlib.metadata as m; print('\n'.join(sorted(d.metadata['Name'] + '==' + d.version for d in m.distributions() if d.metadata['Name'])))"
+  $im = Invoke-NativeCapture @($pyExe, '-c', $code)
+  if ($im.ok -and $im.lines.Count -gt 0) {
+    $pythonFreeze = @($im.lines)
+    $pythonFreezeStatus = 'importlib.metadata from ' + $pyExe + ' (pip freeze failed: ' + $pipFailure + ')'
+  } else {
+    $m = $pipFailure + ' ; ' + (Get-NativeFailure 'importlib.metadata listing' $im)
+    if (-not $diagnostic) { throw $m }
+    $pythonFreezeStatus = 'unavailable'; $incomplete += $m
+  }
 }
 $pythonRequirements = (Get-FileHash (Join-Path $root 'requirements.txt') -Algorithm SHA256).Hash.ToLowerInvariant()
 $pythonBuildRequirements = (Get-FileHash (Join-Path $root 'requirements-build.txt') -Algorithm SHA256).Hash.ToLowerInvariant()
