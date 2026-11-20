@@ -2,6 +2,10 @@
 
 HMR Desk is a Windows desktop application and local Python service for medication-review workflows. The repository contains source code, not a patient workspace, credentials, clinical templates, or the external report-building skill. Some features require separate local setup below.
 
+## Status
+
+This is a development baseline. It is not accepted for clinical use, has not been validated against real patient cases, and is not a release. Synthetic-fixture tests passing here are not evidence of clinical readiness. Clinical authorisation and message sending stay under pharmacist control, and the ten-case acceptance test and a Windows installed-app run on the final build are still open.
+
 ## Windows setup
 
 Install Node.js with npm and Python 3.14 for Windows. In PowerShell, from the repository root:
