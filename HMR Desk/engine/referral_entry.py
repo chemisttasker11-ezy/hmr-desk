@@ -16,7 +16,7 @@ import fitz
 MAX_PDF = 25 * 1024 * 1024
 MAX_PAGES = 150
 MAX_TEXT_PER_PAGE = 150000
-FIELDS = ('name', 'phone', 'address', 'suburb', 'gp', 'clinic', 'referral_date', 'dob', 'sex', 'medicare', 'irn', 'ihi')
+FIELDS = ('name', 'phone', 'address', 'suburb', 'gp', 'clinic', 'gp_provider', 'clinic_address', 'clinic_phone', 'referral_date', 'dob', 'sex', 'medicare', 'irn', 'ihi')
 
 
 def parser():

@@ -196,7 +196,7 @@ def _save(conn, patient, data):
     if expected is not None and not isinstance(expected, str): raise ValueError('invalid expected_revision')
     data = with_trusted_policy(conn, patient, data)
     validate(data)
-    data = manual_defaults.apply_followup_decision({k: v for k, v in data.items() if k not in ('interview_newer', 'pathology_newer', 'revision', 'expected_revision', 'demographic_mismatches', 'demographic_conflicts', 'suggestion_context_sha256')})
+    data = manual_defaults.apply_followup_decision({k: v for k, v in data.items() if k not in ('interview_newer', 'pathology_newer', 'revision', 'expected_revision', 'demographic_mismatches', 'demographic_conflicts', 'medication_recommendations', 'suggestion_context_sha256')})
     if expected is not None:
         # Compare and write in one write transaction so two saves cannot both pass the check.
         if not conn.in_transaction: conn.execute('BEGIN IMMEDIATE')
@@ -364,7 +364,12 @@ def _demographics(conn, patient, record):
     name = p['name']; gp = p.get('gp') or h['gp'] or ''
     address = ', '.join(filter(None, (p.get('address'), p.get('suburb'))))
     patient_lines = [name, 'DOB: ' + _dmy(p.get('dob') or h['dob']), 'Medicare No: ' + (p.get('medicare') or ''), 'Address: ' + address, 'Phone: ' + (p.get('phone') or '')]
-    doctor_lines = [gp, p.get('clinic') or '', 'Request date: ' + _dmy(p.get('referral_date') or '')]
+    doctor_lines = [gp,
+                    ('Provider number: ' + p['gp_provider']) if p.get('gp_provider') else '',
+                    p.get('clinic') or '',
+                    ('Practice address: ' + p['clinic_address']) if p.get('clinic_address') else '',
+                    ('Practice phone: ' + p['clinic_phone']) if p.get('clinic_phone') else '',
+                    'Request date: ' + _dmy(p.get('referral_date') or '')]
     import steps
     visit = steps.event_date(conn, patient, 'visited') or p.get('visit_date') or h['visit'].split(' ')[0]
     return dict(name=name, assess_date=visit, patient='\n'.join(patient_lines), doctor='\n'.join(filter(None, doctor_lines)), dear='Dear ' + (gp or 'Doctor') + ',')
@@ -469,6 +474,32 @@ def resolve_demographics(conn, patient, action, keys):
 def refresh(conn, patient, replace=()):
     with _lock: return _refresh(conn, patient, replace)
 
+def _carry_forward_unchanged_medicine_recommendations(previous, current):
+    """Retain a pharmacist's review text only for an unambiguously unchanged medicine row.
+
+    A mismatch in medicine name, actual-use directions or source notes is deliberately
+    not guessed to be the same medicine. Existing edited notes are held in the report
+    backup; refresh returns a warning count so no recommendation disappears silently.
+    This does not carry forward clinical decisions when the source facts have changed.
+    """
+    from collections import Counter
+    def key(row):
+        return tuple(row[:3])
+    old_counts = Counter(key(row) for row in previous)
+    new_counts = Counter(key(row) for row in current)
+    old_unique = {key(row): row for row in previous if old_counts[key(row)] == 1}
+    updated, carried = [], 0
+    for row in current:
+        candidate = old_unique.get(key(row))
+        if candidate is not None and new_counts[key(row)] == 1 and candidate[3].strip():
+            updated.append([*row[:3], candidate[3]])
+            carried += 1
+        else:
+            updated.append(list(row))
+    previous_recommendations = sum(bool(row[3].strip()) for row in previous)
+    return updated, {'retained': carried, 'needs_reentry': previous_recommendations - carried}
+
+
 def _refresh(conn, patient, replace=()):
     data = records.get_json(conn, patient['id'], 'report_spec.json')
     if data is None: raise ValueError('report spec does not exist')
@@ -476,6 +507,10 @@ def _refresh(conn, patient, replace=()):
     record, derived, _ = _derived(conn, patient)
     import pathology_records
     conflicts = _merge_demographics(data, _demographics(conn, patient, record), replace)
+    # Keep pharmacist-authored recommendation text ONLY where all three source
+    # fields match exactly and the medicine row is unique in both versions.
+    # Changed/ambiguous rows require a fresh clinician review rather than guessed mapping.
+    derived['meds'], medicine_refresh = _carry_forward_unchanged_medicine_recommendations(data['meds'], derived['meds'])
     folder = jobs.patient_folder(patient)
     stored = Path(str(data.get('out') or ''))
     if stored.name and (not stored.is_absolute() or stored.parent.resolve() != folder):
@@ -484,7 +519,7 @@ def _refresh(conn, patient, replace=()):
                 pathology_revision=pathology_records.revision(conn, patient))
     saved = save(conn, patient, data)
     db.log(conn, patient['id'], 'report_refreshed', {}, 'job')
-    return dict(saved, demographic_conflicts=conflicts)  # response only; never stored
+    return dict(saved, demographic_conflicts=conflicts, medication_recommendations=medicine_refresh)  # response only
 
 def _read(path):
     stamp = path.stat().st_mtime_ns
