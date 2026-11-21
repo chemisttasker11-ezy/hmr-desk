@@ -1,0 +1,31 @@
+"""Run on the host against a referral PDF. Reads the file locally and writes nothing unless asked.
+
+  python referral_geometry_diag.py REFERRAL.pdf            counts and reasons only (no medicine text)
+  python referral_geometry_diag.py REFERRAL.pdf --show     also prints the paired rows on this console
+  python referral_geometry_diag.py REFERRAL.pdf --geometry OUT.json
+        writes word boxes with every letter and digit replaced by a shape (A, a, 9); safe to share, shows the layout only."""
+import json
+import sys
+
+import referral_geometry as g
+
+
+def main(argv):
+    if not argv: print(__doc__); return 2
+    path = argv[0]; show = '--show' in argv
+    out = argv[argv.index('--geometry') + 1] if '--geometry' in argv else None
+    found = g.analyse_pdf(path)
+    if not found: print('No page with a Current Medications heading was found.'); return 1
+    for number, result, words in found:
+        rows = result['rows']
+        print('page %d: ok=%s reason=%r split_x=%s rows=%d with_directions=%d' % (number, result['ok'], result['reason'], None if result['split_x'] is None else round(result['split_x'], 1), len(rows), sum(1 for r in rows if r[1])))
+        if show:
+            for i, r in enumerate(rows, 1): print('  %2d | %s | %s' % (i, r[0], r[1]))
+    if out:
+        data = [{'page': n, 'ok': r['ok'], 'reason': r['reason'], 'split_x': r['split_x'], 'words': [[round(w[0], 1), round(w[1], 1), round(w[2], 1), round(w[3], 1), g.shape(w[4])] for w in ws]} for n, r, ws in found]
+        with open(out, 'w', encoding='utf-8') as f: json.dump(data, f)
+        print('wrote', out)
+    return 0
+
+
+if __name__ == '__main__': sys.exit(main(sys.argv[1:]))
