@@ -115,3 +115,60 @@ def test_saved_edits_to_reused_medicine_rows_survive_reopen(tmp_path,monkeypatch
     (folder / 'referral_source.json').write_text(json.dumps({'clinical_review':reviewed}))
     again=interview.load(conn,patient)
     assert [r[:2] for r in again['meds']] == [['Synthetic Medicine A 10 mg','Take daily']]
+
+
+def test_confirmed_intake_preserves_source_supported_pdf_row_pairing(tmp_path, monkeypatch):
+    """Two-column PDF writes names first, directions second; reviewed '-' separators must not erase genuine row cells.
+
+    All medicines, pharmacist, and patient details are synthetic. This test intentionally fails on the starting head.
+    """
+    import fitz
+    folder = tmp_path / 'workspace' / 'TO SORT' / 'Synthetic'
+    folder.mkdir(parents=True)
+    monkeypatch.setattr(db, 'BASE', str(tmp_path / 'workspace'))
+    monkeypatch.setattr(db, 'DATA_DIR', str(tmp_path / 'userdata'))
+    rows = [('Lunovex 5mg Tablet', '1 Taplet Daily'),
+            ('Fictamol 10mg Capsule', '2 Capsules At night'),
+            ('Nuvrala 20mg Tablet', '1 Tablet With meals')]
+    pdf = folder / 'referral.pdf'
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_text((50, 55), 'Medical History', fontsize=11)
+    page.insert_text((50, 75), 'Synthetic test only; no personal or clinical facts are confirmed.', fontsize=9)
+    page.insert_text((50, 100), 'Current Medications', fontsize=11)
+    # Deliberately column-first in PDF text-layer order (not visual reading order).
+    for i, (name, _) in enumerate(rows):
+        page.insert_text((50, 130 + 22 * i), name, fontsize=10)
+    for i, (_, directions) in enumerate(rows):
+        page.insert_text((315, 130 + 22 * i), directions, fontsize=10)
+    page.insert_text((50, 250), 'Allergies', fontsize=11)
+    page.insert_text((50, 275), 'Unconfirmed synthetic entry', fontsize=9)
+    page.insert_text((50, 300), 'Synthetic GP details, test date and fictional source context only.', fontsize=9)
+    doc.save(pdf)
+    doc.close()
+    import referral
+    raw = interview.referral_text(folder)[0]
+    text_path = referral.parse(raw)
+    assert len(text_path['unattributed_directions']) == 3  # PDF stream order differs from the table.
+    geometry = interview.geometry_table(folder)
+    assert geometry['ok'], geometry
+    assert geometry['rows'] == [list(row) for row in rows]
+
+    reviewed = {'confirmed': True, 'source_page': 1, 'reviewed_by': 'Synthetic Pharmacist',
+                'allergies_status': 'unknown', 'conditions': '', 'allergies': '', 'observations': '',
+                'medicines': '\n'.join(name + ' - ' + directions for name, directions in rows)}
+    (folder / 'referral_source.json').write_text(json.dumps({'clinical_review': reviewed}))
+    conn = db.connect(str(tmp_path / 'userdata' / 'hmr.db'))
+    try:
+        with conn:
+            pid = conn.execute("INSERT INTO patients(key,name,folder) VALUES (?,?,?)",
+                               ('synthetic','Synthetic Patient','TO SORT/Synthetic')).lastrowid
+        patient = conn.execute('SELECT * FROM patients WHERE id=?', (pid,)).fetchone()
+        record = interview.blank(conn, patient)
+        assert [r[:2] for r in record['meds']] == [list(r) for r in rows]
+        assert all(r[2:] == ['', '', ''] for r in record['meds'])
+        assert any('unusual word' in x and 'Taplet' in x for x in record['clarify'])
+        assert all(not m.get('use_status') and not m.get('checked') for m in record['details']['meds'])
+        interview.validate(record)
+    finally:
+        conn.close()
