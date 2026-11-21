@@ -315,7 +315,10 @@ def report_build(patient_id, pdf=False):
         # Missing owner approval always means provisional, never a final layout.
         # An installed but invalid manifest must fail closed (do not downgrade).
         import original_builder_adapter
-        use_original = original_builder_adapter.assets_present(db.DATA_DIR)
+        import settings
+        use_original = settings.get(conn, 'report_use_original_builder')
+        if use_original and not original_builder_adapter.assets_present(db.DATA_DIR):
+            raise ValueError('Original Word report builder was selected but its private assets are unavailable')
         placed = False
         if use_original:
             # The owner's original builder, run unmodified in an isolated worker. No fallback renderer: any failure
