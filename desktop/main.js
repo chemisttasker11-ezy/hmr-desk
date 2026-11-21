@@ -335,7 +335,7 @@ async function arm(site) {
         const names = queues[site].map((p) => fileKey(p.folder).toLowerCase());
         if (new Set(names).size !== names.length) throw Error('Duplicate names; remove or rename one-off entries');
       }
-      if (!queues[site].length) return 'Nothing to run';
+      if (!queues[site].length) return require('./src/browser-queue').emptyQueueMessage(reply);
       armed[site] = true;
       tabState(site);
       try { await inject(site); }
