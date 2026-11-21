@@ -5,6 +5,10 @@ import sys
 
 
 def main(argv=None):
+    raw = list(sys.argv[1:] if argv is None else argv)
+    if raw[:1] == ['--original-builder-worker']:  # isolated child process of original_builder_adapter.build
+        import original_builder_adapter
+        return original_builder_adapter.worker_main(raw[1:])
     parser = argparse.ArgumentParser(description='HMR Desk local engine')
     parser.add_argument('--data-dir')
     parser.add_argument('--workspace')
