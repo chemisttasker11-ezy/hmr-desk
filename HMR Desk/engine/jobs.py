@@ -20,6 +20,19 @@ INTAKE_SCRIPT = Path(db.BASE) / 'scripts' / 'intake' / 'intake.py'
 # Application-owned assets: never depend on an individual developer's Claude profile.
 APP_ASSETS = Path(__file__).resolve().parent / 'assets'
 SKILL = APP_ASSETS
+PRIVATE_REFERENCES = 'private-references'
+PRIVATE_REFERENCE_FILES = ('case-index.jsonl', 'finding-library.md', 'brainstorm-index.md')
+
+def references_dir():
+    """Where the suggestion inputs are read from.
+
+    The owner's private case library is loaded at runtime from the user's data folder (outside the installer and outside git),
+    when it holds any of the expected files. Otherwise the application-owned assets/references folder is used, as before.
+    Private files must never be placed under assets/: scripts/prepare-brainstorm-assets.py fails a build that finds them there.
+    """
+    private = Path(db.DATA_DIR) / PRIVATE_REFERENCES
+    if any((private / name).is_file() for name in PRIVATE_REFERENCE_FILES): return private
+    return SKILL / 'references'
 EXTRACT_SCRIPT = APP_ASSETS / 'scripts' / 'extract.py'
 BUILD_SCRIPT = APP_ASSETS / 'scripts' / 'build.py'
 INTERVIEW_SCRIPT = APP_ASSETS / 'scripts' / 'make_interview.py'

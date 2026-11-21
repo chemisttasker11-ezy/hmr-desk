@@ -607,7 +607,7 @@ def _read(path):
 def library(q):
     words = q.casefold().split()
     if not words: return []
-    refs = jobs.SKILL / 'references'; result = []
+    refs = jobs.references_dir(); result = []
     text = _read(refs / 'finding-library.md') if (refs / 'finding-library.md').is_file() else ''
     for section in re.split(r'(?m)(?=^## )', text):
         if not section.startswith('## '): continue

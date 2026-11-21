@@ -19,6 +19,19 @@ REFERENCE_RELATIVE = Path('references') / DATA_NAME
 STAGED_RELATIVE = Path('HMR Desk') / 'engine' / 'assets'
 
 
+# Private owner material must never ride inside a build or installer. It is loaded at runtime from the data folder.
+PRIVATE_NAMES = {'case-index.jsonl', 'finding-library.md', 'brainstorm-index.md', 'brainstorm-v2.pdf'}
+
+
+def _reject_private(root, description):
+    root = Path(root)
+    if not root.is_dir():
+        return
+    found = sorted(str(p.relative_to(root)) for p in root.rglob('*') if p.is_file() and p.name.lower() in PRIVATE_NAMES)
+    if found:
+        raise AssetPackagingError(f'{description}: private reference files must not be packaged (found {len(found)}: {", ".join(found[:5])})')
+
+
 class AssetPackagingError(RuntimeError):
     """A required, checked reference asset is absent or inconsistent."""
 
@@ -54,6 +67,7 @@ def _verify_directory(repo_root, assets_dir, description):
 
 
 def stage(repo_root):
+    _reject_private(repo_root / STAGED_RELATIVE, 'Engine assets')
     source, expected = _reference_hash(repo_root)
     assets_dir = repo_root / STAGED_RELATIVE
     try:
@@ -75,6 +89,7 @@ def verify(repo_root, engine_dir):
     engine_dir = Path(engine_dir)
     if not engine_dir.is_absolute():
         engine_dir = repo_root / engine_dir
+    _reject_private(engine_dir, f'Packaged engine at {engine_dir}')
     assets_dir = engine_dir / '_internal' / 'assets'
     expected = _verify_directory(repo_root, assets_dir, f'Packaged engine at {engine_dir}')
     print(f'PASS: packaged Brainstorm tables and manifest match tracked source (SHA-256 {expected})')

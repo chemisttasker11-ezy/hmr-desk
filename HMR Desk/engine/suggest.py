@@ -71,7 +71,7 @@ _alias_cache = None
 def _default_aliases():
  global _alias_cache
  if _alias_cache is None:
-  path = jobs.SKILL / 'references' / 'case-index.jsonl'
+  path = jobs.references_dir() / 'case-index.jsonl'
   cases = [json.loads(x) for x in report._read(path).splitlines() if x.strip()]
   _alias_cache = aliases_for(cases, classes())
  return _alias_cache
@@ -159,7 +159,7 @@ class LibraryUnavailable(ValueError):
 INDEX_ALGORITHM_VERSION = 4
 
 def build_index():
- refs=jobs.SKILL/'references'
+ refs=jobs.references_dir()
  paths=[refs/'case-index.jsonl',refs/'finding-library.md',refs/'brainstorm-index.md',CLASSES_PATH]
  pdf=refs/'brainstorm-v2.pdf'
  try:
