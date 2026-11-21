@@ -782,3 +782,11 @@ main:has(.interview-context) > header { height: 96px; min-height: 96px; }
 .hmr-confirm-text { margin: 0 0 18px; white-space: pre-wrap; line-height: 1.45; }
 .hmr-confirm-actions { display: flex; justify-content: flex-end; gap: 10px; }
 .hmr-confirm-actions button { min-height: 40px; }
+
+.med-lookup-result{align-items:flex-start}
+.med-result-text{display:flex;flex-direction:row;flex-wrap:wrap;align-items:baseline;gap:2px 10px;min-width:0}
+.med-result-name{font-weight:600}
+.med-result-generic{font-size:.9em;color:#3b4a43}
+.med-result-form{font-size:.95em;background:#eef3f0;border-radius:4px;padding:1px 6px;align-self:flex-start}
+.med-result-count{font-size:.85em;color:#5a6a62}
+.med-lookup-result button:focus-visible{outline:3px solid #b45f06;outline-offset:2px}

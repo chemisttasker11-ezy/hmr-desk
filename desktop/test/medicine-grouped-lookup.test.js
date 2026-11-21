@@ -9,7 +9,7 @@ const lookup = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'medicine-
 function el(tag) {
   const n = {tag, children: [], listeners: {}, hidden: false, className: '', textContent: '', dataset: {},
     append(...c) { n.children.push(...c); }, replaceChildren() { n.children = []; },
-    addEventListener(t, f) { n.listeners[t] = f; }, isConnected: true};
+    addEventListener(t, f) { n.listeners[t] = f; }, setAttribute(k, v) { n[k] = v; }, isConnected: true};
   return n;
 }
 const all = (n) => [n, ...n.children.flatMap(all)];

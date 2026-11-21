@@ -45,6 +45,7 @@ function medicineNameEdited(key, i, element) {
 // The main-process API guard only allows [A-Za-z0-9_/?=&%.-]; encodeURIComponent also leaves ! ~ * ' ( ) raw,
 // so a name such as "Suvorexant 20 mg tablet (Belsomra)" was rejected before it reached the engine.
 const medicineQuery = (text) => encodeURIComponent(text).replace(/[!~*'()]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase());
+const medicineLookupSeq = new WeakMap();
 async function medicineLookupClick(b) {
   if (b.dataset.medPageImage !== undefined) {
     const meta = interviewRecord.details[b.dataset.medPageImage]?.[Number(b.dataset.row)], box = b.parentElement.querySelector('.med-page-image');
@@ -87,15 +88,16 @@ async function medicineLookupClick(b) {
   const out = document.querySelector(`[data-med-results="${key}-${i}"]`);
   const box = document.querySelector(`textarea[data-field="${key}"][data-row="${i}"][data-col="0"]`);
   const text = (box ? box.value : '').trim();
+  const token = (medicineLookupSeq.get(out) || 0) + 1; medicineLookupSeq.set(out, token);
   out.replaceChildren();
   const say = (t) => { const p = document.createElement('p'); p.textContent = t; out.append(p); };
   if (text.length < 2) { say('Type at least two letters of the medicine name, then look up.'); return true; }
   try {
     const found = await hmr.api('GET', '/api/medicines/search?grouped=1&q=' + medicineQuery(text));
-    if (page !== 'interview' || interviewId !== patientId || interviewRecord !== record || record[key][i] !== medicine || medicine[0].trim() !== text || !out.isConnected) return true;
+    if (page !== 'interview' || interviewId !== patientId || interviewRecord !== record || record[key][i] !== medicine || medicine[0].trim() !== text || !out.isConnected || medicineLookupSeq.get(out) !== token) return true;
     if (!found.installed) { say('No medicine reference data is installed on this PC. Keep typing the name by hand; nothing is lost.'); return true; }
     if (!found.results.length) { say('No match in the reference data. Your typed name stays as written, unlinked and not matched to reference data. Try another spelling if you want a match.'); return true; }
-    say('Pick the medicine you mean. Reference release ' + found.results[0].release + '. Check strength and form yourself. Down arrow moves through the matches, Enter chooses one.');
+    say('Pick the medicine you mean (reference release ' + found.results[0].release + '). Check strength and form.');
     const choose = (r) => {
       if (page !== 'interview' || interviewId !== patientId || interviewRecord !== record || record[key][i] !== medicine || medicine[0].trim() !== text || !out.isConnected) return;
       interviewRecord[key][i][0] = r.display;
@@ -107,13 +109,25 @@ async function medicineLookupClick(b) {
     const groups = Array.isArray(found.groups) ? found.groups : found.results.map((r) => ({ grouped: false, label: '', listings: [r], count: 1 }));
     for (const g of groups) {
       const row = document.createElement('div'); row.className = 'med-lookup-result';
-      const label = document.createElement('span');
       const first = g.listings[0];
       // A group is one medicine as the source states it. The pharmacist sees no listing codes; the stored
       // reference is one real catalogue listing of that group (the first by code) so provenance stays intact.
       const pick = g.label ? Object.assign({}, first, { display: g.label }) : first;
-      label.textContent = (g.label || first.display) + (g.listings.length > 1 ? ' (' + g.listings.length + ' matching entries combined)' : '');
-      const use = document.createElement('button'); use.type = 'button'; use.textContent = 'Use this';
+      const fullLabel = (g.label || first.display) + (g.listings.length > 1 ? ' (' + g.listings.length + ' matching entries combined)' : '');
+      const label = document.createElement('span'); label.className = 'med-result-text'; label.title = fullLabel;
+      // Scannable parts come only from catalogue fields the whole group agrees on. If a part is missing or mixed,
+      // the source label is shown whole instead. Nothing is parsed out of the label.
+      const idn = catalogueIdentity(g.listings);
+      const forms = g.listings.map(r => r && r.dose_form);
+      const form = forms.length && forms.every(v => typeof v === 'string' && v.trim() && v === forms[0]) ? forms[0] : '';
+      if ((idn.brand_name || idn.generic_name) && form) {
+        const name = document.createElement('strong'); name.className = 'med-result-name'; name.textContent = idn.brand_name || idn.generic_name;
+        label.append(name);
+        if (idn.brand_name && idn.generic_name && idn.generic_name !== idn.brand_name) { const gen = document.createElement('span'); gen.className = 'med-result-generic'; gen.textContent = idn.generic_name; label.append(gen); }
+        const fm = document.createElement('span'); fm.className = 'med-result-form'; fm.textContent = form; label.append(fm);
+        if (g.listings.length > 1) { const n = document.createElement('span'); n.className = 'med-result-count'; n.textContent = g.listings.length + ' matching entries combined'; label.append(n); }
+      } else label.textContent = fullLabel;
+      const use = document.createElement('button'); use.type = 'button'; use.textContent = 'Use this'; use.setAttribute('aria-label', 'Use ' + fullLabel);
       use.addEventListener('click', () => choose(Object.assign({}, pick, { listings: g.listings })));
       row.append(label, use); out.append(row);
     }
