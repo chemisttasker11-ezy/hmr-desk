@@ -202,3 +202,5 @@ Evidence at this stage: engine plain pytest 912 passed, 1 skipped (baseline 905 
 Unverified: whether the online-later flow works in the installed app; whether report build/sign-off should hard-gate on stale interactions (Es's answer pending, no gate written).
 
 Wording note: the Interactions section separates "does the saved result match the current confirmed medicine list" from "which result the built report used"; the second line states it is report provenance and not an all-clear. The 2025 date in the screenshot came from a wrong epoch in the render fixture; the app shows the real file modified time.
+
+Coverage added (synthetic, Linux): the synthetic journey now performs a pathology re-check, saves a later manual interaction note and records a new pathology result after sign-off, and asserts the signed Word and PDF bytes and the pharmacist's saved report text are byte-identical, state stays signed_off and the signed version stays intact. A separate test covers the same state rule. This is a synthetic simulation, not a real sign-off or clinical acceptance.

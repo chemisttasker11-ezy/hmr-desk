@@ -231,6 +231,21 @@ def test_synthetic_pdf_referral_to_signed_sent_report(tmp_path, monkeypatch):
              report_sha256=detail['sha256'], reviewer='Synthetic Pharmacist',
              clinical_reviewed=True)
         assert _patient(conn, pid)['state'] == 'signed_off'
+        # LATER ONLINE: the pharmacist asks for a pathology re-check and saves a new interaction note after sign-off.
+        # The signed Word and PDF bytes, the pharmacist's saved report text and the signed state must not change.
+        import routes_pathology
+        before = {'word': hashlib.sha256(word.read_bytes()).hexdigest(), 'pdf': hashlib.sha256(word.with_suffix('.pdf').read_bytes()).hexdigest(),
+                  'spec': hashlib.sha256(records.get(conn, pid, 'report_spec.json') or b'').hexdigest()}
+        assert before['spec'] != hashlib.sha256(b'').hexdigest()
+        _act(conn, pid, 'pathology_recheck')
+        records.put(conn, pid, 'MIMS interactions (manual) 2026-11-27.txt', b'Checked later by hand'); conn.commit()
+        status_code, _ = routes_pathology.handle(conn, 'POST', '/api/pathology/result', {}, {'id': pid, 'saved': ['later.pdf'], 'status': 'saved'})
+        assert status_code == 200
+        after = {'word': hashlib.sha256(word.read_bytes()).hexdigest(), 'pdf': hashlib.sha256(word.with_suffix('.pdf').read_bytes()).hexdigest(),
+                 'spec': hashlib.sha256(records.get(conn, pid, 'report_spec.json') or b'').hexdigest()}
+        assert after == before
+        assert _patient(conn, pid)['state'] == 'signed_off'
+        assert report_status.report_status(conn, _patient(conn, pid))['signed_version_intact'] is True
         _act(conn, pid, 'report_sent', date='2026-11-26')
         assert _patient(conn, pid)['state'] == 'sent'
 
