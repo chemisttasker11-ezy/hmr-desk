@@ -14,6 +14,8 @@ from openpyxl import Workbook
 
 FIELDS = ('name', 'sex', 'dob', 'medicare', 'irn', 'address', 'suburb', 'phone', 'gp', 'gp_initials', 'gp_provider', 'clinic', 'referral_date')
 DATE = r'\d{1,2}[/.\-]\d{1,2}[/.\-]\d{4}'
+# A line that is only a field label (so it is never a value for the label above it).
+FIELD_LABEL_LINE = r'(?:patient(?:\s+name)?|name|d\.?o\.?b\.?|date of birth|birth date|sex|gender|address|street address|telephone|phone|mobile|medicare(?:\s+(?:no|number)\.?)?|irn|ihi|gp|doctor|provider(?:\s+no\.?)?)\s*[:#.-]?'
 
 
 def _completed_report(text):
@@ -91,7 +93,7 @@ def extract_fields(text):
                 value = match.group(1).strip()
             else:
                 continue
-            if not value and i + 1 < len(block) and not re.search(r':\s*$', block[i + 1]):
+            if not value and i + 1 < len(block) and not re.search(r':\s*$', block[i + 1]) and not re.fullmatch(FIELD_LABEL_LINE, block[i + 1], re.I):
                 value = block[i + 1]
             if value:
                 yield value
@@ -175,7 +177,7 @@ def extract_fields(text):
         if match:
             add('irn', match.group(1).replace('l', '1').replace('I', '1'))
     addresses = list(labelled(patient, r'address|ddress|street address'))
-    if not addresses and patient and re.match(title_pattern, patient[0], re.I) and len(patient) > 1 and re.match(r'^(?:\d|(?:U|Unit|Lot)\s*\d)', patient[1], re.I):
+    if not addresses and patient and re.match(title_pattern, patient[0], re.I) and len(patient) > 1 and re.match(r'^(?:\d|(?:U|Unit|Lot)\s*\d)', patient[1], re.I) and not re.fullmatch(DATE, patient[1]) and not re.fullmatch(r'[\d ()+-]{8,}', patient[1]):
         addresses = [patient[1]]
     for address in addresses:
         add('address', address.title())
