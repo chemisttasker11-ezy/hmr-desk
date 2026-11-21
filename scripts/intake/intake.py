@@ -258,6 +258,13 @@ def extract_fields(text):
             flags.append(f'Missing {key}')
         elif len(values) > 1:
             flags.append(f'Multiple candidates for {key}: ' + ', '.join(values))
+    # A DOB or telephone label that sits outside the block read as the patient's is never attributed to the patient
+    # (it may belong to a clinician section). Name the cause so the pharmacist knows to check by hand.
+    outside = [line for line in lines if line not in patient]
+    if not fields['dob'] and any(re.match(r'^(?:D\.?O\.?B\.?|date of birth|birth date)\s*(?:[:#.-]|$)', line, re.I) for line in outside):
+        flags.append('DOB label found outside the patient block (layout not read as patient details); check by hand')
+    if not fields['phone'] and any(re.match(r'^(?:telephone|phone|mobile|mob)\b\s*(?:[:#.-]|$)', line, re.I) for line in outside):
+        flags.append('Telephone label found outside the patient block (not attributed to the patient); check by hand')
     if not fields['gp'] or not fields['clinic'] or not fields['name']:
         flags.append('SMS unavailable: missing patient, GP or clinic')
     return fields, flags
