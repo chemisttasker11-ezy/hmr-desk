@@ -97,8 +97,28 @@ def test_rows_not_read_from_the_referral_and_missing_pdf(tmp_path):
 
 def test_symlinked_referral_outside_the_folder_is_never_read(tmp_path):
     outside = tmp_path / 'outside'; outside.mkdir(); folder = tmp_path / 'p'; folder.mkdir()
-    make_pdf(outside / 'x.pdf'); os.symlink(outside / 'x.pdf', folder / 'referral.pdf')
+    make_pdf(outside / 'x.pdf')
+    try:
+        os.symlink(outside / 'x.pdf', folder / 'referral.pdf')
+    except OSError as exc:
+        # Only the known "no symlink privilege" cases skip (Windows WinError 1314, or EPERM/EACCES elsewhere).
+        # Any other failure is a real error. The branch is still exercised without privilege by the next test.
+        if getattr(exc, 'winerror', None) == 1314 or exc.errno in (1, 13):
+            pytest.skip('symlink creation not permitted for this account: %s' % exc)
+        raise
     assert referral_row_image.render(folder, meta({'page': 1, 'box': [40, 90, 400, 105], 'pdf_sha256': hashlib.sha256((outside / 'x.pdf').read_bytes()).hexdigest()}))['kind'] == 'none'
+
+
+def test_symlink_branch_refuses_without_needing_symlink_privilege(tmp_path, monkeypatch):
+    """Same containment rule, with is_symlink forced true for the referral so it runs on unprivileged Windows accounts."""
+    from pathlib import Path
+    folder = tmp_path / 'p'; folder.mkdir(); make_pdf(folder / 'referral.pdf')
+    sha = hashlib.sha256((folder / 'referral.pdf').read_bytes()).hexdigest()
+    good = {'page': 1, 'box': [40, 90, 400, 105], 'pdf_sha256': sha}
+    assert referral_row_image.render(folder, meta(good))['kind'] in ('row', 'page')
+    real = Path.is_symlink
+    monkeypatch.setattr(Path, 'is_symlink', lambda self: True if self.name == 'referral.pdf' else real(self))
+    assert referral_row_image.render(folder, meta(good))['kind'] == 'none'
 
 
 def test_location_schema_is_validated():
