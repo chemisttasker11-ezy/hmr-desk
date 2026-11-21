@@ -33,3 +33,10 @@ test('missing results say so and reason text names changed interactions', () => 
   const ready = { pathology: 'met', interactions: 'met', report: 'met' };
   assert.match(H.reportStatusHtml({ status: 'outdated', reasons: ['interactions_changed'], signed_off: false, signed_version_intact: null, readiness: ready }), /interaction results changed/);
 });
+
+test('acknowledgement needs a named pharmacist and never fills one in', () => {
+  assert.equal(H.reconciliationReviewer({ pharmacist: '   ' }).ok, false);
+  assert.match(H.reconciliationReviewer({}).hint, /pharmacist name/);
+  assert.equal(H.reconciliationReviewer({ pharmacist: 'x'.repeat(121) }).ok, false);
+  assert.deepEqual(H.reconciliationReviewer({ pharmacist: ' A Pharmacist ' }), { ok: true, reviewer: 'A Pharmacist', hint: '' });
+});

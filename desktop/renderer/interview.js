@@ -859,8 +859,10 @@ async function interviewClick(b) {
   }
   if (b.dataset.reconciliationAck !== undefined) {
     if (!interviewReconciliation || !(await saveInterview(true))) return true;
+    const who = H.reconciliationReviewer(interviewRecord.header);
+    if (!who.ok) { interviewOutput = who.hint; renderInterview(); document.getElementById('section-reconciliation')?.scrollIntoView(); return true; }
     try {
-      const reviewer = interviewRecord.header.pharmacist;
+      const reviewer = who.reviewer;
       const result = await hmr.api('POST', `/api/patients/${encodeURIComponent(interviewId)}/reconciliation`,
         { source_hash: interviewReconciliation.source_hash, reviewed_by: reviewer });
       interviewReconciliation = { ...interviewReconciliation, ...result };

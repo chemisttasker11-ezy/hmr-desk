@@ -204,3 +204,5 @@ Unverified: whether the online-later flow works in the installed app; whether re
 Wording note: the Interactions section separates "does the saved result match the current confirmed medicine list" from "which result the built report used"; the second line states it is report provenance and not an all-clear. The 2025 date in the screenshot came from a wrong epoch in the render fixture; the app shows the real file modified time.
 
 Coverage added (synthetic, Linux): the synthetic journey now performs a pathology re-check, saves a later manual interaction note and records a new pathology result after sign-off, and asserts the signed Word and PDF bytes and the pharmacist's saved report text are byte-identical, state stays signed_off and the signed version stays intact. A separate test covers the same state rule. This is a synthetic simulation, not a real sign-off or clinical acceptance.
+
+Reconciliation acknowledge hint: a blank pharmacist name now shows an inline instruction instead of a bare 400. The name is never auto-filled, because the acknowledgement is a named pharmacist attestation. Node-tested helper only; not Windows-run.

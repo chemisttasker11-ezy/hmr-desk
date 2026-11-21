@@ -268,6 +268,13 @@ const H = (() => {
     const linked = (snapshotItems || []).some((item) => item?.metadata?.reference && String(item.values?.[0] || '').trim() === text);
     return linked ? LINKED_CATALOGUE_NOTE : '';
   }
+  // The acknowledgement is a named pharmacist attestation, so a blank name is never filled in automatically.
+  function reconciliationReviewer(header) {
+    const name = typeof header?.pharmacist === 'string' ? header.pharmacist.trim() : '';
+    if (!name) return { ok: false, reviewer: '', hint: 'Enter the reviewing pharmacist name in the pharmacist field at the top of this interview, then acknowledge again.' };
+    if (name.length > 120) return { ok: false, reviewer: '', hint: 'The pharmacist name is too long. Shorten it, then acknowledge again.' };
+    return { ok: true, reviewer: name, hint: '' };
+  }
   // Per-patient results from GET /api/patients/<id>/results. Display only: it never says a result is approved.
   function resultsHtml(r, patientId) {
     if (!r || typeof r !== 'object' || !r.pathology || !r.interactions) return '<p class="muted" role="status">Results could not be loaded.</p>';
@@ -909,6 +916,7 @@ const H = (() => {
     buildDisabledReason,
     reportStatusHtml,
     resultsHtml,
+    reconciliationReviewer,
     commonStep,
     suburb,
     displayAddress,
