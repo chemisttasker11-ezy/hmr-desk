@@ -6,6 +6,35 @@ const H = (() => {
       /[&<>"']/g,
       (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c],
     );
+  // In-page replacement for window.confirm. A native confirm freezes the renderer (and UI automation) until answered.
+  // Cancel is the default focus, Escape cancels, and a click outside does nothing, so there is no default-yes.
+  // With no DOM (unit tests) it uses the caller's fallback, normally the same confirm() the code used before.
+  function confirmDialog(message, options = {}) {
+    const doc = typeof document !== 'undefined' ? document : null;
+    if (!doc || typeof doc.createElement !== 'function' || typeof HTMLDialogElement === 'undefined'
+      || typeof HTMLDialogElement.prototype.showModal !== 'function') {
+      return Promise.resolve(typeof options.fallback === 'function' ? Boolean(options.fallback(message)) : false);
+    }
+    return new Promise((resolve) => {
+      const dialog = doc.createElement('dialog');
+      dialog.className = 'hmr-confirm';
+      dialog.setAttribute('aria-label', options.title || 'Please confirm');
+      dialog.innerHTML = (options.title ? `<h2>${esc(options.title)}</h2>` : '')
+        + `<p class="hmr-confirm-text">${esc(message)}</p>`
+        + `<div class="hmr-confirm-actions"><button type="button" data-confirm-cancel autofocus>${esc(options.cancelLabel || 'Cancel')}</button>`
+        + `<button type="button" class="primary" data-confirm-ok>${esc(options.okLabel || 'Continue')}</button></div>`;
+      let answer = false;
+      dialog.addEventListener('click', (event) => {
+        if (event.target.closest('[data-confirm-ok]')) { answer = true; dialog.close(); }
+        else if (event.target.closest('[data-confirm-cancel]')) dialog.close();
+      });
+      dialog.addEventListener('close', () => { dialog.remove(); resolve(answer); });
+      doc.body.appendChild(dialog);
+      dialog.showModal();
+      const cancel = dialog.querySelector('[data-confirm-cancel]');
+      if (cancel) cancel.focus();
+    });
+  }
   function date(value) {
     if (!value) return '';
     const match = String(value).match(/^(\d{4})-(\d\d)-(\d\d)/);
@@ -819,7 +848,7 @@ const H = (() => {
           ? 'Not saved and local draft unavailable. Leave and lose these changes?'
           : draftKey ? 'Not saved. Leave and keep the local draft for recovery?'
             : `Not saved - ${error}. Leave and discard these changes?`;
-        if (!ok && !confirm(message)) return false;
+        if (!ok && !(await confirmDialog(message, { title: 'Unsaved changes', okLabel: 'Leave', fallback: typeof confirm === 'function' ? confirm : undefined }))) return false;
         clearTimeout(timer);
         return true;
       },
@@ -940,6 +969,7 @@ const H = (() => {
     showInterviewRefresh,
     interviewDrafts,
     autosaver,
+    confirmDialog,
   };
 })();
 if (typeof module !== 'undefined') module.exports = H;

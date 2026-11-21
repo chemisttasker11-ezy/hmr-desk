@@ -261,7 +261,7 @@ async function resolveDemographic(action, key) {
   const question = action === 'replace'
     ? `Replace the report's ${label} with the patient record's text? The text now in the report is removed (the previous report is backed up).`
     : `Keep the report's ${label} as written? The report will print and be signed with this text, which differs from the patient record. This is recorded, and it asks again if the text or the record changes.`;
-  if (!confirm(question)) return true;
+  if (!(await H.confirmDialog(question, { title: action === 'replace' ? 'Replace report text' : 'Keep report text', okLabel: action === 'replace' ? 'Replace' : 'Keep as written', fallback: confirm }))) return true;
   const id = reportId, screen = $('screen');
   screen.inert = true;
   try {
@@ -470,7 +470,7 @@ async function reportEditorClick(b) {
     return true;
   }
   if (d.reportRefresh !== undefined) {
-    if (!confirm("Refreshes the report from the latest interview and pathology. Medicine recommendations are kept ONLY when medicine, actual use and source notes are exactly unchanged and unique; otherwise the typed text is listed under the Medicines table for you to re-enter, and building is blocked until you mark each one handled. Other table edits may be replaced. Your findings and letter text are kept, and the previous report is backed up. Continue?")) return true;
+    if (!(await H.confirmDialog("Refreshes the report from the latest interview and pathology. Medicine recommendations are kept ONLY when medicine, actual use and source notes are exactly unchanged and unique; otherwise the typed text is listed under the Medicines table for you to re-enter, and building is blocked until you mark each one handled. Other table edits may be replaced. Your findings and letter text are kept, and the previous report is backed up. Continue?", { title: 'Refresh report', okLabel: 'Refresh', fallback: confirm }))) return true;
     const id = reportId, screen = $('screen');
     screen.inert = true;
     try {
@@ -481,7 +481,10 @@ async function reportEditorClick(b) {
         alert(`${medicineNotes.needs_reentry} previous medication recommendation(s) could not be safely carried forward because the medicine, directions, notes or duplicate identity changed. They are listed under the Medicines table. Re-enter any that still apply, then mark each handled, before building.`);
       }
       // Blocks the pharmacist edited are kept; each difference from the patient record is offered, never replaced silently.
-      const replace = (result?.demographic_conflicts || []).filter((c) => confirm(`The ${c.label} in this report was edited and differs from the current patient record.\n\nIn the report:\n${c.report}\n\nIn the patient record:\n${c.record}\n\nOK replaces the report text with the patient record. Cancel keeps your edited text.`)).map((c) => c.key);
+      const replace = [];
+      for (const c of (result?.demographic_conflicts || [])) {
+        if (await H.confirmDialog(`The ${c.label} in this report was edited and differs from the current patient record.\n\nIn the report:\n${c.report}\n\nIn the patient record:\n${c.record}\n\nOK replaces the report text with the patient record. Cancel keeps your edited text.`, { title: 'Edited report text differs from the record', okLabel: 'Replace with record', cancelLabel: 'Keep my text', fallback: confirm })) replace.push(c.key);
+      }
       if (replace.length) await hmr.api('POST', `/api/patients/${encodeURIComponent(id)}/report/refresh`, { replace_demographics: replace });
       if (page === 'report_editor' && reportId === id) {
         const updated = await hmr.api('GET', `/api/patients/${encodeURIComponent(id)}/report`);
@@ -584,9 +587,10 @@ async function reportEditorClick(b) {
   else if (d.reportLoad) {
     if (
       d.reportLoad === 'all' &&
-      !confirm(
+      !(await H.confirmDialog(
         'This replaces the findings and letter wording in the editor but not the saved file until you save. Continue?',
-      )
+        { title: 'Replace findings', okLabel: 'Replace', fallback: confirm },
+      ))
     )
       return true;
     reportRecord.issues = JSON.parse(JSON.stringify(reportDraft.issues || []));

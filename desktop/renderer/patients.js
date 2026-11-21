@@ -194,7 +194,7 @@ async function openPatientWorkspace(id, tab = 'Overview', layout = 'patient') {
     selectPatientTab(tab); setPatientLayout(layout);
     return { ok: true };
   }
-  if (formOpen && !confirm('Switch patient and discard unsaved changes?')) return { cancelled: true };
+  if (formOpen && !(await H.confirmDialog('Switch patient and discard unsaved changes?', { title: 'Unsaved changes', okLabel: 'Switch patient', fallback: confirm }))) return { cancelled: true };
   formOpen = false;
   detailTab = tab;
   const shown = await showPatient(id);
@@ -203,7 +203,7 @@ async function openPatientWorkspace(id, tab = 'Overview', layout = 'patient') {
   return { ok: true };
 }
 async function showPatient(id, action, background = false) {
-  if (formOpen && selected !== String(id)) { if (!confirm('Switch patient and discard unsaved changes?')) return false; formOpen = false; }
+  if (formOpen && selected !== String(id)) { if (!(await H.confirmDialog('Switch patient and discard unsaved changes?', { title: 'Unsaved changes', okLabel: 'Switch patient', fallback: confirm }))) return false; formOpen = false; }
   if (action && action !== 'offer_new') detailTab = 'Overview';
   const request = ++patientRequest, startedPage = typeof page === 'undefined' ? null : page;
   const startedNav = typeof navToken === 'undefined' ? null : navToken;

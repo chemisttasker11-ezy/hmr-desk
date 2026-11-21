@@ -776,3 +776,9 @@ main:has(.interview-context) > header { height: 96px; min-height: 96px; }
 .med-page-image img{display:block;max-width:100%;border:1px solid #888;margin:6px 0;background:#fff}
 .med-page-image img.med-whole-page-image{max-height:70vh;object-fit:contain}
 .med-page-image p{margin:4px 0;font-size:.9em}
+.hmr-confirm { max-width: 560px; width: calc(100vw - 48px); border: 1px solid var(--control-border); border-radius: 8px; padding: 20px 24px; color: #202c2a; background: #fff; }
+.hmr-confirm::backdrop { background: #173c39aa; }
+.hmr-confirm h2 { margin: 0 0 10px; font-size: 18px; }
+.hmr-confirm-text { margin: 0 0 18px; white-space: pre-wrap; line-height: 1.45; }
+.hmr-confirm-actions { display: flex; justify-content: flex-end; gap: 10px; }
+.hmr-confirm-actions button { min-height: 40px; }
