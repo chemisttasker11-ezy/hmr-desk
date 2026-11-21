@@ -1,0 +1,95 @@
+# Integration handover: combined clinical safeguards and optional original Word builder
+
+Date: 21 November 2026 (Australia/Brisbane). Status: **PARTIALLY COMPLETED. Source integrated and Linux-tested. Windows installer and installed-app evidence for this exact commit is NOT yet recorded. No clinical acceptance.**
+Not merged to main. No deployment. Clinical release approval stays with the application owner.
+
+## 1. Purpose and scope
+The owner asked for one coherent candidate from three independent lines of work, not three competing implementations: PR #32 (clinical and report safety), PR #33 (optional original Word builder and template-review aid) and PR #34 (audit only). Standalone report generation (automatic, no installed Word, no AI, no internet) stays primary. The original Word builder is a separate optional route.
+
+## 2. Starting state
+- Base: main `46d7df2457a34a866413c3dd8e6166fc0c823fe6`.
+- PR #32 head `102605a` (functional commit `08262a8`), based on main.
+- PR #33 head `8b166d2`, based on main.
+- Developer branches (read only, untouched): `wip/pr29-candidate-nov21` `cb6f14e`, `handover-renderer-review-aid` `e7b9514`, `wip/local-m2-divergent-snapshot` `a67d4bc`.
+- Integration branch (local until the operator publishes it): `integration/hmr-combined-nov21`. It is PR #32 head, merged with PR #33 head, plus three commits listed in section 9.
+
+## 3. What actually exists today (stage of the application)
+Three evidence levels, kept apart. Nothing in the second or third level should be read as accepted.
+
+**A. Implemented in source (code read, Linux tests only)**
+- Optional blank fifth GP Plan column (Settings, default off), GP provider and practice details through referral review to the report, schema migration, safer medicine-recommendation refresh, held pharmacist Actions with build and sign-off blocking, snapshot contract compatibility, duplicate-patient DOB comparison across date formats, atomic export (PR #32).
+- Optional original Word builder through a pinned-asset adapter, opt-in setting, atomic no-overwrite publication, pinned frozen worker, template-review "Check first" aid (PR #33).
+- Combination rules added in this integration (section 5).
+
+**B. Built and run on Windows (operator evidence, earlier builds, NOT this commit)**
+- The operator built a packaged candidate (PR29 head `5c9b486` + compat + held-actions + renderer wording) and launched it in an isolated profile. It started its own engine, showed the Today view, and a synthetic started report persisted after restart.
+- Baseline C07 (GP Plan four/five-column layout) and C08 (GP metadata mismatch and update) passed narrowly in the actual app. Their DOCX pixels were checked through LibreOffice, not Word.
+- Native Word open and save work for a person. Word COM automation currently fails on the test machine (`Documents.Open` returns null, `SaveAs2` fails 0x800A1066). Cause unknown. An identical earlier standalone run had succeeded.
+- These results belong to earlier commits. They do not prove this integration commit.
+
+**C. Unverified**
+- Medicine Action refresh and held-panel on a packaged build (C09), including restart, backup and restore of the held record.
+- Installer, non-administrator install, first launch, offline run, scanned and searchable referral PDFs, migration of an older encrypted database, sign-off acceptance, for this commit.
+- Original builder against the real approved template with Word and the private assets. Layout comparison with the approved report.
+- Portal tabs (eMIMS, My Health Record via PRODA, PPA, AMH) end to end. AMH has no helper script. Only mocked-page node tests exist.
+- The ten-case pharmacist acceptance matrix.
+
+## 4. Chronology of the preceding work (for collaborators)
+1. Baseline: main `46d7df2` contains PR #27 (development baseline) and PR #28 (screenshot staleness check, tool failure).
+2. PR #29 (`5c9b486`) added GP Plan, practice details and safer refresh. PR #30 and #31 were closed as folded into it.
+3. A snapshot-digest compatibility fix, held medicine Actions and a renderer wording fix were built on that head and kept as a candidate (`wip/pr29-candidate-nov21`). These exist in PR #32 in cleaned form.
+4. The wired original-builder adapter and template-review aid were built on main (`handover-renderer-review-aid`).
+5. Word automation regressed on the test machine (see 3B). Standalone rendering is unaffected by it.
+6. The owner asked for all local work to be published. The inventory is in `handover/inventory/LOCAL-WORK-ACCOUNTING.md` on the developer branches. All other local clones were ancestors of origin or historical.
+7. Independent review produced PR #32, #33, #34. This document starts from them.
+
+## 5. Decision record
+| Item | Disposition | Reason | Our existing alternative | Combined behaviour | Evidence or limit |
+|---|---|---|---|---|---|
+| PR32 GP Plan option, GP/practice details, migration | Accepted | Same behaviour as our candidate, cleaner base | Candidate branch had the same | Unchanged from PR32 | PR32 tests, passed here. Real template layout unverified. |
+| PR32 held Actions, refresh preservation | Accepted | Content-identical to our held design (verified line for line against the candidate tree) | Candidate held-actions patch | Build and sign-off blocked while unresolved | Existing tests plus new test: blocked on the Word route too. Installed-app journey unverified. |
+| PR32 snapshot contract compat | Accepted | Same as ours | Candidate compat patch | Unmarked old reports compare with legacy digest | Linux tests. No encrypted legacy round trip yet. |
+| PR32 DOB format comparison, atomic export | Accepted | Real defects (split identity, truncated export) our candidate lacked | None | Replaces main's plain string and `xb` write | `test_handover_safety.py`. Hard-link export fails closed on FAT or network shares. |
+| PR33 opt-in setting (default off) | Accepted | Presence of private files must not replace the standalone renderer | Our adapter used the files if present | `report_use_original_builder` default off | New test: standalone stays default with assets present. |
+| PR33 atomic publication, pinned frozen worker, CI lists | Accepted | Real partial-output and bypass risks | Our adapter copied straight to target | Used unchanged | PR33 tests, passed here. Not a sandbox. |
+| Template-review aid | Accepted | Merged cleanly | Ours (same code) | "Check first" list only | Keyword limits: false negatives and positives remain. |
+| Original builder with GP Plan on | **Adapted (new)** | The private template cannot honour GP Plan; silently ignoring a setting is not allowed | None | Build refuses with an explicit message and writes nothing | New test. |
+| Held Actions vs original builder | **Adapted (verified)** | The gate must not depend on the renderer | None | Gate runs before either renderer | New test. |
+| Original builder sign-off | Kept as in PR33 | Approval rule for its template is undecided | Same | `template_approved` false, so sign-off stays blocked | PR33 tests. |
+| Flaky adapter test | **Fixed here** | `test_timeout_with_concurrent_unrelated_automation_word_ends_only_the_worker` hard-coded timestamps near 01:00 UTC on 21 Nov, so it began failing at that time of day on PR33 itself | None | Test now pins the worker-start stamp | Passes (892 passed). |
+| PR34 historical M2 audit | Rejected as code, read as audit | No shared ancestry. Its improvements already exist. Not imported. | Current main lines | None | Not re-audited line by line here. |
+| Local-only Brainstorm tables | Excluded | Private, licensed | None | Never published | Metadata only in the inventory note. |
+| package-lock peer-flag diff | Excluded | Metadata churn | None | Not applied | Diff kept in inventory. |
+
+## 6. Findings
+- PR #32 contains our candidate. The only differences are its own fixes plus PR #28 items our candidate lacked. No unique candidate behaviour was found missing.
+- Defect: the adapter timeout test depended on the wall clock (see decision record). Fixed.
+- The original builder path would have ignored the GP Plan setting. Now refused.
+- Remaining pre-existing Linux failures (identical names on unmodified main): 2 failed and 5 files erroring at collection. Causes not investigated beyond confirming they are the same set. They hide legacy script-style API tests on Linux, so API route behaviour still needs Windows proof.
+
+## 7. Testing (exact integration commit, Linux with an msvcrt stub; NOT Windows)
+- Commit `6f416c9175f8e85b53d1cb6eedd3f6eaf02416c6`.
+- Backend: `python -m pytest -q -p no:cacheprovider --continue-on-collection-errors` from `HMR Desk/engine` with the stub on `PYTHONPATH` and APPDATA, LOCALAPPDATA, USERPROFILE pointing to a scratch folder. Result: 892 passed, 2 failed, 1 skipped, 5 collection errors. The failed and erroring names equal the main baseline.
+- Desktop: `node --test` in `desktop/`: 504 tests, 503 pass, 0 fail, 1 skipped. Run on the earlier combined commit `101808d` (only an adapter test file changed since).
+- GitHub Actions for this commit: not run, since nothing was pushed by me. A Windows packaging run is required.
+
+## 8. Verification limits
+No Windows run of this commit. No Word. No installer. No migration test on an older encrypted database. No real template, no real patient data. No browser portals. Visual layout (GP Plan on and off, long reports) not inspected.
+
+## 9. Compatibility and commits
+Commits on the integration branch after the PR #33 merge: the merge itself `49085b2` (conflicts resolved in `jobs.py`, `settings.py`, `desktop/renderer/settings.js` and both workflow test lists), then combined-behaviour tests, then the wall-clock test fix (`6f416c9`). Existing data is untouched. The Settings screen now carries both Reports settings and explains that they cannot both be on for building.
+
+## 10. Outstanding work, in priority order
+1. Build the exact commit on Windows and install as a standard user without Word. Run: first launch, offline referral to report, interview save and reopen, medication reconciliation, pathology, Word and PDF output, refresh with held Actions, backup, restart and recovery.
+2. Migration test on a copy of an older encrypted database, with rollback.
+3. Visual check of the GP Plan column on and off in the approved template and PDF.
+4. Original builder with Word and the private assets: separate run, compared against the approved layout. Decide template approval rules and the Word COM failure.
+5. The ten-case pharmacist matrix with commit and template version recorded.
+6. Investigate the 5 collection errors and 2 failures on Linux so API routes can be tested without Windows.
+7. Portal end-to-end tests listed in the earlier handover.
+
+## 11. Completion status
+Partially completed. Integration and Linux tests done. Windows evidence and clinical acceptance outstanding. Engineering completion is not claimed.
+
+## 12. Reproduce
+Branch `integration/hmr-combined-nov21` at commit `6f416c9175f8e85b53d1cb6eedd3f6eaf02416c6` on main `46d7df2`. PR link: to be added when the operator publishes the branch.
