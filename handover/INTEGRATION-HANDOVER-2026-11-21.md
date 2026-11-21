@@ -158,3 +158,10 @@ Two comments on PR #35 (https://github.com/chemisttasker11-ezy/hmr-desk/pull/35#
 - Clinical interaction gate, missing clean-machine helpers, exact-head Windows acceptance, real Word COM failure, encrypted migration: already open items in this handover. No source change; owner decisions (gate policy) and the operator's Windows evidence remain the route.
 - Test counts: the reviewer reports CI counts (686 backend passed, 3 skipped, 496 desktop passed, 9 skipped at 97db47b). They differ from the local counts (905 passed, 1 skipped; 504 passed, 1 skipped). The reviewer's CI runs are not reconciled with the local runs here (different selection or platform skips); the CI run pages were not inspected.
 - Commit mapping: the product code under test is unchanged from `6f416c9` except the engine changes in `b184b95` (tests), `eef1580`/`90b6479` (helper status), `5ea2fdc` (desktop message), `d8c54f7` (build scripts) and `97db47b` (helper names and tests). The head of PR #35 is the commit that carries this addendum; read it from the PR, not from this file.
+
+## Addendum: CI whole-suite coverage (source change, not yet run on Windows)
+
+Finding: the CI backend steps name an explicit file list. Of 138 backend test files, 86 are named in a workflow pytest command and 52 are not (for example test_api.py, test_actions.py, test_manual_workflow.py, test_interaction_scope.py, test_mims_binding.py, test_helper_modes.py, test_build_script_contract.py). Those had Linux-local evidence only.
+Change: the fast-regression backend job (windows-2022, Python 3.12) now also runs plain `python -m pytest -q` after the curated step, so a new test file cannot be left out. The curated steps stay.
+Status: implemented in source only. Not run on a Windows runner. Tests that were only run locally with an msvcrt stand-in may fail or behave differently on real Windows; the first CI run will show it, and any failure is to be fixed, not excluded. Tests set helper mode explicitly, so a runner without the private helper files is the case they cover.
+Unverified: the CI step log counts (reviewer cited 686 backend and 496 desktop); logs need authenticated access.
