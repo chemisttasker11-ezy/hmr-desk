@@ -27,8 +27,10 @@ def _ready(tmp_path, monkeypatch, files=None):
                                             'word2pdf.ps1': hashlib.sha256(b'# synthetic helper').hexdigest()})
     monkeypatch.setattr(adapter, 'run_worker', fake_runner())
     monkeypatch.setattr(adapter, '_fonts', lambda pdf: {'Montserrat'})
+    import settings
     with connection() as conn:
         patient, loaded = _saved_report(conn)
+        settings.update(conn, {'report_use_original_builder': True})
         loaded.update(followup_decision='required', followup='Synthetic plan: review again in three months.',
                       expected_revision=loaded['revision'])
         report.save(conn, patient, loaded)
@@ -88,6 +90,9 @@ def test_wrong_or_missing_assets_fail_closed_without_fallback(tmp_path, monkeypa
 def test_without_the_private_folder_the_existing_path_is_unchanged(tmp_path, monkeypatch):
     connection = _setup(tmp_path, monkeypatch)
     assert adapter.assets_present(db.DATA_DIR) is False
+    import settings
+    with connection() as conn:
+        assert settings.get(conn, 'report_use_original_builder') is False
 
 
 def test_signoff_stays_blocked_for_original_builder_evidence_until_approval_rule_is_decided(tmp_path, monkeypatch):
