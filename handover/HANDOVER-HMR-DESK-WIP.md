@@ -104,3 +104,6 @@ Missing end-to-end tests (none were verified in the current packaged build when 
 - Do not weaken scanners or security policy, and do not add a fallback renderer.
 - Keep the external AI projection unchanged unless the owner authorises widening.
 - No clinical rules, doses or cutoffs without a sourced clinical assessment.
+
+## 0b. Update, Nov 21 (later same day)
+Section 0 is superseded: the operator host broader local work has now been fully reconciled against live origin. See inventory/LOCAL-WORK-ACCOUNTING.md in this folder for per-item accounting: candidate worktree, local clones, rebuild snapshots, the older divergent 19-file line (branch wip/local-m2-divergent-snapshot), unrelated root b0a0a86, the package-lock peer-flag diff (inventory/rebuild-297e780-desktop-package-lock-peer-flags.diff), and the private Brainstorm-derived reference tables (local only, never published). Earlier statements that the assets directories were empty were wrong.
