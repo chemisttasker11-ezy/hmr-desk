@@ -23,7 +23,7 @@ import agents
 import records
 import medicine_reference
 import medicine_snapshot
-import steps
+import helper_status, steps
 import app_paths
 import manual_medicine_names
 import claims_data
@@ -47,12 +47,6 @@ from external_helpers import helper, MIMS_PATH, claims_helper, mims, record  # n
 import medicine_review
 from medicine_review import (report_data, proposal, interview_usage, conflicting_medicines, relevant_usage, valid_alternatives,  # noqa: F401  re-exported
                              same_name_as_stopped, current_medicine_snapshot, confirmed_medicines_current)
-
-
-HELPER_MISSING = {
-    'mims': 'The eMIMS list helper is not installed in this build, so no interaction lists can be prepared here. Medicines can still be confirmed and the interaction check documented manually.',
-    'ppa': 'The PPA claim helper is not installed in this build, so no claim rows can be prepared here. Reports and records work without it.',
-}
 
 
 def mims_lists(conn):
@@ -162,13 +156,9 @@ def handle(conn, method, path, query, body):
         routed = routes_work.handle(conn, method, path, query, body)
         if routed is not None: return routed
         if method == 'GET' and path == '/api/mims/lists':
-            out = {'lists': mims_lists(conn), 'helper_available': MIMS_PATH.is_file()}
-            if not out['helper_available']: out['message'] = HELPER_MISSING['mims']  # existing consumers read 'lists' only
-            return 200, out
+            return 200, helper_status.respond('mims', 'lists', mims_lists(conn), MIMS_PATH.is_file())
         if method == 'GET' and path == '/api/claims':
-            out = {'claims': claim_list(conn), 'helper_available': bool(claims_helper and record)}
-            if not out['helper_available']: out['message'] = HELPER_MISSING['ppa']
-            return 200, out
+            return 200, helper_status.respond('ppa', 'claims', claim_list(conn), bool(claims_helper and record))
         routed = routes_patients.handle_list(conn, method, path, query, body)
         if routed is not None: return routed
         routed = routes_reference.handle(conn, method, path, query, body)
