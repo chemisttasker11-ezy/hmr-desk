@@ -18,11 +18,19 @@ def main(argv):
     with fitz.open(path) as doc:
         for i, page in enumerate(doc, 1): print('page %d: text-layer words=%d images=%d' % (i, len(page.get_text('words')), len(page.get_images())))
     found = g.analyse_pdf(path)
+    import fitz as _f
+    with _f.open(path) as doc:
+        pages = [([(w[0], w[1], w[2], w[3], w[4]) for w in pg.get_text('words')], pg.rect.height) for pg in doc]
+    whole = g.pair_document(pages)
+    print('WHOLE TABLE: ok=%s reason=%r page=%s rows=%d with_directions=%d excluded=%d flags=%s' % (whole['ok'], whole['reason'], whole.get('page'), len(whole['rows']), sum(1 for r in whole['rows'] if r[1]), len(whole.get('excluded', [])), whole.get('flags', [])))
+    if show and whole['ok']:
+        for i, r in enumerate(whole['rows'], 1): print('  %2d | %s | %s' % (i, r[0], r[1]))
+        for e in whole.get('excluded', []): print('  excluded line: ' + e)
     if not found: print('No page with a Current Medications heading was found.'); return 1
     for number, result, words in found:
         rows = result['rows']
         print('page %d: ok=%s reason=%r split_x=%s rows=%d with_directions=%d excluded_lines=%d' % (number, result['ok'], result['reason'], None if result['split_x'] is None else round(result['split_x'], 1), len(rows), sum(1 for r in rows if r[1]), len(result.get('excluded', []))))
-        if show:
+        if False:
             for i, r in enumerate(rows, 1): print('  %2d | %s | %s' % (i, r[0], r[1]))
     if '--xhist' in argv:
         for number, result, words in found:

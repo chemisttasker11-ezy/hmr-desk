@@ -66,7 +66,15 @@ def _fail(reason, split=None, extra=None):
     return {'ok': False, 'reason': reason, 'rows': [], 'split_x': split, 'excluded': extra or []}
 
 
-def pair_table(words):
+def footer_like(line_text, y, page_height):
+    """A line may be set aside only if it sits in the top or bottom margin of the page AND carries no medicine or direction content.
+    Distance from the table alone is never enough."""
+    if page_height is None: return False
+    in_margin = y > 0.90 * page_height or y < 0.06 * page_height
+    return in_margin and not referral.STRENGTH.search(line_text) and not referral.DIRECTION.match(line_text)
+
+
+def pair_table(words, page_height=None):
     """Returns {'ok': bool, 'reason': str, 'rows': [[name, directions]], 'split_x': float|None, 'excluded': [line text]}.
     A direction starts where a right-column line sits on the same row as a left-column line. A right line with no left line beside it
     continues the direction above; a left line with no right line beside it continues the name above unless it looks like a new
@@ -85,9 +93,10 @@ def pair_table(words):
     last = max(l[0] for l in table)
     excluded = []
     for l in crossing:       # a line across both columns is only set aside when it is well clear of the table (footer or page number)
-        if l[0] > last + 3 * pitch: excluded.append(_text(l[2]))
-        else: return _fail('text crosses the column gap inside the table', split)
-    while len(table) > 1 and table[-1][0] - table[-2][0] > 3 * pitch:   # trailing line well clear of the table: footer or page number
+        if l[0] > last + 3 * pitch and footer_like(_text(l[2]), l[0], page_height): excluded.append(_text(l[2]))
+        else: return _fail('text crosses the column gap inside the table, or is not recognisable as a page footer', split)
+    while len(table) > 1 and table[-1][0] - table[-2][0] > 3 * pitch:   # trailing line well clear of the table
+        if not footer_like(_text(table[-1][2]), table[-1][0], page_height): return _fail('trailing text after the table is not recognisable as a page footer (y=%d)' % round(table[-1][0]), split)
         excluded.append(_text(table.pop()[2]))
     cells = []               # (y, side, text) from words split at the channel; a line may hold both sides
     for y0, y1, ws in table:
@@ -124,7 +133,29 @@ def pair_table(words):
         if ry - right[owner][0] > 2.2 * height: return _fail('direction text far from any row (y=%d)' % round(ry), split)
         for row in rows:
             if row[1].startswith(_text(right[owner][2])): row[1] += ' ' + _text(rws); break
-    return {'ok': True, 'reason': '', 'split_x': split, 'rows': rows, 'excluded': excluded}
+    used = sorted(t for r in rows for t in ' '.join(r).split()) + sorted(t for e in excluded for t in e.split())
+    if sorted(used) != sorted(w[4] for w in region):
+        return _fail('some words on the page were not placed in a row or reported as excluded', split)
+    flags = ['row %d name has no recognisable strength' % (i + 1) for i, r in enumerate(rows) if not referral.STRENGTH.search(r[0])]
+    return {'ok': True, 'reason': '', 'split_x': split, 'rows': rows, 'excluded': excluded, 'flags': flags}
+
+
+def pair_document(pages):
+    """pages: [(words, page_height)]. The table is accepted only when the page after it starts with a different recognised heading
+    (or there is no later page). A repeated or unheaded continuation fails the whole table closed."""
+    for n, (words, height) in enumerate(pages):
+        if medicine_region(words) is None: continue
+        result = pair_table(words, height)
+        result['page'] = n + 1
+        if not result['ok']: return result
+        if n + 1 < len(pages):
+            nxt, nh = pages[n + 1]
+            body = [l for l in _lines(nxt) if l[0] > 0.06 * nh]
+            key = referral.heading(_text(body[0][2])) if body else None
+            if not key or key == 'meds':
+                return _fail('page %d does not start with a different section heading, so the table may continue there' % (n + 2), result['split_x'], result['excluded'])
+        return result
+    return _fail('no medicines heading found')
 
 
 def analyse_pdf(path):
@@ -133,7 +164,7 @@ def analyse_pdf(path):
     with fitz.open(path) as doc:
         for number, page in enumerate(doc, 1):
             words = [(w[0], w[1], w[2], w[3], w[4]) for w in page.get_text('words')]
-            if medicine_region(words) is not None: pages.append((number, pair_table(words), words))
+            if medicine_region(words) is not None: pages.append((number, pair_table(words, page.rect.height), words))
     return pages
 
 
