@@ -92,6 +92,7 @@ TITLE_GRID = (6487, 1985, 1701)
 DETAILS_GRID = (2965, 4299, 2909)
 PROFILE_GRID = (2660, 7478)
 MEDS_GRID = (2520, 1800, 2700, 3145)  # 4 columns, host map table 5 of the newest reference
+MEDS_GRID_GP_PLAN = (2300, 1600, 2400, 2100, 1765)  # same total width; blank GP Plan at right
 OTC_GRID = (4140, 2070, 3870)  # 3 columns, host map tables 6 and 7
 CEASED_GRID = (4140, 2070, 3870)
 RESULTS_GRID = (1885, 1105, 1870, 1620, 3820)
@@ -268,7 +269,7 @@ def _page_field(paragraph):
 PROVISIONAL_LABEL = "PROVISIONAL LOCAL LAYOUT - not the owner-approved report template"
 
 
-def render(data, target):
+def render(data, target, include_gp_plan=False):
     """Build from validated report spec. Does not invent findings or overwrite files."""
     target = Path(target)
     if target.exists():
@@ -326,13 +327,17 @@ def render(data, target):
     ):
         if not data[key]:
             continue
+        if key == 'meds' and include_gp_plan:
+            labels = (*labels, 'GP Plan')
+            grid = MEDS_GRID_GP_PLAN
         _heading(doc, heading, color)
         table = doc.add_table(rows=1, cols=len(labels))
         _borders(table)
         for cell, label in zip(table.rows[0].cells, labels):
             _cell_text(cell, label, 9, True)
         for values in data[key]:
-            for cell, value in zip(table.add_row().cells, values):
+            display_values = [*values, ''] if key == 'meds' and include_gp_plan else values
+            for cell, value in zip(table.add_row().cells, display_values):
                 _cell_text(cell, value, 9)
         _header_row(table, fill)
         _fixed_layout(table, grid)
