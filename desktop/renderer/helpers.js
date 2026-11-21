@@ -284,6 +284,8 @@ const H = (() => {
     else if (status.status === 'not_generated') line = 'No report has been built yet.';
     else line = 'Report status could not be checked.';
     if (status.reasons && status.reasons.includes('cannot_verify')) line += ' Treat it as unverified.';
+    if (Number(status.held_medicine_actions) > 0) line += ` ${Number(status.held_medicine_actions)} medicine recommendation${Number(status.held_medicine_actions) === 1 ? '' : 's'} held by refresh must be handled before build or sign-off.`;
+    if (status.held_medicine_actions === null) line += ' Held medicine recommendations could not be checked; do not build or sign off until they are.';
     const head = status.status === 'current' ? 'Built report' : 'Report status';
     let sign = status.signed_off ? 'A signed version exists.' : 'Not signed off.';
     if (status.signed_off && status.signed_version_intact === false) sign = 'A signed version exists, but the signed version has changed or is no longer intact.';

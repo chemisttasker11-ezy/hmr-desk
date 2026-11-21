@@ -23,7 +23,7 @@ SKILL = APP_ASSETS
 EXTRACT_SCRIPT = APP_ASSETS / 'scripts' / 'extract.py'
 BUILD_SCRIPT = APP_ASSETS / 'scripts' / 'build.py'
 INTERVIEW_SCRIPT = APP_ASSETS / 'scripts' / 'make_interview.py'
-FIELDS = {'name', 'sex', 'dob', 'medicare', 'irn', 'address', 'suburb', 'phone', 'gp', 'gp_initials', 'gp_provider', 'clinic', 'referral_date', 'ihi', 'notes'}
+FIELDS = {'name', 'sex', 'dob', 'medicare', 'irn', 'address', 'suburb', 'phone', 'gp', 'gp_initials', 'gp_provider', 'clinic', 'clinic_address', 'clinic_phone', 'referral_date', 'ihi', 'notes'}
 _lock = threading.Lock()
 _jobs = {}
 _active = None
@@ -268,6 +268,8 @@ def report_build(patient_id, pdf=False):
         if data.get('pathology_revision') and data['pathology_revision'] != pathology_records.revision(conn, p):
             raise ValueError('Pathology changed after report preparation; refresh and re-review the report before building')
         if not data['issues']: raise ValueError('add at least one finding')
+        held = report.held_actions(conn, p)
+        if held: raise ValueError('Handle held medicine recommendations before building: ' + str(len(held)))
         pending = report.placeholders(data)
         if pending: raise ValueError('Review placeholder fields: ' + ', '.join(pending))
         unreviewed = report.template_reviews_pending(conn, p, data)
@@ -280,6 +282,7 @@ def report_build(patient_id, pdf=False):
             'pathology_revision': pathology_records.revision(conn, p),
             'source_files_sha256': report_auth.source_snapshot(conn, p),
             'clinical_snapshot_sha256': report_auth.clinical_snapshot_hash(conn, p),
+            'clinical_snapshot_contract': 2,
             'demographics': report.demographic_status(conn, p, data),  # block name -> matches/kept/unresolved, no text
         }
         import interaction_scope
@@ -287,6 +290,8 @@ def report_build(patient_id, pdf=False):
         import pharmacist_identity
         identity = pharmacist_identity.resolve(conn)
         data = dict(data, pharmacist_details=identity['text'])
+        import settings as hmr_settings
+        include_gp_plan = hmr_settings.get(conn, 'report_include_gp_plan')
         conn.rollback()  # end the read snapshot before rendering; later writes (events, state) must not be blocked by it
         from pathlib import PureWindowsPath
         raw = str(data['out'])
@@ -317,10 +322,10 @@ def report_build(patient_id, pdf=False):
         with tempfile.TemporaryDirectory(prefix='.hmr-docx-', dir=folder) as directory:
             draft = Path(directory) / target.name
             if approved:
-                template_report_builder.render(data, draft, approved[0])
+                template_report_builder.render(data, draft, approved[0], include_gp_plan=include_gp_plan)
                 placed = template_report_builder.has_marker(approved[0], 'PHARMACIST')
             else:
-                local_report_builder.render(data, draft)
+                local_report_builder.render(data, draft, include_gp_plan=include_gp_plan)
             if not draft.is_file(): raise RuntimeError('Draft Word report failed to render')
             if target.exists(): raise FileExistsError('Output appeared during report rendering')
             os.replace(draft, target)
@@ -361,8 +366,10 @@ def report_build(patient_id, pdf=False):
             'template_version': approved[1]['version'] if approved else '',
             'template_sha256': approved[1]['sha256'] if approved else '',
             'template_approved': bool(approved),
+            'report_include_gp_plan': include_gp_plan,
             'source_files_sha256': snapshot['source_files_sha256'],
             'clinical_snapshot_sha256': snapshot['clinical_snapshot_sha256'],
+            'clinical_snapshot_contract': snapshot['clinical_snapshot_contract'],
             'demographics': snapshot['demographics'],
             'pharmacist_identity_sha256': pharmacist_identity.digest(identity),
         }

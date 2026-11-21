@@ -67,7 +67,7 @@ def _reasons(conn, patient, detail):
             reasons.append('pharmacist_identity_changed')
         if detail.get('source_files_sha256') != report_auth.source_snapshot(conn, patient):
             reasons.append('source_files_changed')
-        if detail.get('clinical_snapshot_sha256') != report_auth.clinical_snapshot_hash(conn, patient):
+        if not report_auth.clinical_snapshot_matches(conn, patient, detail) or report_auth.legacy_gp_block_changed(conn, patient, detail):
             reasons.append('clinical_record_changed')
     except Exception as error:  # an unreadable file or record is not a reason to fail the whole status
         _unverifiable('build evidence', error)
@@ -117,7 +117,15 @@ def report_status(conn, patient):
         "SELECT 1 FROM events WHERE patient_id=? AND type='signed_off' LIMIT 1", (patient['id'],)).fetchone()
     out = {'status': 'not_generated', 'reasons': [], 'file': '', 'signed_off': bool(signed),
            'signed_version_intact': None, 'note': NOTE, 'readiness': readiness(conn, patient)}
+    try:  # typed medicine Action text that refresh could not carry forward and nobody has handled yet; blocks build and sign-off
+        import report
+        out['held_medicine_actions'] = len(report.held_actions(conn, patient))
+    except Exception as error:
+        _unverifiable('held medicine actions', error)
+        out['held_medicine_actions'] = None
     if detail:
+        # Evidence without a contract marker predates GP-detail coverage; shown so the limit is not hidden.
+        out['snapshot_coverage'] = 'current' if 'clinical_snapshot_contract' in detail else 'legacy_gp_block_by_report_text'
         reasons = _reasons(conn, patient, detail)
         out.update(status='outdated' if reasons else 'current', reasons=reasons, file=str(detail.get('file', '')))
     if signed:

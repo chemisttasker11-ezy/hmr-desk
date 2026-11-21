@@ -45,7 +45,7 @@ def source_snapshot(conn, patient):
     return dict(sorted(result.items()))
 
 
-def clinical_snapshot_hash(conn, patient):
+def clinical_snapshot_hash(conn, patient, contract=None):
     """Canonical read-only source snapshot. Never edits legacy JSON."""
     import clinical_snapshot
     folder = jobs.patient_folder(patient)
@@ -54,9 +54,43 @@ def clinical_snapshot_hash(conn, patient):
     provenance = json.loads(source.read_text(encoding='utf-8')) if source.is_file() else {}
     canonical = clinical_snapshot.canonical(
         dict(patient), interview.load(conn, patient),
-        pathology_records.load(conn, patient), spec, provenance, source_snapshot(conn, patient)
+        pathology_records.load(conn, patient), spec, provenance, source_snapshot(conn, patient),
+        contract=contract or clinical_snapshot.CONTRACT_CURRENT
     )
     return clinical_snapshot.digest(canonical)
+
+
+def clinical_snapshot_matches(conn, patient, stored):
+    """Compare stored build/sign-off evidence with the current record, fail closed.
+
+    A truly absent marker means evidence written before the GP/clinic detail keys
+    existed: compared with the legacy contract (see clinical_snapshot). A present
+    marker must be exactly the integer 2 (the only value any build writes); null,
+    0, 1, true, strings and anything else fail. Nothing is rewritten.
+    """
+    import clinical_snapshot
+    if not isinstance(stored, dict) or not isinstance(stored.get('clinical_snapshot_sha256'), str):
+        return False
+    if 'clinical_snapshot_contract' not in stored:
+        contract = clinical_snapshot.CONTRACT_LEGACY
+    else:
+        contract = stored['clinical_snapshot_contract']
+        if isinstance(contract, bool) or not isinstance(contract, int) or contract != clinical_snapshot.CONTRACT_CURRENT:
+            return False
+    return stored['clinical_snapshot_sha256'] == clinical_snapshot_hash(conn, patient, contract)
+
+
+def legacy_gp_block_changed(conn, patient, stored):
+    """Legacy evidence (no marker) never digested the clinic line. The report spec that
+    build evidence binds does hold the GP block as printed, so a record that no longer
+    produces that block (and was not knowingly kept) is drift the digest cannot show."""
+    if not isinstance(stored, dict) or 'clinical_snapshot_contract' in stored:
+        return False
+    import report
+    spec = records.get(conn, patient['id'], 'report_spec.json')
+    if spec is None:
+        return False  # the spec hash comparison already reports a missing or changed spec
+    return 'doctor' in report.unresolved_demographics(conn, patient, json.loads(spec.decode('utf-8-sig')))
 
 
 def generated_versions(conn, patient):
@@ -154,7 +188,7 @@ def check_approval(conn, patient, body):
         raise ValueError('Approved template changed since report generation; rebuild first')
     if detail.get('source_files_sha256') != source_snapshot(conn, patient):
         raise ValueError('Original referral or pathology source changed since report generation')
-    if detail.get('clinical_snapshot_sha256') != clinical_snapshot_hash(conn, patient):
+    if not clinical_snapshot_matches(conn, patient, detail):
         raise ValueError('Clinical source contract changed since report generation; rebuild')
     root = jobs.patient_folder(patient).resolve()
     file = (root / filename).resolve()
@@ -174,6 +208,8 @@ def check_approval(conn, patient, body):
     open_blocks = report.unresolved_demographics(conn, patient, json.loads(spec_bytes.decode('utf-8-sig')))
     if open_blocks:
         raise ValueError('Report ' + ', '.join(sorted(open_blocks)) + ' differs from the patient record; replace it or keep it as written before sign-off')
+    if report.held_actions(conn, patient):
+        raise ValueError('Held medicine recommendations are unhandled; handle them and rebuild before sign-off')
     import reconciliation
     saved_review = records.get_json(conn, patient['id'], 'reconciliation_review.json') or {}
     current_interview = interview.load(conn, patient)
@@ -193,6 +229,8 @@ def check_approval(conn, patient, body):
         'template_version': detail['template_version'],
         'source_files_sha256': detail['source_files_sha256'],
         'clinical_snapshot_sha256': detail['clinical_snapshot_sha256'],
+        **({'clinical_snapshot_contract': detail['clinical_snapshot_contract']}
+           if 'clinical_snapshot_contract' in detail else {}),
         'reviewer': reviewer.strip(),
         'medicine_review_hash': review_status['source_hash'],
         'clinical_reviewed': True,
@@ -223,8 +261,10 @@ def check_sent(conn, patient):
         raise ValueError('Pathology was edited after sign-off')
     if evidence.get('source_files_sha256') != source_snapshot(conn, patient):
         raise ValueError('Original source files changed after sign-off')
-    if evidence.get('clinical_snapshot_sha256') != clinical_snapshot_hash(conn, patient):
+    if not clinical_snapshot_matches(conn, patient, evidence):
         raise ValueError('Clinical source contract was changed after signing')
+    if legacy_gp_block_changed(conn, patient, evidence):
+        raise ValueError('GP details changed after signing')
     import reconciliation
     current = reconciliation.digest(interview.load(conn, patient))
     if not evidence.get('medicine_review_hash') or current != evidence['medicine_review_hash']:

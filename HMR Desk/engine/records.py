@@ -10,7 +10,7 @@ Rules that keep records safe:
     app's encryption. Export never overwrites an existing file.
 Word, PDF and source-file outputs are not stored here and stay plain files.
 """
-import datetime, hashlib, json, os, re, threading
+import datetime, hashlib, json, os, re, tempfile, threading
 from pathlib import Path
 
 # Patient-folder files that hold patient-specific clinical content. Fixed templates, reference data and the
@@ -20,6 +20,7 @@ RECORD_PATTERNS = (
     r'report_spec(\.ai)?\.json(\.bak)?',
     r'report_spec\.policy\.json',
     r'report_spec\.demographics_ack\.json',
+    r'report_spec\.held_actions\.json',
     r'confirmed_meds\.json',
     r'followup[12]\.json',
     r'pathology_sources\.json',
@@ -159,26 +160,45 @@ def import_folder(conn, patient_id, folder):
     return result
 
 
-def export_folder(conn, patient_id, destination):
-    """Write a plain copy of the patient's records into destination. Never overwrites.
+def _export_one_atomic(target, body):
+    """Publish a completely fsynced export, never clobber or leave a partial target.
 
-    Returns {name: 'written' | 'exists'}. The copy is outside the app's encryption (see EXPORT_NOTE)."""
+    Hard-linking a completed sibling file creates the destination atomically with
+    no-replace semantics on Windows/NTFS and POSIX. Filesystems that do not support
+    hard links fail safely rather than exposing truncated clinical exports.
+    """
+    if target.exists() or target.is_symlink():
+        return 'exists'
+    fd, tmp = tempfile.mkstemp(prefix='.hmr-export-', suffix='.tmp', dir=str(target.parent))
+    try:
+        with os.fdopen(fd, 'wb') as out:
+            out.write(body)
+            out.flush()
+            os.fsync(out.fileno())
+        try:
+            os.link(tmp, target)
+        except FileExistsError:
+            return 'exists'
+        return 'written'
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
+def export_folder(conn, patient_id, destination):
+    """Export plaintext clinical records without overwriting or partial files.
+
+    Returns {name: 'written' | 'exists'}. A failed export raises and is never
+    reported as successfully completed. Destinations require hard-link support.
+    """
     ensure(conn)
     destination = Path(destination)
     destination.mkdir(parents=True, exist_ok=True)
     result = {}
     for name in names(conn, patient_id):
-        target = destination / name
-        try:
-            with open(target, 'xb') as out:
-                out.write(get(conn, patient_id, name))
-                out.flush(); os.fsync(out.fileno())
-            result[name] = 'written'
-        except FileExistsError:
-            result[name] = 'exists'
-    note = destination / EXPORT_NOTE
-    if not note.exists():
-        note.write_text(EXPORT_NOTE_TEXT, encoding='utf-8')
+        body = get(conn, patient_id, name)
+        result[name] = _export_one_atomic(destination / name, body)
+    _export_one_atomic(destination / EXPORT_NOTE, EXPORT_NOTE_TEXT.encode('utf-8'))
     return result
 
 

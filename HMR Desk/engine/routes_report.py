@@ -18,6 +18,14 @@ def handle(conn, method, path, query, body):
         try: result = report.refresh(conn, p, replace)
         except ValueError as exc: conn.rollback(); return 400, {'error': str(exc)}
         conn.commit(); return 200, result
+    match = re.fullmatch(r'/api/patients/(\d+)/report/held-actions', path)
+    if method == 'POST' and match:
+        import report
+        p = conn.execute('SELECT * FROM patients WHERE id=?', (int(match[1]),)).fetchone()
+        if not p: return 404, {'error': 'patient not found'}
+        if not isinstance(body, dict) or set(body) != {'id', 'action'} or body['action'] != 'resolve' or not isinstance(body['id'], str): return 400, {'error': 'invalid body'}
+        try: return 200, report.resolve_held_action(conn, p, body['id'])
+        except ValueError as exc: conn.rollback(); return 400, {'error': str(exc)}
     match = re.fullmatch(r'/api/patients/(\d+)/report/demographics', path)
     if method == 'POST' and match:
         import report

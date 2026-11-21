@@ -262,9 +262,16 @@ def _action(conn, p, body, moved_items):
         db.log(conn, pid, 'note', {'text': body['text']}, 'app')
     elif name == 'update':
         fields = body.get('fields')
-        allowed = {'phone', 'address', 'suburb', 'postcode', 'medicare', 'irn', 'ihi', 'dob', 'sex'}
+        allowed = {'phone', 'address', 'suburb', 'postcode', 'medicare', 'irn', 'ihi', 'dob', 'sex',
+                   'gp', 'clinic', 'gp_provider', 'clinic_address', 'clinic_phone', 'referral_date'}
         if not isinstance(fields, dict) or not fields or not fields.keys() <= allowed or any(v is not None and not isinstance(v, str) for v in fields.values()):
             raise ValueError('invalid fields')
+        if 'referral_date' in fields and fields['referral_date']:
+            try:
+                if __import__('datetime').date.fromisoformat(fields['referral_date']).isoformat() != fields['referral_date']:
+                    raise ValueError('invalid referral date')
+            except ValueError:
+                raise ValueError('Referral date must be YYYY-MM-DD')
         conn.execute('UPDATE patients SET ' + ','.join(k+'=?' for k in fields) + ',updated_at=? WHERE id=?', [*fields.values(), db.now(), pid])
         db.log(conn, pid, 'update', fields, 'app')
     else:
