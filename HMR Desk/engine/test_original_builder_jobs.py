@@ -118,6 +118,11 @@ def test_private_assets_alone_never_override_standalone_default(tmp_path, monkey
     with connection() as conn:
         assert settings.get(conn, 'report_use_original_builder') is False
         patient, saved = _saved_report(conn)
+        prepared = dict(saved, followup_decision='required',
+                        followup='Synthetic plan: review in three months.',
+                        expected_revision=saved['revision'])
+        report.save(conn, patient, prepared)
+        conn.commit()
     monkeypatch.setattr(adapter, 'build_with_assets', lambda *a, **k: pytest.fail('Original builder started despite being off'))
     output = jobs.report_build(patient['id'], pdf=False)
     assert 'original report builder' not in output.lower()
