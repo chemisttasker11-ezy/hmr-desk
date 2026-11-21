@@ -430,6 +430,7 @@ function renderInterview() {
     if (key === 'manages_meds') input = input.replace('<label><span >Other notes', entries(['missed_doses', 'device_technique', 'swallowing']) + '<label><span >Other notes');
     if (key === 'conditions') input += entries(['recent_change']);
     if (key === 'alcohol_smoking') input = input.replace(interviewChoices('alcohol', 'Alcohol', [['yes','Yes'],['no','No'],['unknown','Unknown']]), `<div data-entry-detail="smoking" ${['current','ex'].includes(record.details.smoking) || record.details.smoking_details ? '' : 'hidden'}>${interviewDetailText('smoking_details', 'Smoking details (amount, quit date, vaping)')}</div>` + interviewChoices('alcohol', 'Alcohol', [['yes','Yes'],['no','No'],['unknown','Unknown']]));
+    if (key === 'pathology') input = pathologyLegacyHint() + input;
     return `<section id="section-${key}" class="interview-section"><h2 tabindex="-1">${esc(title)} ${source}</h2>${input}</section>`;
   };
   const sections = interviewSections.map(section);
@@ -501,10 +502,16 @@ function renderInterview() {
     interviewPicker() + `<div class="interview-context"><span class="interview-context-patient" title="${esc(header[0])}">${esc(header[0])}</span><span id="interview-status" role="status">${esc(interviewSaveStatus)}</span><button type="button" data-interview-save>Save</button><div id="interview-outstanding">${interviewOutstanding()}</div></div>${record.details.reason?.trim() ? `<p>Reason for referral: ${esc(record.details.reason)}</p>` : ''}${header[1] ? `<p class="interview-header">${esc(header[1])}</p>` : ''}<div class="interview-layout"><div>${formSections}<div class="actions interview-actions"><button type="button" class="primary" data-interview-record-visit>Record visit</button><button type="button" data-interview-save>Save</button><details class="more-actions"><summary>More actions</summary><div class="actions"><button data-interview-export="docx">Export Word</button><button data-interview-export="pdf">Export PDF</button><button data-interview-export="both">Interview pack</button>${interviewAi ? `<button data-interview-assist title="${esc(interviewAgent)}">Suggest points (AI)</button>` : ''}<button data-interview-folder>Open folder</button></div></details></div><pre id="interview-output" role="status">${esc(interviewOutput)}</pre></div><nav class="interview-index" aria-label="Interview sections"><a href="#section-notes">Back to notes</a>${interviewSections
       .slice(1)
       .map(([key, title]) => `<a href="#section-${key}">${esc(({meds: 'Referral medicines', other_meds: 'Found medicines', not_using_meds: 'Not using', allergies: 'Allergies', manages_meds: 'Managing medicines'})[key] || title)}</a>`)
-      .join('')}</nav></div>`;
+      .join('') + pathologySourcesLink()}</nav></div>`;
   if(typeof refreshEvidenceReferences==='function')refreshEvidenceReferences();
   document.querySelectorAll('.interview-section textarea').forEach(growInterview);
   if (focus) { const el = document.querySelector(`[data-field="${focus.key}"][data-row="${focus.row}"][data-col="${focus.col}"]`); if (el) { el.focus(); el.setSelectionRange(focus.start, focus.end); } }
+}
+function pathologySourcesLink() {
+  return '<a href="#section-pathology-verified" data-interview-jump="pathology-verified">Pathology sources and verified results</a>';
+}
+function pathologyLegacyHint() {
+  return '<p class="field-hint" data-pathology-sources-hint>These are free-text pathology notes. To import a source PDF or record verified results, go to <button type="button" class="link-button" data-interview-jump="pathology-verified">Pathology sources and verified results</button>.</p>';
 }
 async function openConsentDialog() {
   const patientId = interviewId;
