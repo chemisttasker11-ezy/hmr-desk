@@ -790,3 +790,19 @@ main:has(.interview-context) > header { height: 96px; min-height: 96px; }
 .med-result-form{font-size:.95em;background:#eef3f0;border-radius:4px;padding:1px 6px;align-self:flex-start}
 .med-result-count{font-size:.85em;color:#5a6a62}
 .med-lookup-result button:focus-visible{outline:3px solid #b45f06;outline-offset:2px}
+
+/* Medicine row layout: intentional rows that wrap, source (referral) and actual use as two labelled columns. */
+.interview-medicine-main { align-items: flex-start; gap: 8px 14px; }
+.interview-medicine-main > .interview-check { align-self: center; }
+.interview-medicine-main > .med-field { flex: 1 1 240px; min-width: 200px; }
+.interview-medicine-main > .med-field:first-of-type { flex: 3 1 320px; }
+.interview-medicine-main .interview-actual { flex: 1 1 240px; min-width: 200px; display: flex; flex-direction: column; gap: 2px; }
+.interview-medicine-main .interview-actual textarea { width: 100%; box-sizing: border-box; }
+.interview-medicine-main .interview-actual > span:not(.med-field-label) { display: block; }
+.interview-medicine-main .interview-actual select { width: 100%; box-sizing: border-box; }
+.interview-medicine-main .med-lookup { flex: 1 1 100%; }
+.interview-medicine-actions { flex: 1 1 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
+.interview-medicine-actions .interview-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.interview-medicine-main .interview-chips legend, .interview-medicine-actions .interview-chips legend { float: none; margin: 0 4px 0 0; align-self: center; }
+.interview-medicine-actions > button { align-self: center; }
+.med-hint { font-size: .85em; color: #5a6a62; margin: 0 0 4px; }

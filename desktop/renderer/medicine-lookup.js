@@ -98,6 +98,7 @@ async function medicineLookupClick(b) {
     if (!found.installed) { say('No medicine reference data is installed on this PC. Keep typing the name by hand; nothing is lost.'); return true; }
     if (!found.results.length) { say('No match in the reference data. Your typed name stays as written, unlinked and not matched to reference data. Try another spelling if you want a match.'); return true; }
     say('Pick the medicine you mean (reference release ' + found.results[0].release + '). Check strength and form.');
+    { const h = document.createElement('p'); h.className = 'med-hint'; h.textContent = 'Keyboard: Down arrow moves through matches, Enter chooses, Escape returns to the name.'; out.append(h); }
     const choose = (r) => {
       if (page !== 'interview' || interviewId !== patientId || interviewRecord !== record || record[key][i] !== medicine || medicine[0].trim() !== text || !out.isConnected) return;
       interviewRecord[key][i][0] = r.display;
