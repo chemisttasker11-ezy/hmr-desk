@@ -13,7 +13,7 @@ async function dashboard() {
   attentionGroups = data.groups || [];
 
   const filled = attentionGroups.filter((g) => g.items.length), empty = attentionGroups.filter((g) => !g.items.length);
-  $('screen').innerHTML = `<div class="dashboard-grid">${filled.map((group, index) => attentionGroupHtml(group, index === 0)).join('')}${empty.length ? `<section class="card all-clear"><h2>All clear</h2>${empty.map(g => `<p>${esc(attentionEmpty[g.key] || '')}</p>`).join('')}</section>` : ''}</div><p id="attention-status" role="status"></p><div id="detail" class="detail drawer" role="dialog" aria-label="Patient" hidden></div>`;
+  $('screen').innerHTML = `<div class="dashboard-grid">${filled.map((group, index) => attentionGroupHtml(group, index === 0)).join('')}${empty.length ? `<section class="card all-clear"><h2>${filled.length ? 'Nothing due in these areas' : 'All clear'}</h2>${empty.map(g => `<p>${esc(attentionEmpty[g.key] || '')}</p>`).join('')}</section>` : ''}</div><p id="attention-status" role="status"></p><div id="detail" class="detail drawer" role="dialog" aria-label="Patient" hidden></div>`;
 }
 async function dashboardClick(button) {
   if (button.dataset.attentionCancel !== undefined) {
