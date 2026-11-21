@@ -20,6 +20,7 @@ RECORD_PATTERNS = (
     r'report_spec(\.ai)?\.json(\.bak)?',
     r'report_spec\.policy\.json',
     r'report_spec\.demographics_ack\.json',
+    r'report_spec\.held_actions\.json',
     r'confirmed_meds\.json',
     r'followup[12]\.json',
     r'pathology_sources\.json',

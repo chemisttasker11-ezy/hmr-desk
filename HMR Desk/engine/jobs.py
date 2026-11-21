@@ -268,6 +268,8 @@ def report_build(patient_id, pdf=False):
         if data.get('pathology_revision') and data['pathology_revision'] != pathology_records.revision(conn, p):
             raise ValueError('Pathology changed after report preparation; refresh and re-review the report before building')
         if not data['issues']: raise ValueError('add at least one finding')
+        held = report.held_actions(conn, p)
+        if held: raise ValueError('Handle held medicine recommendations before building: ' + str(len(held)))
         pending = report.placeholders(data)
         if pending: raise ValueError('Review placeholder fields: ' + ', '.join(pending))
         unreviewed = report.template_reviews_pending(conn, p, data)
@@ -280,6 +282,7 @@ def report_build(patient_id, pdf=False):
             'pathology_revision': pathology_records.revision(conn, p),
             'source_files_sha256': report_auth.source_snapshot(conn, p),
             'clinical_snapshot_sha256': report_auth.clinical_snapshot_hash(conn, p),
+            'clinical_snapshot_contract': 2,
             'demographics': report.demographic_status(conn, p, data),  # block name -> matches/kept/unresolved, no text
         }
         import interaction_scope
@@ -366,6 +369,7 @@ def report_build(patient_id, pdf=False):
             'report_include_gp_plan': include_gp_plan,
             'source_files_sha256': snapshot['source_files_sha256'],
             'clinical_snapshot_sha256': snapshot['clinical_snapshot_sha256'],
+            'clinical_snapshot_contract': snapshot['clinical_snapshot_contract'],
             'demographics': snapshot['demographics'],
             'pharmacist_identity_sha256': pharmacist_identity.digest(identity),
         }

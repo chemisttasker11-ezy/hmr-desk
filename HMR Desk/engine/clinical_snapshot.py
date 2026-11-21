@@ -13,6 +13,15 @@ import clinical_review
 
 
 SCHEMA_VERSION = 1
+# Digest contract. Absent in build evidence = legacy contract 1, which never digested
+# 'clinic' (pre-PR29 canonical identity was name, dob, gp, referral_date) and could not
+# hold gp_provider, clinic_address or clinic_phone (columns added later), so those three
+# count only when non-empty. 2 digests all four always, so a value added, changed or
+# removed after the build is detected for new reports as well.
+CONTRACT_LEGACY = 1
+CONTRACT_CURRENT = 2
+GP_DETAIL_KEYS = ('clinic', 'gp_provider', 'clinic_address', 'clinic_phone')
+LEGACY_NEW_KEYS = ('gp_provider', 'clinic_address', 'clinic_phone')
 MAX_ITEMS = 120
 
 
@@ -73,7 +82,9 @@ def _medicine_rows(record, section):
 
 
 def canonical(identity, interview_record, pathology, report_spec, referral_source=None,
-              source_hashes=None):
+              source_hashes=None, contract=CONTRACT_CURRENT):
+    if contract not in (CONTRACT_LEGACY, CONTRACT_CURRENT):
+        raise ValueError('Unknown clinical snapshot contract')
     if not isinstance(interview_record, dict) or not isinstance(pathology, dict):
         raise ValueError('Invalid clinical snapshot records')
     if not isinstance(identity, dict) or not isinstance(report_spec, dict):
@@ -126,12 +137,12 @@ def canonical(identity, interview_record, pathology, report_spec, referral_sourc
         'name': _text(identity.get('name','')),
         'dob': _text(identity.get('dob','')),
         'gp': _text(identity.get('gp','')),
-        'clinic': _text(identity.get('clinic','')),
-        'gp_provider': _text(identity.get('gp_provider','')),
-        'clinic_address': _text(identity.get('clinic_address','')),
-        'clinic_phone': _text(identity.get('clinic_phone','')),
         'referral_date': _text(identity.get('referral_date','')),
     }
+    for key in GP_DETAIL_KEYS:
+        value = _text(identity.get(key, ''))
+        if contract == CONTRACT_CURRENT or (key in LEGACY_NEW_KEYS and value):
+            person[key] = value
     if not person['name'].strip():
         raise ValueError('Patient identity is incomplete')
     allergies = _text(interview_record.get('allergies',''))

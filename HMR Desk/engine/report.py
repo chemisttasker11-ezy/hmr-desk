@@ -67,6 +67,7 @@ def load(conn, patient, ai=False):
     if not ai: data = with_trusted_policy(conn, patient, data)
     if not ai: data['followup_text_reviewed'] = manual_defaults.review_valid(data)
     if not ai: data['revision'] = records.revision(conn, patient['id'], 'report_spec.json')
+    if not ai: data['held_medicine_actions'] = held_actions(conn, patient)
     if not ai: data = _expose_template_review(conn, patient, data)
     if not ai: data['demographic_mismatches'] = demographic_mismatches(conn, patient, data)
     if not ai: data['interview_newer'] = 'interview_revision' in data and interview.revision(conn, patient) != data['interview_revision']
@@ -196,7 +197,7 @@ def _save(conn, patient, data):
     if expected is not None and not isinstance(expected, str): raise ValueError('invalid expected_revision')
     data = with_trusted_policy(conn, patient, data)
     validate(data)
-    data = manual_defaults.apply_followup_decision({k: v for k, v in data.items() if k not in ('interview_newer', 'pathology_newer', 'revision', 'expected_revision', 'demographic_mismatches', 'demographic_conflicts', 'medication_recommendations', 'suggestion_context_sha256')})
+    data = manual_defaults.apply_followup_decision({k: v for k, v in data.items() if k not in ('interview_newer', 'pathology_newer', 'revision', 'expected_revision', 'demographic_mismatches', 'demographic_conflicts', 'medication_recommendations', 'held_medicine_actions', 'suggestion_context_sha256')})
     if expected is not None:
         # Compare and write in one write transaction so two saves cannot both pass the check.
         if not conn.in_transaction: conn.execute('BEGIN IMMEDIATE')
@@ -500,6 +501,81 @@ def _carry_forward_unchanged_medicine_recommendations(previous, current):
     return updated, {'retained': carried, 'needs_reentry': previous_recommendations - carried}
 
 
+HELD_MAX_ENTRIES = 1000
+HELD_RECORD = 'report_spec.held_actions.json'  # outside the spec: autosave, builds and the AI projection never touch it
+
+
+def _held_entries(previous, current):
+    """Old medicine rows whose typed Action text did NOT carry forward, with why. Mirrors the exact-match rule."""
+    from collections import Counter
+    def key(row): return tuple(row[:3])
+    old_counts = Counter(key(r) for r in previous); new_counts = Counter(key(r) for r in current)
+    held = []
+    for row in previous:
+        if not row[3].strip(): continue
+        if old_counts[key(row)] == 1 and new_counts[key(row)] == 1: continue
+        reason = 'duplicate' if old_counts[key(row)] > 1 or new_counts[key(row)] > 1 else 'changed_or_removed'
+        held.append(dict(name=row[0], directions=row[1], comment=row[2], action=row[3], reason=reason))
+    return held
+
+
+def _held_id(entry):
+    return hashlib.sha256('\x1f'.join(entry[k] for k in ('name', 'directions', 'comment', 'action')).encode('utf-8')).hexdigest()[:16]
+
+
+def _hold_actions(conn, patient, held):
+    """Add to the append-only held list in the caller's transaction (the report save commits both together)."""
+    store = _held_store(conn, patient)  # read first: a refresh never runs on top of a held record it cannot read
+    if not held: return
+    entries = list(store['entries']) if store else []
+    by_id = {e['id']: e for e in entries}
+    for entry in held:
+        eid = _held_id(entry)
+        if eid in by_id: by_id[eid].update(reason=entry['reason'], resolved=False)
+        else:
+            by_id[eid] = dict(entry, id=eid, resolved=False); entries.append(by_id[eid])
+    if len(entries) > HELD_MAX_ENTRIES: raise ValueError('Too many held medicine recommendations; handle some before refreshing again')  # refuse, never drop text
+    records.put_json(conn, patient['id'], HELD_RECORD, {'version': 1, 'entries': entries})
+
+
+def _held_store(conn, patient):
+    """The held record, strictly. Missing is empty. Present but unreadable or malformed raises, so build and sign-off fail closed."""
+    try: store = records.get_json(conn, patient['id'], HELD_RECORD)
+    except ValueError: store = False  # undecodable bytes or JSON
+    if store is None: return None
+    ok = (isinstance(store, dict) and set(store) == {'version', 'entries'} and type(store['version']) is int and store['version'] == 1 and
+          isinstance(store['entries'], list) and len(store['entries']) <= HELD_MAX_ENTRIES)
+    if ok:
+        ids = set()
+        for e in store['entries']:
+            ok = (isinstance(e, dict) and set(e) == {'id', 'name', 'directions', 'comment', 'action', 'reason', 'resolved'} and
+                  all(isinstance(e[k], str) for k in ('id', 'name', 'directions', 'comment', 'action', 'reason')) and
+                  type(e['resolved']) is bool and e['reason'] in ('duplicate', 'changed_or_removed') and e['action'].strip() != '' and
+                  e['id'] == _held_id(e) and e['id'] not in ids)  # id is the hash of the content, so a damaged or duplicated entry is refused
+            if not ok: break
+            ids.add(e['id'])
+    if not ok: raise ValueError('Held medicine recommendations could not be read; do not build or sign off until they are checked')
+    return store
+
+
+def held_actions(conn, patient):
+    store = _held_store(conn, patient)
+    return [e for e in store['entries'] if not e['resolved']] if store else []
+
+
+def resolve_held_action(conn, patient, entry_id):
+    """The pharmacist has dealt with it. The text stays in the record, only hidden from the list."""
+    with _lock:
+        store = _held_store(conn, patient)
+        match = [e for e in store['entries'] if e['id'] == entry_id and not e['resolved']] if store else []
+        if not match: raise ValueError('held recommendation not found')
+        match[0]['resolved'] = True
+        records.put_json(conn, patient['id'], HELD_RECORD, store)
+        db.log(conn, patient['id'], 'report_held_action_resolved', {}, 'api')  # no text
+        conn.commit()
+        return load(conn, patient)
+
+
 def _refresh(conn, patient, replace=()):
     data = records.get_json(conn, patient['id'], 'report_spec.json')
     if data is None: raise ValueError('report spec does not exist')
@@ -510,7 +586,9 @@ def _refresh(conn, patient, replace=()):
     # Keep pharmacist-authored recommendation text ONLY where all three source
     # fields match exactly and the medicine row is unique in both versions.
     # Changed/ambiguous rows require a fresh clinician review rather than guessed mapping.
+    held = _held_entries(data['meds'], derived['meds'])
     derived['meds'], medicine_refresh = _carry_forward_unchanged_medicine_recommendations(data['meds'], derived['meds'])
+    _hold_actions(conn, patient, held)  # same transaction as the save below
     folder = jobs.patient_folder(patient)
     stored = Path(str(data.get('out') or ''))
     if stored.name and (not stored.is_absolute() or stored.parent.resolve() != folder):
