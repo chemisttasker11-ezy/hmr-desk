@@ -108,7 +108,7 @@ def pair_table(words, page_height=None):
     # Words of one table row can sit a point or two apart vertically, so left and right cells are matched by y, not by line.
     left = _lines([w for _, l, _ in cells for w in l]); right = _lines([w for _, _, r in cells for w in r])
     if not left or not right: return _fail('one column empty', split)
-    rows = []; src = []; row_of_right = {}
+    rows = []; src = []; row_of_right = {}; row_words = []
     r_used = set(); last_left = -1e9
     for ly, _, lws in left:
         lt = _text(lws); previous = last_left; last_left = ly
@@ -116,17 +116,17 @@ def pair_table(words, page_height=None):
         if len(hits) > 1: return _fail('two direction lines on one row', split)
         if hits and not lt[:1].islower():
             rt = _text(right[hits[0]][2])
-            r_used.add(hits[0]); rows.append([lt, rt]); src.append([lt, rt]); row_of_right[hits[0]] = len(rows) - 1
+            r_used.add(hits[0]); rows.append([lt, rt]); src.append([lt, rt]); row_words.append(list(lws) + list(right[hits[0]][2])); row_of_right[hits[0]] = len(rows) - 1
         elif hits:           # lowercase left text beside a right line: both are continuations
             if not rows: return _fail('continuation before the first row', split)
             rt = _text(right[hits[0]][2])
-            r_used.add(hits[0]); rows[-1][0] += ' ' + lt; rows[-1][1] = (rows[-1][1] + ' ' + rt).strip(); src[-1] += [lt, rt]; row_of_right[hits[0]] = len(rows) - 1
+            r_used.add(hits[0]); rows[-1][0] += ' ' + lt; rows[-1][1] = (rows[-1][1] + ' ' + rt).strip(); src[-1] += [lt, rt]; row_words[-1] += list(lws) + list(right[hits[0]][2]); row_of_right[hits[0]] = len(rows) - 1
         elif referral.STRENGTH.search(lt) and not lt[:1].islower():
             return _fail('a left line looks like a new medicine but has no direction beside it (y=%d)' % round(ly), split)
         else:
             if not rows: return _fail('name text before the first row', split)
             if ly - previous > 2.2 * height: return _fail('name text far from any row (y=%d)' % round(ly), split)
-            rows[-1][0] += ' ' + lt; src[-1].append(lt)
+            rows[-1][0] += ' ' + lt; src[-1].append(lt); row_words[-1] += list(lws)
     for i, (ry, _, rws) in enumerate(right):
         if i in r_used: continue
         if not rows: return _fail('direction text above the first row', split)
@@ -134,12 +134,13 @@ def pair_table(words, page_height=None):
         if not above: return _fail('direction text above the first row', split)
         owner = max(above, key=lambda k: right[k][0])
         if ry - right[owner][0] > 2.2 * height: return _fail('direction text far from any row (y=%d)' % round(ry), split)
-        idx = row_of_right[owner]; rows[idx][1] += ' ' + _text(rws); src[idx].append(_text(rws)); row_of_right[i] = idx; r_used.add(i)
+        idx = row_of_right[owner]; rows[idx][1] += ' ' + _text(rws); src[idx].append(_text(rws)); row_words[idx] += list(rws); row_of_right[i] = idx; r_used.add(i)
     used = sorted(t for r in rows for t in ' '.join(r).split()) + sorted(t for e in excluded for t in e.split())
     if sorted(used) != sorted(w[4] for w in region):
         return _fail('some words on the page were not placed in a row or reported as excluded', split)
     flags = ['row %d name has no recognisable strength' % (i + 1) for i, r in enumerate(rows) if not referral.STRENGTH.search(r[0])]
-    return {'ok': True, 'reason': '', 'split_x': split, 'rows': rows, 'source_lines': src, 'excluded': excluded, 'flags': flags}
+    return {'ok': True, 'reason': '', 'split_x': split, 'rows': rows, 'source_lines': src, 'excluded': excluded, 'flags': flags,
+            'row_boxes': [[min(w[0] for w in ws), min(w[1] for w in ws), max(w[2] for w in ws), max(w[3] for w in ws)] for ws in row_words]}
 
 
 def pair_document(pages):

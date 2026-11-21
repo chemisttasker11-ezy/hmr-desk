@@ -98,10 +98,18 @@ def valid_prefill_proposal(p):
         if not isinstance(c[k], str) or len(c[k]) > 400: return False
     return all(c[k] for k in ('source', 'code', 'display', 'release'))
 
+def valid_location(loc):
+    # Where the row sat on the referral page when it was read, in PDF points, plus the hash of that exact PDF.
+    if not isinstance(loc, dict) or set(loc) != {'page', 'box', 'pdf_sha256'}: return False
+    box = loc['box']
+    return (type(loc['page']) is int and 1 <= loc['page'] <= 500 and isinstance(loc['pdf_sha256'], str) and re.fullmatch('[a-f0-9]{64}', loc['pdf_sha256']) is not None
+            and isinstance(box, list) and len(box) == 4 and all(type(v) in (int, float) and -1e5 < v < 1e5 for v in box) and box[0] < box[2] and box[1] < box[3])
+
 def valid_use(m, base, optional):
     if 'source_evidence' in m:
         evidence = m['source_evidence']
-        if not isinstance(evidence, dict) or set(evidence) != {'kind', 'lines', 'page_candidates', 'text_sha256'}: return False
+        if not isinstance(evidence, dict) or set(evidence) - {'location'} != {'kind', 'lines', 'page_candidates', 'text_sha256'}: return False
+        if 'location' in evidence and not valid_location(evidence['location']): return False
         if evidence['kind'] != 'referral_text' or not isinstance(evidence['text_sha256'], str) or not re.fullmatch('[a-f0-9]{64}', evidence['text_sha256']): return False
         lines, pages = evidence['lines'], evidence['page_candidates']
         if not isinstance(lines, list) or not 1 <= len(lines) <= 80 or any(not isinstance(line, str) or len(line) > 20000 for line in lines): return False
@@ -141,6 +149,7 @@ def geometry_table(folder):
             scanned = [n + 1 for n, page in enumerate(doc) if referral_geometry.image_coverage(page) >= 0.5]
         result = referral_geometry.pair_document(pages)
         result['scanned_pages'] = scanned
+        result['pdf_sha256'] = hashlib.sha256(files[0].read_bytes()).hexdigest()
         return result
     except Exception:
         return None
@@ -186,6 +195,8 @@ def apply_geometry(found, geo):
         notes.append('Medicines table read by page position replaced the text-order read. Text-order read was: ' + '; '.join((a + ' | ' + b).strip(' |') for a, b in text_rows)[:3000])
     found['meds'] = [(a, b) for a, b in rows]
     found['medicine_source_lines'] = geo['source_lines']
+    if len(geo.get('row_boxes', [])) == len(rows) and isinstance(geo.get('page'), int) and re.fullmatch('[a-f0-9]{64}', geo.get('pdf_sha256', '')):
+        found['medicine_locations'] = [{'page': geo['page'], 'box': [round(float(v), 1) for v in box], 'pdf_sha256': geo['pdf_sha256']} for box in geo['row_boxes']]
     found['unattributed_directions'] = []
     found['unparsed'] = [k for k in found.get('unparsed', []) if k != 'meds']
     if geo['excluded']:
@@ -268,12 +279,14 @@ def blank(conn, patient):
         # Attach only rows actually derived from this referral, not an older spec.
         if stored_spec is None and not spec.is_file():
             pages = [page.splitlines() for page in text.split('\f')]
-            for meta, lines in zip(record['details']['meds'], found.get('medicine_source_lines', [])):
+            locations = found.get('medicine_locations', [])
+            for n, (meta, lines) in enumerate(zip(record['details']['meds'], found.get('medicine_source_lines', []))):
                 meta['source_evidence'] = {
                     'kind': 'referral_text', 'lines': lines,
                     'page_candidates': [[n + 1 for n, page in enumerate(pages) if any(raw.strip() == line.strip() for raw in page)] for line in lines],
                     'text_sha256': hashlib.sha256(text.encode('utf-8')).hexdigest(),
                 }
+                if n < len(locations): meta['source_evidence']['location'] = locations[n]
 
     # Clinical fields entered at intake are not automatically promoted unless
     # a named pharmacist confirmed them against an exact original PDF page.

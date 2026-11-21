@@ -21,7 +21,7 @@ function interviewLookupControls(key, meta, i) {
   const ref = meta && meta.reference, esc = H.esc;
   const linked = ref ? `<span class="med-ref">Linked: ${esc(ref.display)} (${ref.source === 'pbs' ? 'PBS' : esc(ref.source.toUpperCase()) + ' ' + esc(ref.code)}, release ${esc(ref.release)}) <button type="button" data-med-unlink="${esc(key)}" data-row="${i}">Unlink</button></span>` : '';
   const evidence = meta?.source_evidence;
-  const original = evidence ? `<details class="med-source"><summary>Extracted referral text (not current use)</summary>${evidence.lines.map((line,n)=>`<p>${esc(line)} <small>${evidence.page_candidates[n].length === 1 ? `Text located on page ${evidence.page_candidates[n][0]}` : evidence.page_candidates[n].length ? `Page candidates: ${evidence.page_candidates[n].join(', ')}` : 'Page not established'}</small></p>`).join('')}</details>` : '';
+  const original = evidence ? `<details class="med-source"><summary>Extracted referral text (not current use)</summary>${evidence.lines.map((line,n)=>`<p>${esc(line)} <small>${evidence.page_candidates[n].length === 1 ? `Text located on page ${evidence.page_candidates[n][0]}` : evidence.page_candidates[n].length ? `Page candidates: ${evidence.page_candidates[n].join(', ')}` : 'Page not established'}</small></p>`).join('')}<button type="button" data-med-page-image="${esc(key)}" data-row="${i}">Show page image for this row</button><div class="med-page-image" role="status"></div></details>` : '';
   const proposal = medicineSuggestions.get(meta);
   const suggestions = !ref && proposal ? `<div class="medicine-proposals"><p>${esc(({exact_candidate:'Exact displayed-text candidate, not confirmed. Check strength, form and release type.',ambiguous:'More than one exact text candidate. Choose only after reviewing the original.',review_candidates:'Possible matches only. OCR or product details differ; do not guess.',unmatched:'No catalogue candidate. Keep the source/free text and review it.',unavailable:'Medicine reference unavailable. Free text still works.'})[proposal.state] || 'Review medicine candidates.')}${proposal.prepared==='intake' ? ' Prepared at intake from the referral text; the catalogue entry was re-checked when this interview opened.' : ''}${proposal.truncated ? ' More candidates exist; use manual lookup to narrow.' : ''}</p>${medicineProposalLines(proposal).map(g=>`<div class="med-lookup-result"><span>${esc(g.label)}${g.generic_name ? ` | Modelled generic: ${esc(g.generic_name)}` : ''}${g.count>1 ? ` (${g.count} matching entries combined)` : ''} | release ${esc(g.release)}</span><button type="button" data-med-suggestion="${esc(key)}" data-row="${i}" data-candidate="${g.index}">Use this</button></div>`).join('')}</div>` : '';
   return `<div class="med-lookup">${original}${suggestions}<button type="button" data-med-lookup="${esc(key)}" data-row="${i}">Look up medicine</button>${linked}<div class="med-lookup-results" data-med-results="${esc(key)}-${i}" role="status"></div></div>`;
@@ -46,6 +46,27 @@ function medicineNameEdited(key, i, element) {
 // so a name such as "Suvorexant 20 mg tablet (Belsomra)" was rejected before it reached the engine.
 const medicineQuery = (text) => encodeURIComponent(text).replace(/[!~*'()]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase());
 async function medicineLookupClick(b) {
+  if (b.dataset.medPageImage !== undefined) {
+    const meta = interviewRecord.details[b.dataset.medPageImage]?.[Number(b.dataset.row)], box = b.parentElement.querySelector('.med-page-image');
+    if (!meta?.source_evidence || !box) return true;
+    const patient = interviewId, record = interviewRecord;
+    box.replaceChildren(Object.assign(document.createElement('p'), {textContent: 'Loading page image...'}));
+    let result;
+    try { result = await hmr.api('POST', `/api/patients/${patient}/interview/medicine-row-image`, {source_evidence: meta.source_evidence}); }
+    catch { result = {kind: 'none', note: 'The page image could not be produced. Open the original PDF and compare by eye.'}; }
+    if (page !== 'interview' || interviewId !== patient || interviewRecord !== record || !box.isConnected) return true;
+    const nodes = [];
+    if (result.kind === 'row' || result.kind === 'page') {
+      const img = document.createElement('img');
+      img.src = `data:image/png;base64,${result.png}`;
+      img.alt = result.kind === 'row' ? `Referral page ${result.page}, region this row was read from` : `Referral page ${result.page}`;
+      img.className = result.kind === 'row' ? 'med-row-image' : 'med-whole-page-image';
+      nodes.push(img);
+    }
+    nodes.push(Object.assign(document.createElement('p'), {textContent: String(result.note || '')}));
+    box.replaceChildren(...nodes);
+    return true;
+  }
   if (b.dataset.medSuggestion !== undefined) {
     const key=b.dataset.medSuggestion, i=Number(b.dataset.row), meta=interviewRecord.details[key]?.[i];
     const proposal=medicineSuggestions.get(meta), candidate=proposal?.candidates[Number(b.dataset.candidate)];
@@ -99,7 +120,7 @@ async function medicineLookupClick(b) {
   } catch (error) { say('Lookup failed: ' + errorText(error) + '. Type the name by hand.'); }
   return true;
 }
-document.addEventListener('click', (e) => { const b = e.target.closest && e.target.closest('[data-med-lookup], [data-med-unlink], [data-med-suggestion]'); if (b) medicineLookupClick(b); });
+document.addEventListener('click', (e) => { const b = e.target.closest && e.target.closest('[data-med-lookup], [data-med-unlink], [data-med-suggestion], [data-med-page-image]'); if (b) medicineLookupClick(b); });
 
 
 async function medicinePrefillSuggestions() {
