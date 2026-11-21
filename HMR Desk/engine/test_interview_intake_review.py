@@ -271,7 +271,7 @@ def test_real_intake_four_medicine_source_to_saved_interview(tmp_path, monkeypat
             'conditions': '', 'allergies': '', 'observations': '',
         }
         # The real intake UI submits only the documented identity-field keys.
-        fields = {key: value for key, value in item['fields'].items()
+        fields = {key: str(value or '') for key, value in item['fields'].items()
                   if key in referral_entry.FIELDS}
         fields['name'] = 'Synthetic Example'
         pid = referral_entry.commit(
