@@ -302,7 +302,7 @@ const H = (() => {
       <section class="panel-section" data-results-interactions><h3>Interactions</h3>
         <p role="status" data-results-evidence="${esc(inter.evidence_state)}">${esc(evidence[inter.evidence_state] || 'Interaction status unknown.')}</p>
         ${files ? `<ul>${files}</ul>` : '<p class="muted">No interaction results saved.</p>'}
-        <p class="muted" data-results-basis="interactions">${esc(basis[inter.report] || basis.unknown)}</p>
+        <p class="muted" data-results-basis="interactions">Report record: ${esc((basis[inter.report] || basis.unknown).replace("results now on file", "interaction files now on file"))} This describes the report, not the medicine list. Whether the result matches the current confirmed medicines is the line above. A report built from a result that is not current is not an all-clear.</p>
         <div class="actions"><button type="button" data-results-run-interactions="${id}">Run interactions again</button></div>
       </section>
       <p class="muted">${esc(r.note || '')}</p></div>`;

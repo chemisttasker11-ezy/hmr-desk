@@ -16,6 +16,8 @@ test('results view shows rows, honest basis wording and both repeat buttons', ()
   assert.match(html, /changed after the report was built/);
   assert.match(html, /whole saved pathology record/);
   assert.match(html, /no current result/);
+  assert.match(html, /describes the report, not the medicine list/);
+  assert.match(html, /not an all-clear/);
   assert.match(html, /data-results-recheck-pathology="7"/);
   assert.match(html, /data-results-run-interactions="7"/);
   assert.doesNotMatch(html, /approved|signed off by/i);

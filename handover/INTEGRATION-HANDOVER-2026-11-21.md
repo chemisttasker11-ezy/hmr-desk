@@ -200,3 +200,5 @@ Implemented in source (Linux tests only, not Windows-run, not clinically accepte
 Evidence at this stage: engine plain pytest 912 passed, 1 skipped (baseline 905 plus 7 new); desktop node 507 passed, 1 skipped, 0 failed (508 tests). Visual: headless Chrome render of the results markup with the app stylesheet inspected (content, table, buttons legible; the tab strip in that image is a test harness, not the real layout). Not verified: the real Electron window, the buttons' click path, Windows.
 
 Unverified: whether the online-later flow works in the installed app; whether report build/sign-off should hard-gate on stale interactions (Es's answer pending, no gate written).
+
+Wording note: the Interactions section separates "does the saved result match the current confirmed medicine list" from "which result the built report used"; the second line states it is report provenance and not an all-clear. The 2025 date in the screenshot came from a wrong epoch in the render fixture; the app shows the real file modified time.
