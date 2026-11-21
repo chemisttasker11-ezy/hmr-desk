@@ -232,3 +232,16 @@ def test_route_resolve_validates_body_and_patient(tmp_path, monkeypatch):
         status, body = routes_report.handle(conn, 'POST', path, {}, {'id': eid, 'action': 'resolve'})
         assert status == 200 and body['held_medicine_actions'] == []
         assert routes_report.handle(conn, 'POST', path, {}, {'id': eid, 'action': 'resolve'})[0] == 400
+
+
+def test_unresolved_held_recommendation_blocks_the_original_builder_route_too(tmp_path, monkeypatch):
+    """Integration check: the held-Action gate sits before either renderer, so opting in to the original Word builder cannot bypass it."""
+    import jobs, pytest, settings, original_builder_adapter as adapter
+    connection = _setup(tmp_path, monkeypatch)
+    with connection() as conn:
+        patient = _hold_one(conn)
+        settings.update(conn, {'report_use_original_builder': True})
+        conn.commit()
+    monkeypatch.setattr(adapter, 'run_worker', lambda *a, **k: pytest.fail('original builder ran with an unresolved held recommendation'))
+    with pytest.raises(ValueError, match='Handle held medicine recommendations'):
+        jobs.report_build(patient['id'])

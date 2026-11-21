@@ -143,3 +143,28 @@ def test_original_builder_enabled_without_assets_fails_explicitly(tmp_path, monk
     assert not adapter.assets_present(db.DATA_DIR)
     with pytest.raises(ValueError, match='private assets are unavailable'):
         jobs.report_build(patient['id'], pdf=False)
+
+
+def test_original_builder_refuses_when_gp_plan_column_is_on_and_builds_nothing(tmp_path, monkeypatch):
+    """The original Word template cannot honour the optional GP Plan column: refuse visibly, never ignore the setting."""
+    connection, patient = _ready(tmp_path, monkeypatch)
+    import settings
+    with connection() as conn:
+        settings.update(conn, {'report_include_gp_plan': True})
+        conn.commit()
+    monkeypatch.setattr(adapter, 'run_worker', lambda *a, **k: pytest.fail('original builder ran despite GP Plan setting'))
+    with pytest.raises(ValueError, match='GP Plan'):
+        jobs.report_build(patient['id'], pdf=False)
+    assert not list(jobs.patient_folder(patient).glob('*.docx'))
+
+
+def test_standalone_renderer_stays_default_when_assets_exist_and_gp_plan_is_on(tmp_path, monkeypatch):
+    connection, patient = _ready(tmp_path, monkeypatch)
+    import settings
+    with connection() as conn:
+        settings.update(conn, {'report_use_original_builder': False, 'report_include_gp_plan': True})
+        conn.commit()
+    monkeypatch.setattr(adapter, 'run_worker', lambda *a, **k: pytest.fail('original builder used without opt-in'))
+    out = jobs.report_build(patient['id'], pdf=False)
+    assert 'original report builder' not in out
+    assert _last(connection, patient['id'])['report_include_gp_plan'] is True
