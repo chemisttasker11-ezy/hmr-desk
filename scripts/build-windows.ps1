@@ -3,6 +3,12 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 if (-not (Test-Path '.venv\\Scripts\\python.exe')) { py -3.12 -m venv .venv }
+# Optional licensed portal generators are not in the repository. A missing one is reported here and the build continues:
+# the packaged app then says so in the eMIMS and claims views, and the manual workflow stays available.
+foreach ($helper in @('MIMS Interaction Helper\make-lists.py', 'PPA Claim Helper\make-claims.py', 'PPA Claim Helper\record_report.py')) {
+  if (-not (Test-Path (Join-Path $root $helper))) { Write-Warning "Optional helper not found, this build has no automated portal list for it: $helper" }
+}
+
 & '.venv\\Scripts\\python.exe' -m pip install -r requirements-build.txt
 if ($LASTEXITCODE -ne 0) { throw 'Python dependencies failed' }
 Set-Location (Join-Path $root 'HMR Desk\\engine')

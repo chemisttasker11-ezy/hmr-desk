@@ -49,6 +49,12 @@ from medicine_review import (report_data, proposal, interview_usage, conflicting
                              same_name_as_stopped, current_medicine_snapshot, confirmed_medicines_current)
 
 
+HELPER_MISSING = {
+    'mims': 'The eMIMS list helper is not installed in this build, so no interaction lists can be prepared here. Medicines can still be confirmed and the interaction check documented manually.',
+    'ppa': 'The PPA claim helper is not installed in this build, so no claim rows can be prepared here. Reports and records work without it.',
+}
+
+
 def mims_lists(conn):
     if not MIMS_PATH.is_file(): return []  # licensed portal integration unavailable
     result = []
@@ -156,9 +162,13 @@ def handle(conn, method, path, query, body):
         routed = routes_work.handle(conn, method, path, query, body)
         if routed is not None: return routed
         if method == 'GET' and path == '/api/mims/lists':
-            return 200, {'lists': mims_lists(conn)}
+            out = {'lists': mims_lists(conn), 'helper_available': MIMS_PATH.is_file()}
+            if not out['helper_available']: out['message'] = HELPER_MISSING['mims']  # existing consumers read 'lists' only
+            return 200, out
         if method == 'GET' and path == '/api/claims':
-            return 200, {'claims': claim_list(conn)}
+            out = {'claims': claim_list(conn), 'helper_available': bool(claims_helper and record)}
+            if not out['helper_available']: out['message'] = HELPER_MISSING['ppa']
+            return 200, out
         routed = routes_patients.handle_list(conn, method, path, query, body)
         if routed is not None: return routed
         routed = routes_reference.handle(conn, method, path, query, body)

@@ -20,3 +20,18 @@ def test_offline_medicine_names_do_not_claim_therapeutic_equivalence():
 def test_new_installation_has_no_unlicensed_agent_or_external_dev_paths():
     data = agents.defaults()
     assert data == {'default': '', 'per_step': {}, 'agents': []}
+
+
+def test_missing_helpers_are_reported_plainly_and_keep_the_existing_response_keys(tmp_path, monkeypatch):
+    import db
+    monkeypatch.setattr(db, 'BASE', str(tmp_path)); monkeypatch.setattr(db, 'DATA_DIR', str(tmp_path))
+    conn = db.connect(str(tmp_path / 'h.db'))
+    try:
+        status, lists = api.handle(conn, 'GET', '/api/mims/lists', {}, None)
+        assert status == 200 and lists['lists'] == [] and lists['helper_available'] is False and 'not installed' in lists['message']
+        status, claims = api.handle(conn, 'GET', '/api/claims', {}, None)
+        assert status == 200 and claims['claims'] == [] and claims['helper_available'] is False and 'not installed' in claims['message']
+        monkeypatch.setattr(api, 'MIMS_PATH', __import__('pathlib').Path(__file__))
+        assert 'message' not in api.handle(conn, 'GET', '/api/mims/lists', {}, None)[1]
+    finally:
+        conn.close()
