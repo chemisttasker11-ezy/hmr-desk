@@ -101,7 +101,7 @@ def ai_off(name, conn):
     key = {'interview_assist': 'ai_interview_assist', 'report_draft': 'ai_report_assist', 'report_assist': 'ai_report_assist'}.get(name)
     return bool(key and conn and not settings.get(conn, key))
 
-def ready(name, conn, p):
+def ready(name, conn, p, repeat=False):
     if ai_off(name, conn): return (False, 'AI assist is off in Settings')
     if name in ('interview_assist', 'report_draft', 'report_assist') and conn and not settings.get(conn, 'clinical_ai_privacy_ack'):
         return (False, 'Clinical AI privacy approval required in Settings')
@@ -109,7 +109,7 @@ def ready(name, conn, p):
         return (False, 'Use New referrals to review PDFs before adding patients')
     if name in ('register_xlsx', 'sheet_sync', 'import_history', 'import_history_apply'): return (True, '')
     if p is None: return (False, 'patient required')
-    if done(name, conn, p) and name not in REPEATABLE: return (False, 'already done')
+    if not repeat and done(name, conn, p) and name not in REPEATABLE: return (False, 'already done')
     if name == 'pathology':
         if p['state'] not in PRE and not pathology_recheck_pending(conn, p): return (False, 'patient is not scheduled')
         if not folder(p): return (False, 'patient folder missing')

@@ -29,6 +29,7 @@ def _digest(data):
 
 _ASSETS = {}
 _RECORD = {}
+_SAVED = {}
 
 
 @contextlib.contextmanager
@@ -53,9 +54,19 @@ def _templates():
         (templates / 'approved-hmr.json').write_text(json.dumps(
             {'version': 'synthetic-test', 'sha256': thash, 'approved_by': 'Synthetic QA', 'approved_on': '2026-11-16'}))
         _ASSETS.update(root=root, templates=templates, thash=thash)
+    _SAVED.setdefault('app_assets', jobs.APP_ASSETS)
+    _SAVED.setdefault('active_template_root', template_report_builder.active_template_root)
     jobs.APP_ASSETS = _ASSETS['root']
     template_report_builder.active_template_root = lambda: _ASSETS['templates']
     return _ASSETS['thash']
+
+
+def restore():
+    """Undo the process-wide template/asset overrides `approve()` installs, so a later test in the same pytest
+    process sees the real lookups. A no-op if `approve()` was never called. Validation itself is untouched."""
+    if _SAVED:
+        jobs.APP_ASSETS = _SAVED.pop('app_assets')
+        template_report_builder.active_template_root = _SAVED.pop('active_template_root')
 
 
 def approve(conn, pid, name='HMR Synthetic'):

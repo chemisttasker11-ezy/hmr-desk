@@ -552,8 +552,22 @@ def enqueue(conn, name, patient_id=None, flow=False, fmt='docx'):
     _wakeup.set()
     return task_id
 
+READINESS_JOBS = ('report_start', 'report_build')
+
+def check_report_ready(name, conn, patient_id):
+    """report_start and report_build are not allowed to run just because a caller asked. They need the same server-side
+    readiness as the Run queue: visit recorded, medicines confirmed and current, interaction check on file (start); patient
+    awaiting report, spec present, at least one finding (build). A deliberate rebuild stays possible (repeat=True skips only
+    the 'already built' answer); an existing report spec still refuses report_start."""
+    if name not in READINESS_JOBS: return
+    import steps
+    p = conn.execute('SELECT * FROM patients WHERE id=?', (patient_id,)).fetchone()
+    ok, reason = steps.ready(name, conn, p, repeat=(name == 'report_build'))
+    if not ok: raise ValueError(reason)
+
 def start(name, patient_id=None, conn=None, fmt='docx'):
     if fmt not in ('docx', 'pdf', 'both') or (fmt != 'docx' and name not in ('interview_pack', 'interview_sheet', 'report_build')): raise ValueError('invalid format')
+    if name == 'report_build' and fmt == 'both': raise ValueError("report_build does not support format 'both'. Use 'pdf' for the Word report plus its PDF, or 'docx' for the Word report only.")
     if not isinstance(name, str) or name not in JOBS: raise ValueError('unknown job name')
     patient_jobs = ('interview_sheet', 'interview_pack', 'interview_assist', 'report_extract', 'report_start', 'report_assist', 'report_build', 'report_draft')
     if name in patient_jobs and (not isinstance(patient_id, int) or isinstance(patient_id, bool)): raise ValueError(name + ' needs patient_id')
@@ -564,6 +578,7 @@ def start(name, patient_id=None, conn=None, fmt='docx'):
         if patient_id is not None and not conn.execute('SELECT 1 FROM patients WHERE id=?', (patient_id,)).fetchone(): raise ValueError('patient not found')
         import steps
         if steps.ai_off(name, conn): raise ValueError('AI assist is off in Settings')
+        check_report_ready(name, conn, patient_id)
         task_id = enqueue(conn, name, patient_id, fmt=fmt)
         if not task_id: raise ValueError('task already queued, running or waiting')
         ensure_worker()
@@ -616,6 +631,7 @@ def _work():
                 if browser: continue
                 try:
                     if steps.ai_off(row['step'], conn): raise ValueError('AI assist is off in Settings')
+                    check_report_ready(row['step'], conn, row['patient_id'])
                     output = (JOBS[row['step']](row['patient_id'], row['format']) if row['step'] in ('interview_pack', 'interview_sheet') else JOBS[row['step']](row['patient_id'], row['format'] == 'pdf') if row['step'] == 'report_build' else JOBS[row['step']](row['patient_id'])) or ''
                     state = 'done'
                 except Exception as exc:

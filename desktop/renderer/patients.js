@@ -524,6 +524,13 @@ async function showPatient(id, action, background = false) {
   }
   if (action === 'offer_new') { selectPatientTab('Conversation'); $('offer-section')?.scrollIntoView?.(); }
   if (action && (availableActions(p, milestones).includes(action) || action === 'expired' || action.endsWith('_claimed'))) openForm(action, p);
+  else if (action && action !== 'offer_new' && $('action-area')) {
+    // A requested step that the patient's current stage does not offer must say so, not open nothing. The stage rule is unchanged.
+    const label = (typeof actionLabels !== 'undefined' && actionLabels[action]) || action.replace(/_/g, ' ');
+    const where = p.stage ? ` (current stage: ${p.stage})` : '';
+    $('action-area').innerHTML = `<p class="notice" id="action-unavailable" role="alert" tabindex="-1">${esc(label)} is not available for this patient yet${esc(where)}. Complete the earlier step first, for example booking the visit, then try again.</p>`;
+    $('action-area').scrollIntoView?.();
+  }
   return true;
 }
 function openForm(action, patient) {
