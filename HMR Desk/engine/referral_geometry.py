@@ -36,56 +36,95 @@ def medicine_region(words):
     return [w for _, _, ws in lines[start + 1:end] for w in ws]
 
 
-def split_columns(words, min_gap=10.0):
-    """Widest vertical channel that no word crosses (word extents, not word starts), with words on both sides."""
-    spans = sorted((w[0], w[2]) for w in words)
-    best = None; reach = spans[0][1] if spans else 0
-    for x0, x1 in spans[1:]:
-        if x0 - reach >= min_gap and (best is None or x0 - reach > best[1] - best[0]):
-            left = sum(1 for w in words if w[2] <= reach + 0.01); right = sum(1 for w in words if w[0] >= x0 - 0.01)
-            if left >= 3 and right >= 3: best = (reach, x0)
-        reach = max(reach, x1)
-    return None if best is None else (best[0] + best[1]) / 2
+def _crosses(line, x): return any(w[0] < x < w[2] for w in line[2])
+
+
+def split_columns(lines, min_gap=10.0):
+    """Widest vertical channel that at most a tenth of the lines cross (word extents, not word starts). Returns (x, crossing lines)."""
+    words = [w for l in lines for w in l[2]]
+    if not words: return None
+    lo, hi = int(min(w[0] for w in words)), int(max(w[2] for w in words)) + 1
+    allowed = len(lines) // 10
+    runs = []; start = None
+    for x in range(lo, hi + 1):
+        free = sum(1 for l in lines if _crosses(l, x)) <= allowed
+        if free and start is None: start = x
+        if (not free or x == hi) and start is not None:
+            runs.append((start, x - 1)); start = None
+    best = None
+    for a, b in runs:
+        if b - a + 1 < min_gap: continue
+        mid = (a + b) / 2
+        left = sum(1 for w in words if w[2] <= mid); right = sum(1 for w in words if w[0] >= mid)
+        if left >= 3 and right >= 3 and (best is None or b - a > best[1] - best[0]): best = (a, b)
+    if best is None: return None
+    mid = (best[0] + best[1]) / 2
+    return mid, [l for l in lines if _crosses(l, mid)]
+
+
+def _fail(reason, split=None, extra=None):
+    return {'ok': False, 'reason': reason, 'rows': [], 'split_x': split, 'excluded': extra or []}
 
 
 def pair_table(words):
-    """Returns {'ok': bool, 'reason': str, 'rows': [[name, directions]], 'split_x': float|None}."""
+    """Returns {'ok': bool, 'reason': str, 'rows': [[name, directions]], 'split_x': float|None, 'excluded': [line text]}.
+    A direction starts where a right-column line sits on the same row as a left-column line. A right line with no left line beside it
+    continues the direction above; a left line with no right line beside it continues the name above unless it looks like a new
+    medicine (then the page is ambiguous and nothing is returned)."""
     region = medicine_region(words)
-    if not region: return {'ok': False, 'reason': 'no medicines heading or no words under it', 'rows': [], 'split_x': None}
-    split = split_columns(region)
-    if split is None: return {'ok': False, 'reason': 'no two-column layout found', 'rows': [], 'split_x': None}
-    left = _lines([w for w in region if w[0] < split]); right = _lines([w for w in region if w[0] >= split])
-    if not left or not right: return {'ok': False, 'reason': 'one column empty', 'rows': [], 'split_x': split}
-    height = statistics.median([b - a for a, b, _ in left + right]) or 10.0
+    if not region: return _fail('no medicines heading or no words under it')
+    lines = _lines(region)
+    found = split_columns(lines)
+    if found is None: return _fail('no two-column layout found')
+    split, crossing = found
+    height = statistics.median([b - a for a, b, _ in lines]) or 10.0
     tol = 0.5 * height
-
-    def aligned(y, lines):
-        hit = [l for l in lines if abs(l[0] - y) <= tol]
-        return hit[0] if len(hit) == 1 else None
-
-    dir_start = []                                   # indexes of right lines that begin a direction
-    for i, (_, _, ws) in enumerate(right):
-        if referral.DIRECTION.match(_text(ws)): dir_start.append(i)
-    if not dir_start or 0 not in dir_start: return {'ok': False, 'reason': 'first direction line not recognisable', 'rows': [], 'split_x': split}
-    rows = []                                        # [name_lines, direction_lines, y]
-    used = set()
-    for i, (y, _, ws) in enumerate(left):
-        match = None
-        for k in dir_start:
-            if abs(right[k][0] - y) <= tol: match = k; break
-        if match is not None:
-            used.add(match); rows.append([[_text(ws)], [], y, match])
-        elif referral.STRENGTH.search(_text(ws)):          # a new medicine that really has no direction on its row
-            rows.append([[_text(ws)], [], y, None])
-        elif rows: rows[-1][0].append(_text(ws))
-        else: return {'ok': False, 'reason': 'name text before the first aligned row', 'rows': [], 'split_x': split}
-    if used != set(dir_start): return {'ok': False, 'reason': 'a direction line has no medicine on its row', 'rows': [], 'split_x': split}
-    starts = sorted(r[3] for r in rows if r[3] is not None)
-    for i, (_, _, ws) in enumerate(right):               # continuation lines follow the nearest earlier direction start
-        owner = max((k for k in starts if k <= i), default=None)
-        if owner is None: return {'ok': False, 'reason': 'direction text above the first row', 'rows': [], 'split_x': split}
-        next(r for r in rows if r[3] == owner)[1].append(_text(ws))
-    return {'ok': True, 'reason': '', 'split_x': split, 'rows': [[' '.join(r[0]), ' '.join(r[1])] for r in rows]}
+    pitch = statistics.median([lines[i + 1][0] - lines[i][0] for i in range(len(lines) - 1)]) if len(lines) > 1 else height
+    table = [l for l in lines if l not in crossing]
+    if not table: return _fail('only full-width lines found', split)
+    last = max(l[0] for l in table)
+    excluded = []
+    for l in crossing:       # a line across both columns is only set aside when it is well clear of the table (footer or page number)
+        if l[0] > last + 3 * pitch: excluded.append(_text(l[2]))
+        else: return _fail('text crosses the column gap inside the table', split)
+    while len(table) > 1 and table[-1][0] - table[-2][0] > 3 * pitch:   # trailing line well clear of the table: footer or page number
+        excluded.append(_text(table.pop()[2]))
+    cells = []               # (y, side, text) from words split at the channel; a line may hold both sides
+    for y0, y1, ws in table:
+        cells.append((y0, [w for w in ws if w[2] <= split], [w for w in ws if w[0] >= split]))
+    for _, l, r in cells:
+        if any(w[0] < split < w[2] for w in l + r): return _fail('a word crosses the column gap', split)
+    # Words of one table row can sit a point or two apart vertically, so left and right cells are matched by y, not by line.
+    left = _lines([w for _, l, _ in cells for w in l]); right = _lines([w for _, _, r in cells for w in r])
+    if not left or not right: return _fail('one column empty', split)
+    rows = []
+    r_used = set(); last_left = -1e9
+    for ly, _, lws in left:
+        lt = _text(lws); previous = last_left; last_left = ly
+        hits = [i for i, (ry, _, _) in enumerate(right) if abs(ry - ly) <= tol]
+        if len(hits) > 1: return _fail('two direction lines on one row', split)
+        if hits and not lt[:1].islower():
+            r_used.add(hits[0]); rows.append([lt, _text(right[hits[0]][2])])
+        elif hits:           # lowercase left text beside a right line: both are continuations
+            if not rows: return _fail('continuation before the first row', split)
+            r_used.add(hits[0]); rows[-1][0] += ' ' + lt; rows[-1][1] = (rows[-1][1] + ' ' + _text(right[hits[0]][2])).strip()
+        elif referral.STRENGTH.search(lt) and not lt[:1].islower():
+            return _fail('a left line looks like a new medicine but has no direction beside it (y=%d)' % round(ly), split)
+        else:
+            if not rows: return _fail('name text before the first row', split)
+            if ly - previous > 2.2 * height: return _fail('name text far from any row (y=%d)' % round(ly), split)
+            rows[-1][0] += ' ' + lt
+    for i, (ry, _, rws) in enumerate(right):
+        if i in r_used: continue
+        if not rows: return _fail('direction text above the first row', split)
+        # attach to the row whose own direction line is the nearest one above
+        above = [k for k in r_used if right[k][0] < ry]
+        if not above: return _fail('direction text above the first row', split)
+        owner = max(above, key=lambda k: right[k][0])
+        if ry - right[owner][0] > 2.2 * height: return _fail('direction text far from any row (y=%d)' % round(ry), split)
+        for row in rows:
+            if row[1].startswith(_text(right[owner][2])): row[1] += ' ' + _text(rws); break
+    return {'ok': True, 'reason': '', 'split_x': split, 'rows': rows, 'excluded': excluded}
 
 
 def analyse_pdf(path):

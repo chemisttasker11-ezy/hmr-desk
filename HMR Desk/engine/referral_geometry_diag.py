@@ -21,7 +21,7 @@ def main(argv):
     if not found: print('No page with a Current Medications heading was found.'); return 1
     for number, result, words in found:
         rows = result['rows']
-        print('page %d: ok=%s reason=%r split_x=%s rows=%d with_directions=%d' % (number, result['ok'], result['reason'], None if result['split_x'] is None else round(result['split_x'], 1), len(rows), sum(1 for r in rows if r[1])))
+        print('page %d: ok=%s reason=%r split_x=%s rows=%d with_directions=%d excluded_lines=%d' % (number, result['ok'], result['reason'], None if result['split_x'] is None else round(result['split_x'], 1), len(rows), sum(1 for r in rows if r[1]), len(result.get('excluded', []))))
         if show:
             for i, r in enumerate(rows, 1): print('  %2d | %s | %s' % (i, r[0], r[1]))
     if '--xhist' in argv:
