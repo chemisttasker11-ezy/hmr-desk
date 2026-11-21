@@ -2,7 +2,7 @@ let practiceSettings = [];
 let practiceError = '';
 function practiceFields() {
   if (practiceError) return `<p class="error" role="alert">${esc(practiceError)}</p>`;
-  const group = (item) => item.key === 'report_include_gp_plan' ? 'Reports' : item.key.startsWith('ai_') || item.key === 'flow_includes_ai_assist' ? 'AI assist' : /^auto|^follow_up_after|^reminder_/.test(item.key) ? 'Messaging' : 'Practice';
+  const group = (item) => item.key === 'report_include_gp_plan' || item.key === 'report_use_original_builder' ? 'Reports' : item.key.startsWith('ai_') || item.key === 'flow_includes_ai_assist' ? 'AI assist' : /^auto|^follow_up_after|^reminder_/.test(item.key) ? 'Messaging' : 'Practice';
   const labels = { ai_reply_reading: 'Read unclear replies', ai_interview_assist: 'Interview suggestions', ai_report_assist: 'Report draft and suggestions' };
   const fields = (name) => practiceSettings.filter((item) => group(item) === name).map((item) => {
       const id = `setting-${item.key}`;
@@ -22,7 +22,7 @@ function practiceFields() {
       return `<label>${esc(labels[item.key] || item.label)} ${input}${item.default === '' || item.default == null || String(item.value) === String(item.default) ? '' : `<small>Default: ${item.type === 'bool' ? (item.default ? 'on' : 'off') : esc(item.default)}</small>`}<span class="error" data-setting-error="${esc(item.key)}" role="alert"></span></label>`;
     })
     .join('');
-  return `<form id="practice-settings">${['Practice', 'Reports', 'Messaging', 'AI assist'].filter((name) => practiceSettings.some((item) => group(item) === name)).map((name) => `<section><h2>${name}</h2>${name === 'AI assist' ? '<p>Every step works without AI. These only add a second button.</p>' : name === 'Reports' ? '<p>Optional GP Plan adds a blank fifth column to new HMR medicine tables. Existing Word/PDF revisions are unchanged. Check the layout before clinical sign-off.</p>' : ''}<div class="settings-grid">${fields(name)}</div></section>`).join('')}<button type="submit" class="primary">Save settings</button><span id="practice-message" role="status"></span></form>`;
+  return `<form id="practice-settings">${['Practice', 'Reports', 'Messaging', 'AI assist'].filter((name) => practiceSettings.some((item) => group(item) === name)).map((name) => `<section><h2>${name}</h2>${name === 'AI assist' ? '<p>Every step works without AI. These only add a second button.</p>' : name === 'Reports' ? '<p>Optional GP Plan adds a blank fifth column to new HMR medicine tables. Existing Word/PDF revisions are unchanged. Check the layout before clinical sign-off. The original Word builder is a separate optional, Word-only workflow: leave it off for the standalone report workflow. It cannot honour the GP Plan column (reports will not build while both are on) and its documents cannot be signed off until its template approval rule is established.</p>' : ''}<div class="settings-grid">${fields(name)}</div></section>`).join('')}<button type="submit" class="primary">Save settings</button><span id="practice-message" role="status"></span></form>`;
 }
 async function saveSettings(form) {
   const values = {};
