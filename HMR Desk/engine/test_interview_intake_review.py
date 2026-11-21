@@ -270,8 +270,12 @@ def test_real_intake_four_medicine_source_to_saved_interview(tmp_path, monkeypat
             'medicines': '\n'.join(confirmation_lines),
             'conditions': '', 'allergies': '', 'observations': '',
         }
+        # The real intake UI submits only the documented identity-field keys.
+        fields = {key: value for key, value in item['fields'].items()
+                  if key in referral_entry.FIELDS}
+        fields['name'] = 'Synthetic Example'
         pid = referral_entry.commit(
-            conn, item['token'], {**item['fields'], 'name': 'Synthetic Example'},
+            conn, item['token'], fields,
             clinical=clinical
         )['patient_id']
         patient = conn.execute('SELECT * FROM patients WHERE id=?', (pid,)).fetchone()
@@ -331,7 +335,7 @@ def test_real_intake_four_medicine_source_to_saved_interview(tmp_path, monkeypat
         assert duplicate['duplicate_kind'] == 'content'
         with pytest.raises(ValueError, match='already added'):
             referral_entry.commit(
-                conn, duplicate['token'], {**duplicate['fields'], 'name': 'Synthetic Example'},
+                conn, duplicate['token'], fields,
                 clinical=clinical
             )
         reopened = interview.load(conn, patient)
