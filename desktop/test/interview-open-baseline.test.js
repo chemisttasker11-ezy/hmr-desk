@@ -85,3 +85,20 @@ test('offline open with a local draft keeps the draft untouched', () => {
   const offline = s.open(true);
   assert.ok(offline.recovery);
 });
+
+test('first real edit persists the medicine identities shown in the session; reopening before it shows new ones', async () => {
+  const s = world(base);
+  const first = s.open();
+  const shown = first.rec.details.meds[0].item_id;
+  assert.match(shown, /^[0-9a-f]{32}$/);
+  assert.equal(await first.saver.leave(), true);
+  assert.equal(s.posts, 0);
+  assert.equal(s.data.details.meds[0].item_id, undefined);       // nothing persisted by an unedited open
+  const second = s.open();
+  second.rec.notes = 'real edit'; second.saver.changed();
+  const sessionId = second.rec.details.meds[0].item_id;
+  assert.equal(await second.saver.save(), true);
+  assert.equal(s.data.details.meds[0].item_id, sessionId);        // identity saved is the one the pharmacist saw
+  const third = s.open();
+  assert.equal(third.rec.details.meds[0].item_id, sessionId);     // stable once saved
+});
