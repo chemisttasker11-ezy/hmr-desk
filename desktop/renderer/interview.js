@@ -452,7 +452,7 @@ function renderInterview() {
   const pathologyCols = [['test','Test'],['value','Result'],['unit','Unit'],['reference_interval','Range'],
     ['sample_date','Sample date'],['source','Source document/page'],['comment','Notes']];
   const pathologyView = `<section class="interview-section" id="section-pathology-verified">
-    <h2>Pathology provenance and verification</h2><p>Units, sample dates and source are entered explicitly. A result cannot be marked verified without all required details.</p>
+    <h2 tabindex="-1">Pathology provenance and verification</h2><p>Units, sample dates and source are entered explicitly. A result cannot be marked verified without all required details.</p>
     <div class="actions"><button type="button" data-pathology-import>Import a local pathology PDF (unconfirmed)</button><button type="button" data-pathology-reload-sources>Reload sources</button></div>
     ${(pathologySourceIndex?.sources || []).map(source => `<details class="card"><summary>${esc(source.name)} — ${source.page_count} page(s), unconfirmed</summary>
       <button type="button" data-pathology-open-source="${esc(source.id)}">Open original PDF</button>
@@ -508,10 +508,10 @@ function renderInterview() {
   if (focus) { const el = document.querySelector(`[data-field="${focus.key}"][data-row="${focus.row}"][data-col="${focus.col}"]`); if (el) { el.focus(); el.setSelectionRange(focus.start, focus.end); } }
 }
 function pathologySourcesLink() {
-  return '<a href="#section-pathology-verified" data-interview-jump="pathology-verified">Pathology sources and verified results</a>';
+  return '<a href="#section-pathology-verified" data-interview-jump="pathology-verified">Pathology sources and results</a>';
 }
 function pathologyLegacyHint() {
-  return '<p class="field-hint" data-pathology-sources-hint>These are free-text pathology notes. To import a source PDF or record verified results, go to <button type="button" class="link-button" data-interview-jump="pathology-verified">Pathology sources and verified results</button>.</p>';
+  return '<p class="field-hint" data-pathology-sources-hint>These are free-text pathology notes. Imported sources (unconfirmed until checked) and pathology result rows are in <button type="button" class="link-button" data-interview-jump="pathology-verified">Pathology sources and results</button>.</p>';
 }
 async function openConsentDialog() {
   const patientId = interviewId;
@@ -903,7 +903,7 @@ async function interviewClick(b) {
     if (meta.use_status === 'taking' && meta.as_instructed && meta.checked && interviewRecord.meds[i][2] === interviewRecord.meds[i][1]) return true;
     interviewMoveFocus(b, 'meds', () => { meta.use_status = 'taking'; interviewSetMedicineDetail(i, 'as_instructed', true); interviewSetMedicineDetail(i, 'checked', true); interviewChanged('meds'); }); return true;
   }
-  if (b.dataset.interviewJump) { document.getElementById(`section-${b.dataset.interviewJump}`)?.scrollIntoView(); return true; }
+  if (b.dataset.interviewJump) { const target = document.getElementById(`section-${b.dataset.interviewJump}`); target?.scrollIntoView(); target?.querySelector?.('h2')?.focus?.({ preventScroll: true }); return true; }
   if (b.dataset.interviewRecordVisit !== undefined) { const id = interviewId; if (!(await saveInterview(true)) || page !== 'interview' || interviewId !== id) return true; await navigate('patients', { selected: String(id), detailTab: 'Overview', scroll: 0 }); if (page === 'patients') await showPatient(id, 'visited'); return true; }
   if (b.dataset.interviewSave !== undefined) { await saveInterview(true); return true; }
   if (b.dataset.interviewResolve) { interviewSaver.resolveConflict(b.dataset.interviewResolve); interviewConflict = interviewSaver.hasConflict(); renderInterview(); return true; }

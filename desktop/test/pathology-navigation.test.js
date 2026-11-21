@@ -15,7 +15,7 @@ test('pathology navigation links point to the verified-results section and keep 
   vm.runInContext('interviewRecord = {meds: [], details: {}}', context);
   const link = vm.runInContext('pathologySourcesLink()', context);
   assert.match(link, /href="#section-pathology-verified"/);
-  assert.match(link, /Pathology sources and verified results/);
+  assert.match(link, /Pathology sources and results/);
   const hint = vm.runInContext('pathologyLegacyHint()', context);
   assert.match(hint, /data-interview-jump="pathology-verified"/);
   assert.match(hint, /free-text pathology notes/);
