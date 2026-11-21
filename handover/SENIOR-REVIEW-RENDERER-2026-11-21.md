@@ -101,3 +101,10 @@ Synthetic CI cannot establish Word COM reliability, Montserrat embed correctness
 ## 7. Continuation pointer
 
 Review PR33 against `main`. Read its commit diff rather than replaying missing developer patch files. Confirm test CI on the exact head SHA. For later full integration, base a new branch on the accepted PR32 candidate and port only the original renderer and template-aid modules plus vetted changes to `jobs.py` and `report-editor.js`. Update evidence and tests for both renderer modes. Keep a detailed new handover of the merge decisions and failures.
+
+## Addendum: build script path and Python discovery
+
+- Finding (source reading, same on origin/main): `scripts/build-windows.ps1` and `scripts/bundle-libreoffice.ps1` used single-quoted PowerShell paths with literal doubled backslashes, which PowerShell keeps as two separators. The script also assumed the `py -3.12` launcher.
+- Change: paths use one separator and `Join-Path`; one `$venvPython` is reused. `Find-BuildPython` tries `HMR_PYTHON` (full path to a python.exe), then `py -3.12`, then `python3.12` and `python` on PATH, and accepts only version 3.12. If none qualifies it stops with a message naming `HMR_PYTHON`. No host path is in the repo.
+- Tests: `test_build_script_contract.py` (static text checks, 3 tests). Plain pytest 899 passed, 1 skipped at this commit.
+- Unverified: PowerShell was not run here. Whether the doubled separators alone caused the reported ObjectNotFound is not confirmed. An unmodified run of the committed script on the Windows host is still required.

@@ -5,7 +5,7 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $vendor = Join-Path $root 'vendor'
 $final = Join-Path $vendor 'libreoffice'
-$soffice = Join-Path $final 'program\\soffice.exe'
+$soffice = Join-Path $final 'program\soffice.exe'
 $version = '25.8.7'
 $expected = 'ecdb65e76f5e91dc198b8c8dce5b5d6e1eb12fea6023553e52b591afd10b619d'
 if (Test-Path $soffice) {
