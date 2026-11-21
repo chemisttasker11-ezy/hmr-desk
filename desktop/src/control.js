@@ -40,7 +40,20 @@ const pageScript = (operation, arg) => `(() => {
 // re-renders or a newer snapshot is taken, old refs are rejected. Sensitive fields (passwords, codes, tokens, keys) are
 // never read or filled, link/token-shaped text is redacted, and controls that send, authorise, sign, acknowledge, call an
 // outside service or open a native dialog are refused. Refusal is by label, a best-effort guard, not a security boundary.
-const UI_BLOCKED = '\\b(send|resend|approve|sms|text message|queue|dispatch|offer|sign[ -]?off|signed off|mark[^a-z]{0,3}(report )?sent|report sent|claim|proda|sign[ -]?in|log[ -]?in|login|delete|discard|check phone|check messages|acknowledge|authori[sz]e|signature|signing|sign consent|draft with ai|suggest points|load ai draft|\\(ai\\)|open (original )?pdf|open folder|open patient folder|choose|browse|upload|import)\\b';
+const UI_BLOCKED = '\\b(send|resend|approve|sms|text message|queue|dispatch|offer|sign[ -]?off|signed off|mark[^a-z]{0,3}(report )?sent|report sent|claim|proda|sign[ -]?in|log[ -]?in|login|delete|discard|check phone|check messages|acknowledge|authori[sz]e|signature|signing|sign consent|draft with ai|suggest points|load ai draft|\\(ai\\)|open (original )?pdf|open folder|open patient folder|choose|browse|upload|import|refresh|use patient record|keep report text|load (all|entire) report|restore|reset)\\b';
+// Reading a snapshot must never leave the local control server waiting indefinitely for a native
+// confirm() already open in the renderer. This timeout is intentionally READ-ONLY: never race a
+// click/fill because its queued script could execute after a timeout and perform a late write.
+async function boundedUiSnapshot(webContents, script, milliseconds = 2000) {
+  let timer;
+  try {
+    return await Promise.race([
+      Promise.resolve().then(() => webContents.executeJavaScript(script)),
+      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('App window is waiting for a human confirmation or is not responding; dismiss the dialog and take a fresh snapshot')), milliseconds); }),
+    ]);
+  } finally { clearTimeout(timer); }
+}
+
 const uiScript = (operation, arg) => `(() => {
   const op = ${JSON.stringify(operation)}, arg = ${JSON.stringify(arg)};
   const visible = e => !!e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden' && getComputedStyle(e).display !== 'none';
@@ -352,7 +365,7 @@ function createHandler(ctx, token) {
           break;
         case '/ui/snapshot':
           if (body.max !== undefined && (!Number.isSafeInteger(body.max) || body.max < 1 || body.max > 200000)) throw Error('Invalid max');
-          result = await win.webContents.executeJavaScript(uiScript('snapshot', { max: body.max ?? 20000 }));
+          result = await boundedUiSnapshot(win.webContents, uiScript('snapshot', { max: body.max ?? 20000 }));
           break;
         case '/ui/click':
           if (typeof body.ref !== 'string' || !/^s\d{1,6}\.\d{1,6}$/.test(body.ref)) throw Error('Invalid ref');
@@ -417,4 +430,4 @@ function start(ctx) {
   return server;
 }
 
-module.exports = { captureFresh, createHandler, start, pageScript, uiScript, UI_BLOCKED, sanitizeAuthResult, redactUrl, isPrivateApiRoute, WHITELISTED_STATUSES, WHITELISTED_REASONS };
+module.exports = { captureFresh, createHandler, start, pageScript, uiScript, UI_BLOCKED, boundedUiSnapshot, sanitizeAuthResult, redactUrl, isPrivateApiRoute, WHITELISTED_STATUSES, WHITELISTED_REASONS };
