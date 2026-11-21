@@ -38,3 +38,9 @@ test('pathology records table keeps one-line headers and scrolls inside its card
   assert.match(css, /\.pathology-records th \{ white-space: nowrap/);
   assert.match(css, /\.interview-context \{ flex-wrap: wrap/);
 });
+
+test('narrow-window rules: wrapping action buttons and a non-sticky Interview bar', () => {
+  const css = fs.readFileSync(require.resolve('../style.css'), 'utf8');
+  assert.match(css, /\.interview-section \.actions button \{ white-space: normal; max-width: 100%/);
+  assert.match(css, /@media \(max-width: 800px\) \{\s*\.interview-context \{ position: static/);
+});

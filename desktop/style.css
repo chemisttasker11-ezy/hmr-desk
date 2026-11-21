@@ -824,3 +824,12 @@ main:has(.interview-context) > header { height: 96px; min-height: 96px; }
 /* Interview sticky bar: wrap instead of overflowing narrow windows. */
 .interview-context { flex-wrap: wrap; }
 #interview-outstanding { flex: 1 1 260px; min-width: 0; }
+
+/* Narrow windows: buttons may wrap their text instead of forcing the page wider, and the Interview status bar
+   scrolls with the page (still shows Save, status and what is left, including Consent) instead of covering content. */
+.interview-section .actions button { white-space: normal; max-width: 100%; }
+@media (max-width: 800px) {
+  .interview-context { position: static; box-shadow: none; border-radius: 8px; margin-bottom: 8px; }
+  .interview-section { scroll-margin-top: 110px; }
+  main:has(.interview-context) > header { height: auto; min-height: 56px; max-height: none; }
+}
