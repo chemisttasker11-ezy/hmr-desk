@@ -369,6 +369,7 @@ function interviewOutstanding() {
     [total > checked, `${checked}/${total} checked`, 'meds', `${checked} of ${total} medicines checked`],
     [withoutStatus, `${withoutStatus} no status`, 'meds', `${withoutStatus} medicines without a status`],
     [clarify, `${clarify} to clarify`, 'clarify', `${clarify} to clarify`],
+    [(interviewRecord.fidelity_warnings || []).length, 'Referral text check', 'meds', (interviewRecord.fidelity_warnings || []).join(' ')],
     [healthUnanswered, `${healthUnanswered} health check`, 'health_check', `${healthUnanswered} health-check questions unanswered`],
     [consentMissing, 'Consent', 'consent', 'Consent not signed'],
   ].filter(([show]) => show);

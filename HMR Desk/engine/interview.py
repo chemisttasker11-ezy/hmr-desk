@@ -329,7 +329,7 @@ def record_lock(patient):
 
 def validate(record):
     keys = {'header', *TEXT, *TABLES, 'clarify', 'consent', 'sources'}
-    if not isinstance(record, dict) or set(record) - {'saved', 'consent_file', 'details', 'revision', 'consent_signed_draft'} != keys: raise ValueError('invalid interview fields')
+    if not isinstance(record, dict) or set(record) - {'saved', 'consent_file', 'details', 'revision', 'consent_signed_draft', 'fidelity_warnings'} != keys: raise ValueError('invalid interview fields')
     def string(x): return isinstance(x, str) and len(x) <= 20000
     if not isinstance(record['header'], dict) or set(record['header']) != set(HEAD) or not all(string(x) for x in record['header'].values()): raise ValueError('invalid header')
     if not all(string(record[k]) for k in TEXT): raise ValueError('invalid text field')
@@ -359,6 +359,20 @@ def validate(record):
 def signed_file(folder):
     return sorted(f.name for f in folder.iterdir() if f.is_file() and 'signed' in f.name.lower())
 
+def fidelity_warnings(data):
+    """Read-only check of an already stored record for referral text that earlier imports could have mangled. Nothing is changed
+    or removed; the pharmacist is told to compare with the referral PDF."""
+    out = []
+    for i, row in enumerate(data.get('meds') or []):
+        if isinstance(row, list) and len(row) > 1 and isinstance(row[1], str):
+            starts = re.findall(r'(?:^|\.\s+)\d+(?:\s*-\s*\d+)?\s+[A-Za-z]', row[1])
+            if len(starts) >= 3: out.append('Medicine %d (%s): the stored referral directions look like several medicines\' directions joined together. Check the referral PDF and correct the directions; the original text is still in the row.' % (i + 1, str(row[0])[:60]))
+    reason = (data.get('details') or {}).get('reason') if isinstance(data.get('details'), dict) else ''
+    if isinstance(reason, str) and reason:
+        form = referral.form_checklist(reason.splitlines())[1]
+        if form: out.append('Reason for referral contains printed form checklist text (tick boxes cannot be read from the text). Check the referral PDF; the stored text is unchanged but would appear in the report letter.')
+    return out
+
 def load(conn, patient):
     folder = jobs.patient_folder(patient)
     content = records.get(conn, patient['id'], 'interview.json')
@@ -384,6 +398,7 @@ def load(conn, patient):
     if isinstance(data.get('header'), dict):
         for key, setting in [('pharmacist', 'pharmacist_name'), ('pharmacist_phone', 'pharmacist_phone'), ('pharmacist_credential', 'pharmacist_credential')]: data['header'][key] = settings.get(conn, setting)
     validate(data); data['saved'] = content is not None
+    data['fidelity_warnings'] = fidelity_warnings(data)
     signed = signed_file(folder)
     data['consent_file'] = signed[0] if signed else ''
     return data
@@ -416,7 +431,7 @@ def save(conn, patient, record, *, locked=False, signing=False):
                             if os.path.exists(temp): os.unlink(temp)
                 if isinstance(record, dict) and old_revision is not None: record['revision'] = old_revision
                 raise
-    validate(record); data = {k: v for k, v in record.items() if k not in ('saved', 'consent_file', 'revision')}
+    validate(record); data = {k: v for k, v in record.items() if k not in ('saved', 'consent_file', 'revision', 'fidelity_warnings')}
     folder = jobs.patient_folder(patient)
     previous_bytes = records.get(conn, patient['id'], 'interview.json')
     if record.get('revision') != records.digest(previous_bytes): raise Conflict('interview conflict')
