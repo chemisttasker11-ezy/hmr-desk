@@ -50,12 +50,15 @@ foreach ($helper in @('MIMS Interaction Helper\make-lists.py', 'PPA Claim Helper
 }
 
 Invoke-Native 'Python dependencies' $venvPython @('-m', 'pip', 'install', '-r', 'requirements-build.txt')
+Invoke-Native 'Brainstorm asset staging' $venvPython @((Join-Path $root 'scripts\prepare-brainstorm-assets.py'), 'stage')
 Set-Location (Join-Path $root 'HMR Desk\engine')
 Invoke-Native 'Engine packaging' $venvPython @('-m', 'PyInstaller', '--noconfirm', '--clean', 'hmr-engine.spec')
+Invoke-Native 'Frozen engine Brainstorm asset verification' $venvPython @((Join-Path $root 'scripts\prepare-brainstorm-assets.py'), 'verify', (Join-Path $root 'HMR Desk\engine\dist\hmr-engine'))
 Set-Location (Join-Path $root 'desktop')
 Invoke-Native 'npm ci' 'npm' @('ci')
 Invoke-Native 'Desktop tests' 'npm' @('test')
 & (Join-Path $root 'scripts\bundle-libreoffice.ps1')
 if ($LASTEXITCODE -ne 0) { throw 'Portable PDF converter bundling failed' }
 Invoke-Native 'NSIS build' 'npm' @('run', 'dist')
+Invoke-Native 'Packaged desktop Brainstorm asset verification' $venvPython @((Join-Path $root 'scripts\prepare-brainstorm-assets.py'), 'verify', (Join-Path $root 'desktop\dist\win-unpacked\resources\engine\hmr-engine'))
 Write-Host 'Build complete. Windows clean-machine E2E and clinical template sign-off are still required.'
