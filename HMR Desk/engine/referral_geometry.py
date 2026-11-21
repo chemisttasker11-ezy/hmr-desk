@@ -63,7 +63,7 @@ def split_columns(lines, min_gap=10.0):
 
 
 def _fail(reason, split=None, extra=None):
-    return {'ok': False, 'reason': reason, 'rows': [], 'split_x': split, 'excluded': extra or []}
+    return {'ok': False, 'reason': reason, 'rows': [], 'source_lines': [], 'split_x': split, 'excluded': extra or []}
 
 
 def footer_like(line_text, y, page_height):
@@ -87,7 +87,9 @@ def pair_table(words, page_height=None):
     split, crossing = found
     height = statistics.median([b - a for a, b, _ in lines]) or 10.0
     tol = 0.5 * height
-    pitch = statistics.median([lines[i + 1][0] - lines[i][0] for i in range(len(lines) - 1)]) if len(lines) > 1 else height
+    gaps = [lines[i + 1][0] - lines[i][0] for i in range(len(lines) - 1)]
+    near = [g for g in gaps if g <= 2.5 * height]
+    pitch = statistics.median(near) if near else height     # row pitch from close lines only, so one far footer cannot inflate it
     table = [l for l in lines if l not in crossing]
     if not table: return _fail('only full-width lines found', split)
     last = max(l[0] for l in table)
@@ -106,38 +108,38 @@ def pair_table(words, page_height=None):
     # Words of one table row can sit a point or two apart vertically, so left and right cells are matched by y, not by line.
     left = _lines([w for _, l, _ in cells for w in l]); right = _lines([w for _, _, r in cells for w in r])
     if not left or not right: return _fail('one column empty', split)
-    rows = []
+    rows = []; src = []; row_of_right = {}
     r_used = set(); last_left = -1e9
     for ly, _, lws in left:
         lt = _text(lws); previous = last_left; last_left = ly
         hits = [i for i, (ry, _, _) in enumerate(right) if abs(ry - ly) <= tol]
         if len(hits) > 1: return _fail('two direction lines on one row', split)
         if hits and not lt[:1].islower():
-            r_used.add(hits[0]); rows.append([lt, _text(right[hits[0]][2])])
+            rt = _text(right[hits[0]][2])
+            r_used.add(hits[0]); rows.append([lt, rt]); src.append([lt, rt]); row_of_right[hits[0]] = len(rows) - 1
         elif hits:           # lowercase left text beside a right line: both are continuations
             if not rows: return _fail('continuation before the first row', split)
-            r_used.add(hits[0]); rows[-1][0] += ' ' + lt; rows[-1][1] = (rows[-1][1] + ' ' + _text(right[hits[0]][2])).strip()
+            rt = _text(right[hits[0]][2])
+            r_used.add(hits[0]); rows[-1][0] += ' ' + lt; rows[-1][1] = (rows[-1][1] + ' ' + rt).strip(); src[-1] += [lt, rt]; row_of_right[hits[0]] = len(rows) - 1
         elif referral.STRENGTH.search(lt) and not lt[:1].islower():
             return _fail('a left line looks like a new medicine but has no direction beside it (y=%d)' % round(ly), split)
         else:
             if not rows: return _fail('name text before the first row', split)
             if ly - previous > 2.2 * height: return _fail('name text far from any row (y=%d)' % round(ly), split)
-            rows[-1][0] += ' ' + lt
+            rows[-1][0] += ' ' + lt; src[-1].append(lt)
     for i, (ry, _, rws) in enumerate(right):
         if i in r_used: continue
         if not rows: return _fail('direction text above the first row', split)
-        # attach to the row whose own direction line is the nearest one above
         above = [k for k in r_used if right[k][0] < ry]
         if not above: return _fail('direction text above the first row', split)
         owner = max(above, key=lambda k: right[k][0])
         if ry - right[owner][0] > 2.2 * height: return _fail('direction text far from any row (y=%d)' % round(ry), split)
-        for row in rows:
-            if row[1].startswith(_text(right[owner][2])): row[1] += ' ' + _text(rws); break
+        idx = row_of_right[owner]; rows[idx][1] += ' ' + _text(rws); src[idx].append(_text(rws)); row_of_right[i] = idx; r_used.add(i)
     used = sorted(t for r in rows for t in ' '.join(r).split()) + sorted(t for e in excluded for t in e.split())
     if sorted(used) != sorted(w[4] for w in region):
         return _fail('some words on the page were not placed in a row or reported as excluded', split)
     flags = ['row %d name has no recognisable strength' % (i + 1) for i, r in enumerate(rows) if not referral.STRENGTH.search(r[0])]
-    return {'ok': True, 'reason': '', 'split_x': split, 'rows': rows, 'excluded': excluded, 'flags': flags}
+    return {'ok': True, 'reason': '', 'split_x': split, 'rows': rows, 'source_lines': src, 'excluded': excluded, 'flags': flags}
 
 
 def pair_document(pages):
@@ -170,3 +172,30 @@ def analyse_pdf(path):
 
 def shape(text):
     return re.sub(r'[a-z]', 'a', re.sub(r'[A-Z]', 'A', re.sub(r'\d', '9', text)))
+
+
+# Words that normally appear in a medicine direction. A word outside this list is only FLAGGED for the pharmacist to compare with the
+# page (for example a letter swapped by the scan's text recognition). Nothing is corrected and no direction is rejected.
+DIRECTION_WORDS = frozenset(('a an and as at before after bedtime breakfast dinner lunch day days daily dose doses drop drops every evening food '
+                             'fortnightly from hour hours in inhalation inhaler inj injection is mane meals midday monthly month months morning '
+                             'needed night nocte of on once or patch patches per prn p.r.n puff puffs sachet sachets spray sprays tablet tablets '
+                             'capsule capsules tspn tspns tsp tbsp ml mg mcg g units unit three times twice four five two one six when with '
+                             'without week weekly weeks weekdays alternate other each the to up then if required directed apply use take inhale '
+                             'chewable orally').split())
+
+
+def unusual_direction_words(text):
+    out = []
+    for token in re.findall(r"[A-Za-z][A-Za-z.\-]*", text):
+        t = token.lower().strip('.-')
+        if t and t not in DIRECTION_WORDS and token not in out: out.append(token)
+    return out
+
+
+def image_coverage(page):
+    """Fraction of the page covered by embedded images (high with a text layer usually means a scan with recognised text)."""
+    area = page.rect.width * page.rect.height or 1.0
+    covered = 0.0
+    for img in page.get_images(full=True):
+        for rect in page.get_image_rects(img[0]): covered += rect.width * rect.height
+    return min(covered / area, 1.0)

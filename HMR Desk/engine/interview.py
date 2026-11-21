@@ -122,10 +122,33 @@ def valid_use(m, base, optional):
     if set(m) not in (base, base | extra): return False
     return not (extra <= set(m)) or (m['use_status'] in ('', 'taking', 'not_using', 'unknown') and m['use_reason'] in USE_REASONS and isinstance(m['use_details'], str) and len(m['use_details']) <= 20000)
 
+def referral_files(folder):
+    files = sorted(f for f in folder.iterdir() if f.is_file() and f.suffix.lower() == '.pdf' and not f.name.lower().startswith(('ppa consent - ', 'hmr interview - ')))
+    return [f for f in files if re.search(r'_ [A-Z]{2,4}\.pdf$', f.name)] or [f for f in files if 'referral' in f.name.lower()]
+
+
+def geometry_table(folder):
+    """Read the medicines table by page position (referral_geometry). Returns the whole-table result with notes, or None when there
+    is no referral PDF or the read raised. Failure is never an error for the interview: the text-order read stays."""
+    import referral_geometry
+    files = referral_files(folder)
+    if not files: return None
+    try:
+        specmod = importlib.util.spec_from_file_location('hmr_intake', __import__('app_paths').resource_root() / 'scripts' / 'intake' / 'intake.py')
+        module = importlib.util.module_from_spec(specmod); specmod.loader.exec_module(module)
+        with module.fitz.open(files[0]) as doc:
+            pages = [([(w[0], w[1], w[2], w[3], w[4]) for w in page.get_text('words')], page.rect.height) for page in doc]
+            scanned = [n + 1 for n, page in enumerate(doc) if referral_geometry.image_coverage(page) >= 0.5]
+        result = referral_geometry.pair_document(pages)
+        result['scanned_pages'] = scanned
+        return result
+    except Exception:
+        return None
+
+
 def referral_text(folder):
     clarify = []
-    files = sorted(f for f in folder.iterdir() if f.is_file() and f.suffix.lower() == '.pdf' and not f.name.lower().startswith(('ppa consent - ', 'hmr interview - ')))
-    files = [f for f in files if re.search(r'_ [A-Z]{2,4}\.pdf$', f.name)] or [f for f in files if 'referral' in f.name.lower()]
+    files = referral_files(folder)
     if files:
         specmod = importlib.util.spec_from_file_location('hmr_intake', __import__('app_paths').resource_root() / 'scripts' / 'intake' / 'intake.py')
         module = importlib.util.module_from_spec(specmod); specmod.loader.exec_module(module)
@@ -140,6 +163,37 @@ def referral_text(folder):
         text = '\f'.join(pages)
         return text, clarify
     return None, clarify
+
+def apply_geometry(found, geo):
+    """Prefer the position-based medicines table only when the whole table was read cleanly. Every difference and every doubt is kept
+    visible in found['geometry_notes'] (later shown in Clarify). Nothing is corrected, guessed or silently dropped."""
+    import referral_geometry
+    notes = found.setdefault('geometry_notes', [])
+    if geo is None: return
+    if geo['scanned_pages']:
+        notes.append('Referral page(s) %s are images with a text layer, probably text recognised from a scan. Letters can be wrong in that layer (for example a medicine name or a direction word). Check every medicine name and direction against the page image.' % ', '.join(map(str, geo['scanned_pages'])))
+    if not geo['ok']:
+        if geo['reason'] != 'no medicines heading found':
+            notes.append('Medicines table was not read by page position (' + geo['reason'] + '); the text-order read is used, with the checks above.')
+        return
+    if geo['flags']:
+        notes.append('Medicines table read by page position was not used because of: ' + '; '.join(geo['flags']))
+        return
+    text_rows = [[str(a), str(b)] for a, b in found['meds']]
+    rows = [[a, b] for a, b in geo['rows']]
+    norm = lambda rs: [' '.join((a + ' ' + b).split()).casefold() for a, b in rs]
+    if norm(text_rows) != norm(rows):
+        notes.append('Medicines table read by page position replaced the text-order read. Text-order read was: ' + '; '.join((a + ' | ' + b).strip(' |') for a, b in text_rows)[:3000])
+    found['meds'] = [(a, b) for a, b in rows]
+    found['medicine_source_lines'] = geo['source_lines']
+    found['unattributed_directions'] = []
+    found['unparsed'] = [k for k in found.get('unparsed', []) if k != 'meds']
+    if geo['excluded']:
+        notes.append('Lines set aside as page furniture, not read as medicines (check they are not clinical): ' + ' | '.join(geo['excluded'])[:600])
+    for i, (a, b) in enumerate(rows, 1):
+        odd = referral_geometry.unusual_direction_words(b)
+        if odd: notes.append('Medicine %d: unusual word(s) in the referral directions, compare with the page: %s' % (i, ', '.join(odd)))
+
 
 def blank(conn, patient):
     p = dict(patient); folder = jobs.patient_folder(patient)
@@ -164,6 +218,7 @@ def blank(conn, patient):
     spec = jobs.interview_spec_path(patient)
     text, clarify = referral_text(folder)
     found = referral.parse(text) if text is not None else None
+    if found is not None: apply_geometry(found, geometry_table(folder))
     record['clarify'].extend(clarify)
     stored_spec = records.get_json(conn, patient['id'], 'interview_spec.json')
     if stored_spec is not None or spec.is_file():
@@ -193,6 +248,7 @@ def blank(conn, patient):
             record['clarify'].extend('Referral section not fully read: ' + k for k in found['unparsed'])
             if found.get('unattributed_directions'):
                 record['clarify'].append('Referral directions not matched to a medicine (the referral text lists names and directions separately, so the pairing is unknown; check the referral PDF and enter each medicine directions yourself): ' + ' | '.join(str(x)[:200] for x in found['unattributed_directions'][:60]))
+            record['clarify'].extend(found.get('geometry_notes', []))
             if found.get('form_checklist'):
                 record['clarify'].append('Referral form checklist lines (a ticked box cannot be read from the text; check the referral PDF): ' + ' | '.join(str(x)[:120] for x in found['form_checklist'][:30]))
             for k in ('meds', 'conditions', 'allergies', 'obs', 'alcohol_smoking', 'social', 'renal'):

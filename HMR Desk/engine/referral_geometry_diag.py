@@ -16,7 +16,7 @@ def main(argv):
     out = argv[argv.index('--geometry') + 1] if '--geometry' in argv else None
     import fitz
     with fitz.open(path) as doc:
-        for i, page in enumerate(doc, 1): print('page %d: text-layer words=%d images=%d' % (i, len(page.get_text('words')), len(page.get_images())))
+        for i, page in enumerate(doc, 1): print('page %d: text-layer words=%d images=%d image_coverage=%.2f' % (i, len(page.get_text('words')), len(page.get_images()), g.image_coverage(page)))
     found = g.analyse_pdf(path)
     import fitz as _f
     with _f.open(path) as doc:
@@ -26,6 +26,9 @@ def main(argv):
     if show and whole['ok']:
         for i, r in enumerate(whole['rows'], 1): print('  %2d | %s | %s' % (i, r[0], r[1]))
         for e in whole.get('excluded', []): print('  excluded line: ' + e)
+        for i, r in enumerate(whole['rows'], 1):
+            odd = g.unusual_direction_words(r[1])
+            if odd: print('  row %d unusual direction word(s): %s' % (i, ', '.join(odd)))
     if not found: print('No page with a Current Medications heading was found.'); return 1
     for number, result, words in found:
         rows = result['rows']
