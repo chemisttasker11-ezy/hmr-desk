@@ -39,7 +39,7 @@ def test_legacy_schema_upgrade_preserves_rows_and_does_not_reapply(tmp_path, mon
         legacy.execute("INSERT INTO patients(key,name) VALUES ('prior','Prior Synthetic')")
         legacy.execute("INSERT INTO messages(id,direction,body,state,created_at) VALUES ('old','in','test','received','2026-01-01')")
         assert legacy.execute('PRAGMA user_version').fetchone()[0] == 0
-    with db.connect(str(target)) as upgraded:
+    with contextlib.closing(db.connect(str(target))) as upgraded:
         assert upgraded.execute('PRAGMA user_version').fetchone()[0] == db.SCHEMA_VERSION
         snapshots = list((tmp_path / 'userdata' / '.migration-snapshots').glob('before-schema-*.db'))
         assert len(snapshots) == 1
@@ -91,7 +91,7 @@ def test_encrypted_v1_patient_gp_migration_preserves_rollback_snapshot(tmp_path,
     target = tmp_path / 'userdata' / 'hmr.db'
     target.parent.mkdir()
     # Build a fully encrypted synthetic database, then represent the v1 patient schema.
-    with db.connect(str(target)) as previous:
+    with contextlib.closing(db.connect(str(target))) as previous:
         previous.execute("INSERT INTO patients(key,name,gp) VALUES ('v1-synthetic','Version One Synthetic','Dr Example')")
         previous.execute("INSERT INTO messages(id,direction,body,state,created_at) VALUES ('v1msg','in','fictional message','received','2026-01-01')")
         for col in ('gp_provider', 'clinic_address', 'clinic_phone'):
@@ -99,7 +99,7 @@ def test_encrypted_v1_patient_gp_migration_preserves_rollback_snapshot(tmp_path,
         previous.execute('PRAGMA user_version = 1')
         previous.commit()
         key = previous.hmr_key
-    with db.open_encrypted(target, key=key, readonly=True) as old:
+    with contextlib.closing(db.open_encrypted(target, key=key, readonly=True)) as old:
         assert old.execute('PRAGMA user_version').fetchone()[0] == 1
         assert 'gp_provider' not in {r[1] for r in old.execute('PRAGMA table_info(patients)')}
         assert old.execute("SELECT name FROM patients WHERE key='v1-synthetic'").fetchone()[0] == 'Version One Synthetic'
@@ -114,7 +114,7 @@ def test_encrypted_v1_patient_gp_migration_preserves_rollback_snapshot(tmp_path,
     # The immutable snapshot must still open as the v1 schema with its original records.
     rollback_copy = tmp_path / 'rollback-synthetic.db'
     shutil.copy2(snapshots[0], rollback_copy)
-    with db.open_encrypted(rollback_copy, key=key) as restored:
+    with contextlib.closing(db.open_encrypted(rollback_copy, key=key)) as restored:
         assert restored.execute('PRAGMA integrity_check').fetchone()[0] == 'ok'
         assert restored.execute('PRAGMA user_version').fetchone()[0] == 1
         assert 'gp_provider' not in {r[1] for r in restored.execute('PRAGMA table_info(patients)')}
