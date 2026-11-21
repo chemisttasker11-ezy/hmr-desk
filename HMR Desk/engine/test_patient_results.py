@@ -131,3 +131,16 @@ def test_results_view_does_not_change_sign_off_rules(tmp_path, monkeypatch):
     records.put(conn, patient['id'], 'MIMS interactions (manual) 2026-11-21.txt', b'Checked by hand'); conn.commit()
     assert report_auth.check_approval(conn, patient, body).keys() == before.keys()   # no new sign-off condition
     conn.close()
+
+
+def test_recheck_and_new_result_after_sign_off_keep_the_signed_state(tmp_path, monkeypatch):
+    conn, patient, folder, body = case(tmp_path, monkeypatch)
+    patient = _complete(conn, patient, state='signed_off')
+    patient_actions.action(conn, patient, {'action': 'pathology_recheck'})
+    status, _ = routes_pathology.handle(conn, 'POST', '/api/pathology/result', {}, {'id': patient['id'], 'saved': ['later.pdf'], 'status': 'saved'})
+    assert status == 200
+    after = conn.execute('SELECT * FROM patients WHERE id=?', (patient['id'],)).fetchone()
+    assert after['state'] == 'signed_off'                      # never moved back, signed version not reopened
+    assert not steps.pathology_recheck_pending(conn, after)
+    assert 'interactions' in steps.REPEATABLE and steps.ready('interactions', conn, after)[1] != 'already done'
+    conn.close()
