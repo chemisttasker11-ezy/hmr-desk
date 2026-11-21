@@ -23,7 +23,7 @@ SKILL = APP_ASSETS
 EXTRACT_SCRIPT = APP_ASSETS / 'scripts' / 'extract.py'
 BUILD_SCRIPT = APP_ASSETS / 'scripts' / 'build.py'
 INTERVIEW_SCRIPT = APP_ASSETS / 'scripts' / 'make_interview.py'
-FIELDS = {'name', 'sex', 'dob', 'medicare', 'irn', 'address', 'suburb', 'phone', 'gp', 'gp_initials', 'gp_provider', 'clinic', 'referral_date', 'ihi', 'notes'}
+FIELDS = {'name', 'sex', 'dob', 'medicare', 'irn', 'address', 'suburb', 'phone', 'gp', 'gp_initials', 'gp_provider', 'clinic', 'clinic_address', 'clinic_phone', 'referral_date', 'ihi', 'notes'}
 _lock = threading.Lock()
 _jobs = {}
 _active = None
@@ -268,6 +268,8 @@ def report_build(patient_id, pdf=False):
         if data.get('pathology_revision') and data['pathology_revision'] != pathology_records.revision(conn, p):
             raise ValueError('Pathology changed after report preparation; refresh and re-review the report before building')
         if not data['issues']: raise ValueError('add at least one finding')
+        held = report.held_actions(conn, p)
+        if held: raise ValueError('Handle held medicine recommendations before building: ' + str(len(held)))
         pending = report.placeholders(data)
         if pending: raise ValueError('Review placeholder fields: ' + ', '.join(pending))
         unreviewed = report.template_reviews_pending(conn, p, data)
@@ -280,13 +282,18 @@ def report_build(patient_id, pdf=False):
             'pathology_revision': pathology_records.revision(conn, p),
             'source_files_sha256': report_auth.source_snapshot(conn, p),
             'clinical_snapshot_sha256': report_auth.clinical_snapshot_hash(conn, p),
+            'clinical_snapshot_contract': 2,
             'demographics': report.demographic_status(conn, p, data),  # block name -> matches/kept/unresolved, no text
         }
         import interaction_scope
+        snapshot['interactions_evidence_sha256'] = interaction_scope.evidence_digest(conn, p)
         data, interaction_scope_result = interaction_scope.apply_to_report(conn, p, data)
         import pharmacist_identity
         identity = pharmacist_identity.resolve(conn)
         data = dict(data, pharmacist_details=identity['text'])
+        import settings as hmr_settings
+        include_gp_plan = hmr_settings.get(conn, 'report_include_gp_plan')
+        use_original = hmr_settings.get(conn, 'report_use_original_builder')
         conn.rollback()  # end the read snapshot before rendering; later writes (events, state) must not be blocked by it
         from pathlib import PureWindowsPath
         raw = str(data['out'])
@@ -314,23 +321,37 @@ def report_build(patient_id, pdf=False):
             pass
         # Missing owner approval always means provisional, never a final layout.
         # An installed but invalid manifest must fail closed (do not downgrade).
-        with tempfile.TemporaryDirectory(prefix='.hmr-docx-', dir=folder) as directory:
-            draft = Path(directory) / target.name
-            if approved:
-                template_report_builder.render(data, draft, approved[0])
-                placed = template_report_builder.has_marker(approved[0], 'PHARMACIST')
-            else:
-                local_report_builder.render(data, draft)
-            if not draft.is_file(): raise RuntimeError('Draft Word report failed to render')
-            if target.exists(): raise FileExistsError('Output appeared during report rendering')
-            os.replace(draft, target)
-        output = ('Built approved-layout Word draft ' + approved[1]['version']
-                  if approved else 'Built a provisional local Word report (not owner-approved)')
-        if identity['text'] and approved and not placed:
+        import original_builder_adapter
+        if use_original and include_gp_plan:
+            raise ValueError('The optional GP Plan column cannot be honoured by the original Word report builder. Turn off either the GP Plan column or the original builder setting; the report was not built.')
+        if use_original and not original_builder_adapter.assets_present(db.DATA_DIR):
+            raise ValueError('Original Word report builder was selected but its private assets are unavailable')
+        placed = False
+        if use_original:
+            # The owner's original builder, run unmodified in an isolated worker. No fallback renderer: any failure
+            # raises. Neither output may already exist (no overwrite); the Word PDF it checks is the PDF we keep.
+            original_builder_adapter.build_with_assets(data, target, db.DATA_DIR, pdf_target if pdf else None)
+        else:
+            with tempfile.TemporaryDirectory(prefix='.hmr-docx-', dir=folder) as directory:
+                draft = Path(directory) / target.name
+                if approved:
+                    template_report_builder.render(data, draft, approved[0], include_gp_plan=include_gp_plan)
+                    placed = template_report_builder.has_marker(approved[0], 'PHARMACIST')
+                else:
+                    local_report_builder.render(data, draft, include_gp_plan=include_gp_plan)
+                if not draft.is_file(): raise RuntimeError('Draft Word report failed to render')
+                if target.exists(): raise FileExistsError('Output appeared during report rendering')
+                os.replace(draft, target)
+        output = ('Built with the original report builder (Word render)' if use_original else
+                  'Built approved-layout Word draft ' + approved[1]['version'] if approved
+                  else 'Built a provisional local Word report (not owner-approved)')
+        if identity['text'] and approved and not placed and not use_original:
             output += '. Pharmacist details were not placed: the approved layout has no pharmacist placeholder.'
         if identity['name'] and identity['note']:
             output += '. ' + identity['note']
-        if pdf:
+        if pdf and use_original:
+            output += '. Word PDF created'
+        if pdf and not use_original:
             try:
                 converted = pdf_export.convert(target, pdf_target)
             except (OSError, ValueError, RuntimeError) as exc:
@@ -358,12 +379,17 @@ def report_build(patient_id, pdf=False):
             'report_spec_sha256': hashlib.sha256(spec_bytes).hexdigest(),
             'interview_revision': snapshot['interview_revision'],
             'pathology_revision': snapshot['pathology_revision'],
-            'template_version': approved[1]['version'] if approved else '',
-            'template_sha256': approved[1]['sha256'] if approved else '',
-            'template_approved': bool(approved),
+            'template_version': 'original-template-copy' if use_original else approved[1]['version'] if approved else '',
+            'template_sha256': original_builder_adapter.PINNED['Template - Copy.docx'] if use_original else approved[1]['sha256'] if approved else '',
+            # Original-builder output stays unapproved for sign-off until the approval rule for it is decided.
+            'template_approved': False if use_original else bool(approved),
+            'report_include_gp_plan': include_gp_plan,
+            **({'renderer': 'original_builder'} if use_original else {}),
             'source_files_sha256': snapshot['source_files_sha256'],
             'clinical_snapshot_sha256': snapshot['clinical_snapshot_sha256'],
+            'clinical_snapshot_contract': snapshot['clinical_snapshot_contract'],
             'demographics': snapshot['demographics'],
+            'interactions_evidence_sha256': snapshot['interactions_evidence_sha256'],
             'pharmacist_identity_sha256': pharmacist_identity.digest(identity),
         }
         db.log(conn, patient_id, 'report_build', evidence, 'job')

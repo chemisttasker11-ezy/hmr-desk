@@ -33,6 +33,7 @@ contextBridge.exposeInMainWorld('hmr', {
   rollbackLastActivation: () => ipcRenderer.invoke('rollback-last-activation'),
   activateRestored: passphrase => ipcRenderer.invoke('activate-restored', passphrase),
   openPatientFolder: (id, file) => ipcRenderer.invoke('open-patient-folder', id, file),
+  openPatientFile: (id, section, name) => ipcRenderer.invoke('open-patient-file', id, section, name),
   openReportVersion: (id, file, format) => ipcRenderer.invoke('open-report-version', id, file, format),
   pickLocalReference: edition => ipcRenderer.invoke('local-reference-pick', edition),
   openLocalReference: (hash,page) => ipcRenderer.invoke('local-reference-open', hash,page),

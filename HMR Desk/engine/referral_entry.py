@@ -16,7 +16,7 @@ import fitz
 MAX_PDF = 25 * 1024 * 1024
 MAX_PAGES = 150
 MAX_TEXT_PER_PAGE = 150000
-FIELDS = ('name', 'phone', 'address', 'suburb', 'gp', 'clinic', 'referral_date', 'dob', 'sex', 'medicare', 'irn', 'ihi')
+FIELDS = ('name', 'phone', 'address', 'suburb', 'gp', 'clinic', 'gp_provider', 'clinic_address', 'clinic_phone', 'referral_date', 'dob', 'sex', 'medicare', 'irn', 'ihi')
 
 
 def parser():
@@ -110,11 +110,29 @@ def review(conn, paths):
     return {'rows': result}
 
 
+_DATE_FORMATS = ('%Y-%m-%d', '%d/%m/%Y', '%d-%m-%Y', '%d %b %Y', '%d %B %Y')
+
+
+def _canonical_dob(value):
+    """Canonical comparison only; never rewrite a legacy DOB or guess its format.
+
+    Existing patient rows may predate date validation. An unparseable legacy
+    value is NOT reliable evidence of a different person.
+    """
+    value = (value or '').strip()
+    for fmt in _DATE_FORMATS:
+        try:
+            return dt.datetime.strptime(value, fmt).date().isoformat()
+        except ValueError:
+            pass
+    return None
+
+
 def _validate_date(value, field):
     value = (value or '').strip()
     if not value:
         return
-    for fmt in ('%Y-%m-%d', '%d/%m/%Y', '%d-%m-%Y', '%d %b %Y', '%d %B %Y'):
+    for fmt in _DATE_FORMATS:
         try:
             parsed = dt.datetime.strptime(value, fmt).date()
         except ValueError:
@@ -236,15 +254,21 @@ def commit(conn, token, fields, distinct_person=False, manual_referral=False, cl
         if candidates:
             if not distinct_person: raise ValueError('Patient name matches an existing record; compare reliable identifiers and explicitly confirm a different person')
             for candidate in candidates:
+                compared = False
                 for identifier in ('ihi', 'medicare'):
-                    left, right = (fields.get(identifier) or '').strip(), (candidate[identifier] or '').strip()
-                    if left and right and re.sub(r'\D', '', left) == re.sub(r'\D', '', right):
-                        raise ValueError('Identifier matches an existing patient; do not create a separate identity')
-                dob = (fields.get('dob') or '').strip()
-                if dob and candidate['dob'] and dob == candidate['dob']:
-                    raise ValueError('Name and date of birth match an existing patient; review existing record')
-                compared = any((fields.get(field) or '').strip() and candidate[field] and
-                               (fields.get(field) or '').strip() != candidate[field] for field in ('dob', 'ihi', 'medicare'))
+                    left = re.sub(r'\D', '', (fields.get(identifier) or '').strip())
+                    right = re.sub(r'\D', '', (candidate[identifier] or '').strip())
+                    # Non-digit placeholders are not comparable identifiers.
+                    if left and right:
+                        if left == right:
+                            raise ValueError('Identifier matches an existing patient; do not create a separate identity')
+                        compared = True
+                dob = _canonical_dob(fields.get('dob'))
+                existing_dob = _canonical_dob(candidate['dob'])
+                if dob and existing_dob:
+                    if dob == existing_dob:
+                        raise ValueError('Name and date of birth match an existing patient; review existing record')
+                    compared = True
                 if not compared:
                     raise ValueError('Different reliable identifiers are required before adding a same-name patient')
             key = key + ' @' + uuid.uuid4().hex[:12]

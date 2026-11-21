@@ -179,6 +179,10 @@ def _action(conn, p, body, moved_items):
         if outcome == 'saved_by_hand': conn.execute('UPDATE patients SET has_pathology=1,updated_at=? WHERE id=?', (db.now(), pid))
         db.log(conn, pid, 'pathology_result', {'status': statuses[outcome], 'note': note}, 'app')
         conn.execute("UPDATE tasks SET state=?,output=?,finished=? WHERE patient_id=? AND step='pathology' AND state IN ('queued','waiting')", ('cancelled' if outcome == 'access_code' else 'done', statuses[outcome], db.now(), pid))
+    elif name == 'pathology_recheck':
+        # Online later: collect pathology again for a patient who already has results or a hand-entered outcome.
+        if p['state'] not in (*steps.PRE, 'visited', 'report_drafted', 'signed_off'): raise ValueError('invalid patient state')
+        db.log(conn, pid, 'pathology_recheck', {}, 'app')
     elif name == 'interactions_manual':
         if p['state'] not in ('visited', 'report_drafted', 'signed_off'): raise ValueError('invalid patient state')
         text = body.get('text')
@@ -262,9 +266,16 @@ def _action(conn, p, body, moved_items):
         db.log(conn, pid, 'note', {'text': body['text']}, 'app')
     elif name == 'update':
         fields = body.get('fields')
-        allowed = {'phone', 'address', 'suburb', 'postcode', 'medicare', 'irn', 'ihi', 'dob', 'sex'}
+        allowed = {'phone', 'address', 'suburb', 'postcode', 'medicare', 'irn', 'ihi', 'dob', 'sex',
+                   'gp', 'clinic', 'gp_provider', 'clinic_address', 'clinic_phone', 'referral_date'}
         if not isinstance(fields, dict) or not fields or not fields.keys() <= allowed or any(v is not None and not isinstance(v, str) for v in fields.values()):
             raise ValueError('invalid fields')
+        if 'referral_date' in fields and fields['referral_date']:
+            try:
+                if __import__('datetime').date.fromisoformat(fields['referral_date']).isoformat() != fields['referral_date']:
+                    raise ValueError('invalid referral date')
+            except ValueError:
+                raise ValueError('Referral date must be YYYY-MM-DD')
         conn.execute('UPDATE patients SET ' + ','.join(k+'=?' for k in fields) + ',updated_at=? WHERE id=?', [*fields.values(), db.now(), pid])
         db.log(conn, pid, 'update', fields, 'app')
     else:

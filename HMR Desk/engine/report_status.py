@@ -63,11 +63,15 @@ def _reasons(conn, patient, detail):
             reasons.append('interview_changed')
         if pathology_records.revision(conn, patient) != detail.get('pathology_revision'):
             reasons.append('pathology_changed')
+        if detail.get('interactions_evidence_sha256'):  # builds made before this field was recorded are not judged on it
+            import interaction_scope
+            if detail['interactions_evidence_sha256'] != interaction_scope.evidence_digest(conn, patient):
+                reasons.append('interactions_changed')
         if detail.get('pharmacist_identity_sha256') and detail['pharmacist_identity_sha256'] != _identity_digest(conn):
             reasons.append('pharmacist_identity_changed')
         if detail.get('source_files_sha256') != report_auth.source_snapshot(conn, patient):
             reasons.append('source_files_changed')
-        if detail.get('clinical_snapshot_sha256') != report_auth.clinical_snapshot_hash(conn, patient):
+        if not report_auth.clinical_snapshot_matches(conn, patient, detail) or report_auth.legacy_gp_block_changed(conn, patient, detail):
             reasons.append('clinical_record_changed')
     except Exception as error:  # an unreadable file or record is not a reason to fail the whole status
         _unverifiable('build evidence', error)
@@ -117,7 +121,15 @@ def report_status(conn, patient):
         "SELECT 1 FROM events WHERE patient_id=? AND type='signed_off' LIMIT 1", (patient['id'],)).fetchone()
     out = {'status': 'not_generated', 'reasons': [], 'file': '', 'signed_off': bool(signed),
            'signed_version_intact': None, 'note': NOTE, 'readiness': readiness(conn, patient)}
+    try:  # typed medicine Action text that refresh could not carry forward and nobody has handled yet; blocks build and sign-off
+        import report
+        out['held_medicine_actions'] = len(report.held_actions(conn, patient))
+    except Exception as error:
+        _unverifiable('held medicine actions', error)
+        out['held_medicine_actions'] = None
     if detail:
+        # Evidence without a contract marker predates GP-detail coverage; shown so the limit is not hidden.
+        out['snapshot_coverage'] = 'current' if 'clinical_snapshot_contract' in detail else 'legacy_gp_block_by_report_text'
         reasons = _reasons(conn, patient, detail)
         out.update(status='outdated' if reasons else 'current', reasons=reasons, file=str(detail.get('file', '')))
     if signed:
@@ -125,4 +137,33 @@ def report_status(conn, patient):
             out['signed_version_intact'] = bool(report_auth.check_sent(conn, patient))
         except ValueError:
             out['signed_version_intact'] = False
+    return out
+
+
+def build_basis(conn, patient):
+    """Whether the latest built report was made from the pathology and interaction results saved now.
+    Display only. The pathology answer is for the whole saved pathology record and its source PDFs, not per row."""
+    row = conn.execute("SELECT ts,detail FROM events WHERE patient_id=? AND type='report_build' ORDER BY id DESC LIMIT 1",
+                       (patient['id'],)).fetchone()
+    out = {'built': False, 'built_at': None, 'pathology': 'no_report', 'interactions': 'no_report'}
+    detail = _latest_build(conn, patient) if row else None
+    if not detail: return out
+    out.update(built=True, built_at=row['ts'])
+    try:
+        changed = (pathology_records.revision(conn, patient) != detail.get('pathology_revision')
+                   or detail.get('source_files_sha256') != report_auth.source_snapshot(conn, patient))
+        out['pathology'] = 'changed_since_build' if changed else 'used_by_report'
+    except Exception as error:
+        _unverifiable('pathology basis', error)
+        out['pathology'] = 'unknown'
+    if not detail.get('interactions_evidence_sha256'):
+        out['interactions'] = 'not_recorded'
+    else:
+        try:
+            import interaction_scope
+            same = detail['interactions_evidence_sha256'] == interaction_scope.evidence_digest(conn, patient)
+            out['interactions'] = 'used_by_report' if same else 'changed_since_build'
+        except Exception as error:
+            _unverifiable('interaction basis', error)
+            out['interactions'] = 'unknown'
     return out

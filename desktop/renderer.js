@@ -52,7 +52,7 @@ const actionFields = {
   claimed: ['date'],
   followup1: ['date'],
   followup2: ['date'],
-  update: ['phone', 'address', 'suburb', 'postcode', 'medicare', 'irn', 'ihi', 'dob', 'sex'],
+  update: ['phone', 'address', 'suburb', 'postcode', 'medicare', 'irn', 'ihi', 'dob', 'sex', 'gp', 'gp_provider', 'clinic', 'clinic_address', 'clinic_phone', 'referral_date'],
 };
 const actionLabels = {
   call: 'Log call',
@@ -382,6 +382,22 @@ document.addEventListener('click', async (event) => {
         b.dataset.next,
         { visit: 'visited', 'send report': 'report_sent', claim: 'claimed', 'offer a time': 'book_phone' }[step],
       );
+    }
+    if (b.dataset.openFile !== undefined) {
+      try { await hmr.openPatientFile(Number(selected), b.dataset.openSection, b.dataset.openFile); if ($('file-open-message')) $('file-open-message').textContent = ''; }
+      catch (error) { if ($('file-open-message')) $('file-open-message').textContent = errorText(error); }
+      return;
+    }
+    if (b.dataset.resultsRecheckPathology !== undefined || b.dataset.resultsRunInteractions !== undefined) {
+      // Online later: neither button is blocked by an earlier manual outcome or an earlier result, and neither asks
+      // for a native confirmation. The pathology re-check is recorded first so the My Health Record tab can pick it up.
+      const id = Number(b.dataset.resultsRecheckPathology ?? b.dataset.resultsRunInteractions);
+      const pathology = b.dataset.resultsRecheckPathology !== undefined;
+      if (pathology) await hmr.api('POST', `/api/patients/${encodeURIComponent(id)}/action`, { action: 'pathology_recheck' });
+      await enqueue([pathology ? 'pathology' : 'interactions'], [id]);
+      if (runMessage.includes('\n') || !/^[1-9]\d* task\(s\) queued/.test(runMessage)) alert(runMessage);
+      if (/^[1-9]\d* task\(s\) queued/.test(runMessage)) await navigate(pathology ? 'mhr' : 'emims');
+      return;
     }
     if (b.dataset.amhRow !== undefined) {
       const name = H.genericName(b.closest('td').querySelector('[data-col="0"]').value);

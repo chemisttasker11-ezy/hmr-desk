@@ -335,7 +335,7 @@ async function arm(site) {
         const names = queues[site].map((p) => fileKey(p.folder).toLowerCase());
         if (new Set(names).size !== names.length) throw Error('Duplicate names; remove or rename one-off entries');
       }
-      if (!queues[site].length) return 'Nothing to run';
+      if (!queues[site].length) return require('./src/browser-queue').emptyQueueMessage(reply);
       armed[site] = true;
       tabState(site);
       try { await inject(site); }
@@ -529,6 +529,17 @@ ipcMain.handle('open-patient-folder', async (e, id, file) => {
   }
   const error = await shell.openPath(openTarget);
   if (error) throw Error(error);
+});
+ipcMain.handle('open-patient-file', async (e, id, section, name) => {
+  if (e.sender !== win.webContents || !Number.isSafeInteger(id) || id < 1) throw Error('Forbidden');
+  const patient = await api('GET', `/api/patients/${id}`);
+  const folder = patient.folder_path || patient.folder;
+  if (typeof folder !== 'string' || !folder) throw Error('Patient has no folder');
+  const { file, how } = await require('./src/patient-file-open').resolve(fsp, config.base, folder, section, name);
+  if (how === 'viewer') { await openBundledPdfViewer(file, path.basename(file)); return { opened: true, viewer: 'bundled' }; }
+  const error = await shell.openPath(file);
+  if (error) throw Error('Windows could not open this file; use an installed compatible viewer');
+  return { opened: true, viewer: 'external' };
 });
 ipcMain.on('draft-store', (e, action, key, value) => {
   if (e.sender !== win?.webContents) {

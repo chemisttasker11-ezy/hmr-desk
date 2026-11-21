@@ -146,12 +146,18 @@ async function loadSuggestions() {
   }
   if ($('suggestions')) $('suggestions').innerHTML = suggestionsHtml();
 }
+const heldReasons = { duplicate: 'More than one identical medicine row, so the text cannot be assigned safely.', changed_or_removed: 'The medicine, its use or its source note changed, or the row is gone.' };
+function heldActionsHtml() {
+  const held = reportRecord?.held_medicine_actions || [];
+  if (!held.length) return '';
+  return `<div class="report-refresh" role="alert" data-held-actions><div style="width:100%"><strong>${held.length} medicine recommendation${held.length === 1 ? '' : 's'} not carried forward by refresh</strong><p class="muted">Your typed text is kept here. It was not applied to any row. Re-enter it in the Action column only where it still applies, then mark it handled.</p>${held.map((h, i) => `<section data-held-action="${esc(h.id)}"><strong>${esc(h.name)}</strong><div class="muted">${esc(h.directions)}${h.comment ? ' | ' + esc(h.comment) : ''}</div><div class="muted">${esc(heldReasons[h.reason] || 'Not carried forward.')}</div><pre style="white-space:pre-wrap;overflow-wrap:anywhere">${esc(h.action)}</pre><div class="actions"><button data-held-copy="${i}">Copy text</button><button data-held-resolve="${esc(h.id)}">Mark handled</button></div></section>`).join('')}</div></div>`;
+}
 function suggestionEvidenceHtml(item) {
   if (!item.evidence?.length) return '<p>No source-addressed evidence supplied. Reload suggestions.</p>';
   return `<details open><summary>Matched source evidence (not clinical interpretation)</summary>${item.evidence.map(e => `<section class="suggestion-evidence" style="overflow-wrap:anywhere"><strong>${esc(e.kind)} - ${esc(e.id)}</strong><p style="white-space:pre-wrap">${esc(e.text)}</p><p>${esc(e.verification || '')}${e.verified_by ? ` | ${esc(e.verified_by)} at ${esc(e.verified_at || 'time not recorded')}` : ''}${e.use_status ? ` | Use: ${esc(e.use_status)}` : ''}</p><p>Source: ${esc(e.source || 'not established')} | Date: ${esc(e.date || 'not established')}${e.age_days !== null && e.age_days !== undefined ? ` (${esc(e.age_days)} days before context check)` : ''}</p>${e.unit !== undefined ? `<p>Units: ${esc(e.unit || 'missing')} | Reference interval: ${esc(e.reference_interval || 'not recorded')}</p>` : ''}${e.comment ? `<p>Original comment: ${esc(e.comment)}</p>` : ''}${e.flags?.length ? `<p>Check: ${esc(e.flags.join('; '))}</p>` : ''}</section>`).join('')}</details>`;
 }
 function suggestionsHtml() {
-  return `${reportGaps.length ? (reportGaps.every(gap => typeof gap === 'string' && gap.trim()) ? `<ul class="muted">${reportGaps.map(gap => `<li>${esc(gap.replaceAll('_', ' '))}</li>`).join('')}</ul>` : '<p class="muted">Add interview notes or confirm the medicines to get suggestions.</p>') : ''}${reportSuggestionMessage ? `<p class="muted">${esc(reportSuggestionMessage)}</p>` : ''}${reportSuggestions.map((item, i) => (reportDismissed.has(i) ? '' : `<article class="card helper-card"><span class="source-chip">${esc(H.sourceLabel(item.source))}</span><h3>${esc(item.title)}</h3>${item.why?.length ? `<ul>${item.why.map((why) => `<li>${esc(why)}</li>`).join('')}</ul>` : ''}<p class="muted">Past-case template only, not a patient finding. Review and edit before inclusion.</p><h4>Proposed recommendation</h4><p>${esc(item.rec || '')}</p><h4>Template rationale</h4><p>${esc(item.rationale || '')}</p>${suggestionEvidenceHtml(item)}${item.missing?.length ? `<p>Check first: ${esc(item.missing.join(', '))}</p>` : ''}${item.brainstorm ? `<details><summary>Brainstorm V2 - ${esc(item.brainstorm.title)} (p.${esc(item.brainstorm.page)})</summary><p>${esc(item.brainstorm.snippet)}</p><button data-suggestion-copy="${i}">Copy</button></details>` : ''}<div class="actions"><button data-suggestion-add="${i}" ${reportAdded.has(i) || !reportSuggestionSnapshot ? 'disabled' : ''}>${reportAdded.has(i) ? 'Added' : 'Add to findings'}</button><button data-suggestion-dismiss="${i}">Dismiss</button></div></article>`)).join('')}`;
+  return `${reportGaps.length ? (reportGaps.every(gap => typeof gap === 'string' && gap.trim()) ? `<ul class="muted">${reportGaps.map(gap => `<li>${esc(gap.replaceAll('_', ' '))}</li>`).join('')}</ul>` : '<p class="muted">Add interview notes or confirm the medicines to get suggestions.</p>') : ''}${reportSuggestionMessage ? `<p class="muted">${esc(reportSuggestionMessage)}</p>` : ''}${reportSuggestions.map((item, i) => (reportDismissed.has(i) ? '' : `<article class="card helper-card"><span class="source-chip">${esc(H.sourceLabel(item.source))}</span><h3>${esc(item.title)}</h3>${item.why?.length ? `<ul>${item.why.map((why) => `<li>${esc(why)}</li>`).join('')}</ul>` : ''}<p class="muted">Past-case template only, not a patient finding. Review and edit before inclusion.</p><h4>Proposed recommendation</h4><p>${esc(item.rec || '')}</p><h4>Template rationale</h4><p>${esc(item.rationale || '')}</p>${suggestionEvidenceHtml(item)}${item.missing?.length ? `<p>Check first:</p><ul data-suggestion-check-first>${item.missing.map((m) => `<li>${esc(m)}</li>`).join('')}</ul>` : ''}${item.brainstorm ? `<details><summary>Brainstorm V2 - ${esc(item.brainstorm.title)} (p.${esc(item.brainstorm.page)})</summary><p>${esc(item.brainstorm.snippet)}</p><button data-suggestion-copy="${i}">Copy</button></details>` : ''}<div class="actions"><button data-suggestion-add="${i}" ${reportAdded.has(i) || !reportSuggestionSnapshot ? 'disabled' : ''}>${reportAdded.has(i) ? 'Added' : 'Add to findings'}</button><button data-suggestion-dismiss="${i}">Dismiss</button></div></article>`)).join('')}`;
 }
 function reportField(key, label, multiline = true) {
   const review = reportRecord.needs_review?.includes(key)
@@ -208,7 +214,7 @@ function renderReport() {
     Object.entries(reportTables)
       .map(
         ([key, columns]) =>
-          `<div class="report-table"><h3>${esc({ meds: 'Medicines', otc: 'OTC', ceased: 'Ceased medicines', path: 'Pathology' }[key])}</h3>${key === 'path' ? reportField('path_date', 'Pathology date', false) : ''}${H.tableInput(key, key, columns, reportRecord[key], 'report')}</div>`,
+          `<div class="report-table"><h3>${esc({ meds: 'Medicines', otc: 'OTC', ceased: 'Ceased medicines', path: 'Pathology' }[key])}</h3>${key === 'path' ? reportField('path_date', 'Pathology date', false) : ''}${H.tableInput(key, key, columns, reportRecord[key], 'report')}${key === 'meds' ? `<div id="held-actions">${heldActionsHtml()}</div>` : ''}</div>`,
       )
       .join('');
   const findings = reportRecord.issues
@@ -451,13 +457,29 @@ async function reportEditorClick(b) {
   if (page !== 'report_editor' || !reportRecord) return false;
   const d = b.dataset;
   if (d.demoAction !== undefined) return resolveDemographic(d.demoAction, d.demoKey);
+  if (d.heldCopy !== undefined) {
+    const text = (reportRecord?.held_medicine_actions || [])[Number(d.heldCopy)]?.action;
+    if (text) navigator.clipboard?.writeText(text).catch(() => alert('Copy failed. Select the text and copy it manually.'));
+    return true;
+  }
+  if (d.heldResolve !== undefined) {
+    const id = reportId;
+    hmr.api('POST', `/api/patients/${encodeURIComponent(id)}/report/held-actions`, { id: d.heldResolve, action: 'resolve' })
+      .then((updated) => { if (reportId === id && reportRecord) { reportRecord.held_medicine_actions = updated.held_medicine_actions || []; if ($('held-actions')) $('held-actions').innerHTML = heldActionsHtml(); loadReportStatus(); } })
+      .catch((error) => alert(errorText(error)));
+    return true;
+  }
   if (d.reportRefresh !== undefined) {
-    if (!confirm("This replaces the report's conditions, allergies, observations, medicine tables and pathology with the current interview. Patient, GP and date blocks follow the patient record unless you edited them; you will be asked about each edited block. Your findings and letter text are kept. A backup of the current report is saved.")) return true;
+    if (!confirm("Refreshes the report from the latest interview and pathology. Medicine recommendations are kept ONLY when medicine, actual use and source notes are exactly unchanged and unique; otherwise the typed text is listed under the Medicines table for you to re-enter, and building is blocked until you mark each one handled. Other table edits may be replaced. Your findings and letter text are kept, and the previous report is backed up. Continue?")) return true;
     const id = reportId, screen = $('screen');
     screen.inert = true;
     try {
       if (!(await reportSaver.save())) return true;
       let result = await hmr.api('POST', `/api/patients/${encodeURIComponent(id)}/report/refresh`);
+      const medicineNotes = result?.medication_recommendations;
+      if (medicineNotes?.needs_reentry) {
+        alert(`${medicineNotes.needs_reentry} previous medication recommendation(s) could not be safely carried forward because the medicine, directions, notes or duplicate identity changed. They are listed under the Medicines table. Re-enter any that still apply, then mark each handled, before building.`);
+      }
       // Blocks the pharmacist edited are kept; each difference from the patient record is offered, never replaced silently.
       const replace = (result?.demographic_conflicts || []).filter((c) => confirm(`The ${c.label} in this report was edited and differs from the current patient record.\n\nIn the report:\n${c.report}\n\nIn the patient record:\n${c.record}\n\nOK replaces the report text with the patient record. Cancel keeps your edited text.`)).map((c) => c.key);
       if (replace.length) await hmr.api('POST', `/api/patients/${encodeURIComponent(id)}/report/refresh`, { replace_demographics: replace });

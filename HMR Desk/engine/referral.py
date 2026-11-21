@@ -59,7 +59,7 @@ def clean(line):
     # for observed variants rather than interpreting document structure.
     return re.sub(r'^[\s\u2022\u25cf\u25a0\u00b7\u2219\u2023\u25aa\u2043*\-]+', '', line).strip()
 
-def medicines(lines, source_rows=None):
+def medicines(lines, source_rows=None, unattributed=None):
     rows = []; leftovers = False
     for raw in lines:
         line = clean(raw)
@@ -71,6 +71,13 @@ def medicines(lines, source_rows=None):
             rows.append([line[:cut].strip(), line[cut:].strip()] if m else [line, ''])
             if source_rows is not None: source_rows.append([raw])
         elif rows and DIRECTION.match(line):
+            if not rows[-1][1] and len(rows) > 1 and not rows[-2][1]:
+                # Two medicine lines in a row with no directions, then directions: the PDF text lists names and directions
+                # in separate runs (column order), so which direction belongs to which medicine is unknown. Do not guess:
+                # keep the text unattached and make the pharmacist read the referral.
+                if unattributed is not None: unattributed.append(line)
+                leftovers = True
+                continue
             rows[-1][1] = ' '.join(filter(None, (rows[-1][1], line)))
             if source_rows is not None: source_rows[-1].append(raw)
         elif rows and rows[-1][1] and not rows[-1][1].endswith('.') and not DATE.fullmatch(line) and len(line) < 90 and not re.match(r'(?i)^(?:dr|patient|name|dob|address|phone)\b', line):
@@ -80,6 +87,21 @@ def medicines(lines, source_rows=None):
             leftovers = True
     return rows, leftovers
 
+FORM_INSTRUCTION = re.compile(r'(?i)^(?:issues that may influence medication use|to select any item\s*[-\u2013\u2014]\s*click its checkbox|currently taking \d+ or more regular medications)\s*:?$')
+FORM_OPTION = re.compile(r'(?i)^(?:\S\s+)?(?:poor vision|hearing problems|swallowing difficulties|dexterity|language and/or literacy problems|cognition|other:\s*please specify\.*)\s*\.*$')
+FORM_GLYPH = re.compile(r'^[\u2610\u2611\u2612\u25a1\u25a0\u25aa\u2713\u2714\uf0a8\uf0fc\uf06f]$|^[A-Z]$')
+
+def form_checklist(lines):
+    """Split a pre-printed referral form checklist out of free text. A tick cannot be read from extracted text (a box glyph often
+    comes out as a stray letter), so these lines are kept apart for the pharmacist to check against the PDF, never in the
+    narrative that reaches the report."""
+    keep, form = [], []
+    for line in lines:
+        text = clean(line)
+        if FORM_INSTRUCTION.fullmatch(text) or FORM_OPTION.fullmatch(text) or FORM_GLYPH.fullmatch(text): form.append(line)
+        else: keep.append(line)
+    return keep, form
+
 def parse(text):
     sec = sections(text)
     result = {'layout': layout(text), 'meds': [], 'ceased': [], 'conditions': [], 'allergies': [], 'obs': {'height': '', 'weight': '', 'bmi': '', 'bp': ''}, 'smoking': '', 'alcohol': '', 'social': '', 'reason': '', 'renal': '', 'unparsed': []}
@@ -88,7 +110,8 @@ def parse(text):
         result['unparsed'] = [k for k in sec if k != 'other']
         return result
     result['medicine_source_lines'] = []
-    result['meds'], bad = medicines(sec.get('meds', []), result['medicine_source_lines'])
+    result['unattributed_directions'] = []
+    result['meds'], bad = medicines(sec.get('meds', []), result['medicine_source_lines'], result['unattributed_directions'])
     if 'meds' in sec and (bad or not result['meds']): result['unparsed'].append('meds')
     ceased, bad = medicines(sec.get('ceased', [])); result['ceased'] = [' '.join(filter(None, row)) for row in ceased]
     if 'ceased' in sec and (bad or not ceased): result['unparsed'].append('ceased')
@@ -118,10 +141,12 @@ def parse(text):
             val = lines[i+1] if i+1 < len(lines) else ''
             date = lines[i-1] if i and DATE.fullmatch(lines[i-1]) else ''
             if re.search(r'\d', val): result['renal'] += ('; ' if result['renal'] else '') + ' '.join(filter(None, (line, val, date)))
+    result['form_checklist'] = []
     for key in ('social', 'reason'):
         if key in sec:
-            result[key] = '\n'.join(sec[key]);
-            if not result[key]: result['unparsed'].append(key)
+            narrative, form = form_checklist(sec[key]); result['form_checklist'] += form
+            result[key] = '\n'.join(narrative)
+            if not result[key] and not form: result['unparsed'].append(key)
     for key in ('smoking', 'alcohol'):
         social_lines = sec.get('social', [])
         for i, line in enumerate(social_lines):

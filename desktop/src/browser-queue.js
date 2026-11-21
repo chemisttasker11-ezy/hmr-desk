@@ -39,4 +39,9 @@ function selectQueue(site, entries, tasks) {
 function fileKey(folder) {
   return path.win32.basename(folder).replace(/[<>:"|?*]/g, '_');
 }
-module.exports = { shape, selectQueue, fileKey };
+// An empty queue is normal ("Nothing to run"), except when the build has no helper for this list: the engine then says so.
+function emptyQueueMessage(reply) {
+  const message = reply && !Array.isArray(reply) && reply.helper_available === false ? reply.message : '';
+  return typeof message === 'string' && message.trim() ? message.trim().slice(0, 400) : 'Nothing to run';
+}
+module.exports = { shape, selectQueue, fileKey, emptyQueueMessage };

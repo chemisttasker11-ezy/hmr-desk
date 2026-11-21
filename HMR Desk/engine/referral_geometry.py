@@ -1,0 +1,202 @@
+"""Table-aware pairing of referral medicine names and directions from PDF word boxes.
+
+Text order alone can list every medicine name first and every direction afterwards. Here a direction is paired with a medicine only
+when both sit on the same table row (same vertical position). If anything is ambiguous the result is not ok and the caller keeps the
+fail-closed text path. Nothing is guessed by position in the text stream."""
+import re
+import statistics
+
+import referral
+
+
+def _lines(words):
+    """words: (x0, y0, x1, y1, text). Returns [(y0, y1, [words sorted by x])] top to bottom."""
+    out = []
+    for w in sorted(words, key=lambda w: (w[1], w[0])):
+        h = max(w[3] - w[1], 1.0)
+        if out and abs(w[1] - out[-1][0]) <= 0.5 * h:
+            out[-1][2].append(w); out[-1][1] = max(out[-1][1], w[3])
+        else: out.append([w[1], w[3], [w]])
+    return [(a, b, sorted(ws, key=lambda w: w[0])) for a, b, ws in out]
+
+
+def _text(ws): return ' '.join(w[4] for w in ws).strip()
+
+
+def medicine_region(words):
+    lines = _lines(words)
+    start = None
+    for i, (_, _, ws) in enumerate(lines):
+        if referral.heading(_text(ws)) == 'meds': start = i; break
+    if start is None: return None
+    end = len(lines)
+    for j in range(start + 1, len(lines)):
+        key = referral.heading(_text(lines[j][2]))
+        if key and key != 'meds': end = j; break
+    return [w for _, _, ws in lines[start + 1:end] for w in ws]
+
+
+def _crosses(line, x): return any(w[0] < x < w[2] for w in line[2])
+
+
+def split_columns(lines, min_gap=10.0):
+    """Widest vertical channel that at most a tenth of the lines cross (word extents, not word starts). Returns (x, crossing lines)."""
+    words = [w for l in lines for w in l[2]]
+    if not words: return None
+    lo, hi = int(min(w[0] for w in words)), int(max(w[2] for w in words)) + 1
+    allowed = len(lines) // 10
+    runs = []; start = None
+    for x in range(lo, hi + 1):
+        free = sum(1 for l in lines if _crosses(l, x)) <= allowed
+        if free and start is None: start = x
+        if (not free or x == hi) and start is not None:
+            runs.append((start, x - 1)); start = None
+    best = None
+    for a, b in runs:
+        if b - a + 1 < min_gap: continue
+        mid = (a + b) / 2
+        left = sum(1 for w in words if w[2] <= mid); right = sum(1 for w in words if w[0] >= mid)
+        if left >= 3 and right >= 3 and (best is None or b - a > best[1] - best[0]): best = (a, b)
+    if best is None: return None
+    mid = (best[0] + best[1]) / 2
+    return mid, [l for l in lines if _crosses(l, mid)]
+
+
+def _fail(reason, split=None, extra=None):
+    return {'ok': False, 'reason': reason, 'rows': [], 'source_lines': [], 'split_x': split, 'excluded': extra or []}
+
+
+def footer_like(line_text, y, page_height):
+    """A line may be set aside only if it sits in the top or bottom margin of the page AND carries no medicine or direction content.
+    Distance from the table alone is never enough."""
+    if page_height is None: return False
+    in_margin = y > 0.90 * page_height or y < 0.06 * page_height
+    return in_margin and not referral.STRENGTH.search(line_text) and not referral.DIRECTION.match(line_text)
+
+
+def pair_table(words, page_height=None):
+    """Returns {'ok': bool, 'reason': str, 'rows': [[name, directions]], 'split_x': float|None, 'excluded': [line text]}.
+    A direction starts where a right-column line sits on the same row as a left-column line. A right line with no left line beside it
+    continues the direction above; a left line with no right line beside it continues the name above unless it looks like a new
+    medicine (then the page is ambiguous and nothing is returned)."""
+    region = medicine_region(words)
+    if not region: return _fail('no medicines heading or no words under it')
+    lines = _lines(region)
+    found = split_columns(lines)
+    if found is None: return _fail('no two-column layout found')
+    split, crossing = found
+    height = statistics.median([b - a for a, b, _ in lines]) or 10.0
+    tol = 0.5 * height
+    gaps = [lines[i + 1][0] - lines[i][0] for i in range(len(lines) - 1)]
+    near = [g for g in gaps if g <= 2.5 * height]
+    pitch = statistics.median(near) if near else height     # row pitch from close lines only, so one far footer cannot inflate it
+    table = [l for l in lines if l not in crossing]
+    if not table: return _fail('only full-width lines found', split)
+    last = max(l[0] for l in table)
+    excluded = []
+    for l in crossing:       # a line across both columns is only set aside when it is well clear of the table (footer or page number)
+        if l[0] > last + 3 * pitch and footer_like(_text(l[2]), l[0], page_height): excluded.append(_text(l[2]))
+        else: return _fail('text crosses the column gap inside the table, or is not recognisable as a page footer', split)
+    while len(table) > 1 and table[-1][0] - table[-2][0] > 3 * pitch:   # trailing line well clear of the table
+        if not footer_like(_text(table[-1][2]), table[-1][0], page_height): return _fail('trailing text after the table is not recognisable as a page footer (y=%d)' % round(table[-1][0]), split)
+        excluded.append(_text(table.pop()[2]))
+    cells = []               # (y, side, text) from words split at the channel; a line may hold both sides
+    for y0, y1, ws in table:
+        cells.append((y0, [w for w in ws if w[2] <= split], [w for w in ws if w[0] >= split]))
+    for _, l, r in cells:
+        if any(w[0] < split < w[2] for w in l + r): return _fail('a word crosses the column gap', split)
+    # Words of one table row can sit a point or two apart vertically, so left and right cells are matched by y, not by line.
+    left = _lines([w for _, l, _ in cells for w in l]); right = _lines([w for _, _, r in cells for w in r])
+    if not left or not right: return _fail('one column empty', split)
+    rows = []; src = []; row_of_right = {}; row_words = []
+    r_used = set(); last_left = -1e9
+    for ly, _, lws in left:
+        lt = _text(lws); previous = last_left; last_left = ly
+        hits = [i for i, (ry, _, _) in enumerate(right) if abs(ry - ly) <= tol]
+        if len(hits) > 1: return _fail('two direction lines on one row', split)
+        if hits and not lt[:1].islower():
+            rt = _text(right[hits[0]][2])
+            r_used.add(hits[0]); rows.append([lt, rt]); src.append([lt, rt]); row_words.append(list(lws) + list(right[hits[0]][2])); row_of_right[hits[0]] = len(rows) - 1
+        elif hits:           # lowercase left text beside a right line: both are continuations
+            if not rows: return _fail('continuation before the first row', split)
+            rt = _text(right[hits[0]][2])
+            r_used.add(hits[0]); rows[-1][0] += ' ' + lt; rows[-1][1] = (rows[-1][1] + ' ' + rt).strip(); src[-1] += [lt, rt]; row_words[-1] += list(lws) + list(right[hits[0]][2]); row_of_right[hits[0]] = len(rows) - 1
+        elif referral.STRENGTH.search(lt) and not lt[:1].islower():
+            return _fail('a left line looks like a new medicine but has no direction beside it (y=%d)' % round(ly), split)
+        else:
+            if not rows: return _fail('name text before the first row', split)
+            if ly - previous > 2.2 * height: return _fail('name text far from any row (y=%d)' % round(ly), split)
+            rows[-1][0] += ' ' + lt; src[-1].append(lt); row_words[-1] += list(lws)
+    for i, (ry, _, rws) in enumerate(right):
+        if i in r_used: continue
+        if not rows: return _fail('direction text above the first row', split)
+        above = [k for k in r_used if right[k][0] < ry]
+        if not above: return _fail('direction text above the first row', split)
+        owner = max(above, key=lambda k: right[k][0])
+        if ry - right[owner][0] > 2.2 * height: return _fail('direction text far from any row (y=%d)' % round(ry), split)
+        idx = row_of_right[owner]; rows[idx][1] += ' ' + _text(rws); src[idx].append(_text(rws)); row_words[idx] += list(rws); row_of_right[i] = idx; r_used.add(i)
+    used = sorted(t for r in rows for t in ' '.join(r).split()) + sorted(t for e in excluded for t in e.split())
+    if sorted(used) != sorted(w[4] for w in region):
+        return _fail('some words on the page were not placed in a row or reported as excluded', split)
+    flags = ['row %d name has no recognisable strength' % (i + 1) for i, r in enumerate(rows) if not referral.STRENGTH.search(r[0])]
+    return {'ok': True, 'reason': '', 'split_x': split, 'rows': rows, 'source_lines': src, 'excluded': excluded, 'flags': flags,
+            'row_boxes': [[min(w[0] for w in ws), min(w[1] for w in ws), max(w[2] for w in ws), max(w[3] for w in ws)] for ws in row_words]}
+
+
+def pair_document(pages):
+    """pages: [(words, page_height)]. The table is accepted only when the page after it starts with a different recognised heading
+    (or there is no later page). A repeated or unheaded continuation fails the whole table closed."""
+    for n, (words, height) in enumerate(pages):
+        if medicine_region(words) is None: continue
+        result = pair_table(words, height)
+        result['page'] = n + 1
+        if not result['ok']: return result
+        if n + 1 < len(pages):
+            nxt, nh = pages[n + 1]
+            body = [l for l in _lines(nxt) if l[0] > 0.06 * nh]
+            key = referral.heading(_text(body[0][2])) if body else None
+            if not key or key == 'meds':
+                return _fail('page %d does not start with a different section heading, so the table may continue there' % (n + 2), result['split_x'], result['excluded'])
+        return result
+    return _fail('no medicines heading found')
+
+
+def analyse_pdf(path):
+    import fitz
+    pages = []
+    with fitz.open(path) as doc:
+        for number, page in enumerate(doc, 1):
+            words = [(w[0], w[1], w[2], w[3], w[4]) for w in page.get_text('words')]
+            if medicine_region(words) is not None: pages.append((number, pair_table(words, page.rect.height), words))
+    return pages
+
+
+def shape(text):
+    return re.sub(r'[a-z]', 'a', re.sub(r'[A-Z]', 'A', re.sub(r'\d', '9', text)))
+
+
+# Words that normally appear in a medicine direction. A word outside this list is only FLAGGED for the pharmacist to compare with the
+# page (for example a letter swapped by the scan's text recognition). Nothing is corrected and no direction is rejected.
+DIRECTION_WORDS = frozenset(('a an and as at before after bedtime breakfast dinner lunch day days daily dose doses drop drops every evening food '
+                             'fortnightly from hour hours in inhalation inhaler inj injection is mane meals midday monthly month months morning '
+                             'needed night nocte of on once or patch patches per prn p.r.n puff puffs sachet sachets spray sprays tablet tablets '
+                             'capsule capsules tspn tspns tsp tbsp ml mg mcg g units unit three times twice four five two one six when with '
+                             'without week weekly weeks weekdays alternate other each the to up then if required directed apply use take inhale '
+                             'chewable orally').split())
+
+
+def unusual_direction_words(text):
+    out = []
+    for token in re.findall(r"[A-Za-z][A-Za-z.\-]*", text):
+        t = token.lower().strip('.-')
+        if t and t not in DIRECTION_WORDS and token not in out: out.append(token)
+    return out
+
+
+def image_coverage(page):
+    """Fraction of the page covered by embedded images (high with a text layer usually means a scan with recognised text)."""
+    area = page.rect.width * page.rect.height or 1.0
+    covered = 0.0
+    for img in page.get_images(full=True):
+        for rect in page.get_image_rects(img[0]): covered += rect.width * rect.height
+    return min(covered / area, 1.0)

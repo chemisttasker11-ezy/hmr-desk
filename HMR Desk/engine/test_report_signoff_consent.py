@@ -32,6 +32,7 @@ def test_invalid_or_missing_interview_consent_refuses_report_signoff(tmp_path, m
     ).fetchone()
     evidence = json.loads(latest['detail'])
     evidence['clinical_snapshot_sha256'] = report_auth.clinical_snapshot_hash(conn, patient)
+    evidence['clinical_snapshot_contract'] = 2
     with conn:
         conn.execute('UPDATE events SET detail=? WHERE id=?', (json.dumps(evidence), latest['id']))
     displayed = report_status.report_status(conn, patient)
@@ -61,6 +62,7 @@ def test_interview_authorised_person_consent_is_accepted_with_complete_details(t
     ).fetchone()
     evidence = json.loads(latest['detail'])
     evidence['clinical_snapshot_sha256'] = report_auth.clinical_snapshot_hash(conn, patient)
+    evidence['clinical_snapshot_contract'] = 2
     with conn:
         conn.execute('UPDATE events SET detail=? WHERE id=?', (json.dumps(evidence), latest['id']))
     assert {item['key']: item['state'] for item in report_status.report_status(conn, patient)['readiness']['items']}['consent_recorded'] == 'met'

@@ -98,10 +98,18 @@ def valid_prefill_proposal(p):
         if not isinstance(c[k], str) or len(c[k]) > 400: return False
     return all(c[k] for k in ('source', 'code', 'display', 'release'))
 
+def valid_location(loc):
+    # Where the row sat on the referral page when it was read, in PDF points, plus the hash of that exact PDF.
+    if not isinstance(loc, dict) or set(loc) != {'page', 'box', 'pdf_sha256'}: return False
+    box = loc['box']
+    return (type(loc['page']) is int and 1 <= loc['page'] <= 500 and isinstance(loc['pdf_sha256'], str) and re.fullmatch('[a-f0-9]{64}', loc['pdf_sha256']) is not None
+            and isinstance(box, list) and len(box) == 4 and all(type(v) in (int, float) and -1e5 < v < 1e5 for v in box) and box[0] < box[2] and box[1] < box[3])
+
 def valid_use(m, base, optional):
     if 'source_evidence' in m:
         evidence = m['source_evidence']
-        if not isinstance(evidence, dict) or set(evidence) != {'kind', 'lines', 'page_candidates', 'text_sha256'}: return False
+        if not isinstance(evidence, dict) or set(evidence) - {'location'} != {'kind', 'lines', 'page_candidates', 'text_sha256'}: return False
+        if 'location' in evidence and not valid_location(evidence['location']): return False
         if evidence['kind'] != 'referral_text' or not isinstance(evidence['text_sha256'], str) or not re.fullmatch('[a-f0-9]{64}', evidence['text_sha256']): return False
         lines, pages = evidence['lines'], evidence['page_candidates']
         if not isinstance(lines, list) or not 1 <= len(lines) <= 80 or any(not isinstance(line, str) or len(line) > 20000 for line in lines): return False
@@ -122,10 +130,34 @@ def valid_use(m, base, optional):
     if set(m) not in (base, base | extra): return False
     return not (extra <= set(m)) or (m['use_status'] in ('', 'taking', 'not_using', 'unknown') and m['use_reason'] in USE_REASONS and isinstance(m['use_details'], str) and len(m['use_details']) <= 20000)
 
+def referral_files(folder):
+    files = sorted(f for f in folder.iterdir() if f.is_file() and f.suffix.lower() == '.pdf' and not f.name.lower().startswith(('ppa consent - ', 'hmr interview - ')))
+    return [f for f in files if re.search(r'_ [A-Z]{2,4}\.pdf$', f.name)] or [f for f in files if 'referral' in f.name.lower()]
+
+
+def geometry_table(folder):
+    """Read the medicines table by page position (referral_geometry). Returns the whole-table result with notes, or None when there
+    is no referral PDF or the read raised. Failure is never an error for the interview: the text-order read stays."""
+    import referral_geometry
+    files = referral_files(folder)
+    if not files: return None
+    try:
+        specmod = importlib.util.spec_from_file_location('hmr_intake', __import__('app_paths').resource_root() / 'scripts' / 'intake' / 'intake.py')
+        module = importlib.util.module_from_spec(specmod); specmod.loader.exec_module(module)
+        with module.fitz.open(files[0]) as doc:
+            pages = [([(w[0], w[1], w[2], w[3], w[4]) for w in page.get_text('words')], page.rect.height) for page in doc]
+            scanned = [n + 1 for n, page in enumerate(doc) if referral_geometry.image_coverage(page) >= 0.5]
+        result = referral_geometry.pair_document(pages)
+        result['scanned_pages'] = scanned
+        result['pdf_sha256'] = hashlib.sha256(files[0].read_bytes()).hexdigest()
+        return result
+    except Exception:
+        return None
+
+
 def referral_text(folder):
     clarify = []
-    files = sorted(f for f in folder.iterdir() if f.is_file() and f.suffix.lower() == '.pdf' and not f.name.lower().startswith(('ppa consent - ', 'hmr interview - ')))
-    files = [f for f in files if re.search(r'_ [A-Z]{2,4}\.pdf$', f.name)] or [f for f in files if 'referral' in f.name.lower()]
+    files = referral_files(folder)
     if files:
         specmod = importlib.util.spec_from_file_location('hmr_intake', __import__('app_paths').resource_root() / 'scripts' / 'intake' / 'intake.py')
         module = importlib.util.module_from_spec(specmod); specmod.loader.exec_module(module)
@@ -140,6 +172,39 @@ def referral_text(folder):
         text = '\f'.join(pages)
         return text, clarify
     return None, clarify
+
+def apply_geometry(found, geo):
+    """Prefer the position-based medicines table only when the whole table was read cleanly. Every difference and every doubt is kept
+    visible in found['geometry_notes'] (later shown in Clarify). Nothing is corrected, guessed or silently dropped."""
+    import referral_geometry
+    notes = found.setdefault('geometry_notes', [])
+    if geo is None: return
+    if geo['scanned_pages']:
+        notes.append('Referral page(s) %s are images with a text layer, probably text recognised from a scan. Letters can be wrong in that layer (for example a medicine name or a direction word). Check every medicine name and direction against the page image.' % ', '.join(map(str, geo['scanned_pages'])))
+    if not geo['ok']:
+        if geo['reason'] != 'no medicines heading found':
+            notes.append('Medicines table was not read by page position (' + geo['reason'] + '); the text-order read is used, with the checks above.')
+        return
+    if geo['flags']:
+        notes.append('Medicines table read by page position was not used because of: ' + '; '.join(geo['flags']))
+        return
+    text_rows = [[str(a), str(b)] for a, b in found['meds']]
+    rows = [[a, b] for a, b in geo['rows']]
+    norm = lambda rs: [' '.join((a + ' ' + b).split()).casefold() for a, b in rs]
+    if norm(text_rows) != norm(rows):
+        notes.append('Medicines table read by page position replaced the text-order read. Text-order read was: ' + '; '.join((a + ' | ' + b).strip(' |') for a, b in text_rows)[:3000])
+    found['meds'] = [(a, b) for a, b in rows]
+    found['medicine_source_lines'] = geo['source_lines']
+    if len(geo.get('row_boxes', [])) == len(rows) and isinstance(geo.get('page'), int) and re.fullmatch('[a-f0-9]{64}', geo.get('pdf_sha256', '')):
+        found['medicine_locations'] = [{'page': geo['page'], 'box': [round(float(v), 1) for v in box], 'pdf_sha256': geo['pdf_sha256']} for box in geo['row_boxes']]
+    found['unattributed_directions'] = []
+    found['unparsed'] = [k for k in found.get('unparsed', []) if k != 'meds']
+    if geo['excluded']:
+        notes.append('Lines set aside as page furniture, not read as medicines (check they are not clinical): ' + ' | '.join(geo['excluded'])[:600])
+    for i, (a, b) in enumerate(rows, 1):
+        odd = referral_geometry.unusual_direction_words(b)
+        if odd: notes.append('Medicine %d: unusual word(s) in the referral directions, compare with the page: %s' % (i, ', '.join(odd)))
+
 
 def blank(conn, patient):
     p = dict(patient); folder = jobs.patient_folder(patient)
@@ -164,6 +229,7 @@ def blank(conn, patient):
     spec = jobs.interview_spec_path(patient)
     text, clarify = referral_text(folder)
     found = referral.parse(text) if text is not None else None
+    if found is not None: apply_geometry(found, geometry_table(folder))
     record['clarify'].extend(clarify)
     stored_spec = records.get_json(conn, patient['id'], 'interview_spec.json')
     if stored_spec is not None or spec.is_file():
@@ -191,6 +257,11 @@ def blank(conn, patient):
             record['alcohol_smoking'] = '\n'.join(k.title() + ': ' + found[k] for k in ('alcohol', 'smoking') if found[k])
             record['social'] = found['social']
             record['clarify'].extend('Referral section not fully read: ' + k for k in found['unparsed'])
+            if found.get('unattributed_directions'):
+                record['clarify'].append('Referral directions not matched to a medicine (the referral text lists names and directions separately, so the pairing is unknown; check the referral PDF and enter each medicine directions yourself): ' + ' | '.join(str(x)[:200] for x in found['unattributed_directions'][:60]))
+            record['clarify'].extend(found.get('geometry_notes', []))
+            if found.get('form_checklist'):
+                record['clarify'].append('Referral form checklist lines (a ticked box cannot be read from the text; check the referral PDF): ' + ' | '.join(str(x)[:120] for x in found['form_checklist'][:30]))
             for k in ('meds', 'conditions', 'allergies', 'obs', 'alcohol_smoking', 'social', 'renal'):
                 value = found['renal'] if k == 'renal' else record[k] if k != 'obs' else any(obs.values())
                 if value: record['sources'].append(k + ' from referral - check')
@@ -208,12 +279,14 @@ def blank(conn, patient):
         # Attach only rows actually derived from this referral, not an older spec.
         if stored_spec is None and not spec.is_file():
             pages = [page.splitlines() for page in text.split('\f')]
-            for meta, lines in zip(record['details']['meds'], found.get('medicine_source_lines', [])):
+            locations = found.get('medicine_locations', [])
+            for n, (meta, lines) in enumerate(zip(record['details']['meds'], found.get('medicine_source_lines', []))):
                 meta['source_evidence'] = {
                     'kind': 'referral_text', 'lines': lines,
                     'page_candidates': [[n + 1 for n, page in enumerate(pages) if any(raw.strip() == line.strip() for raw in page)] for line in lines],
                     'text_sha256': hashlib.sha256(text.encode('utf-8')).hexdigest(),
                 }
+                if n < len(locations): meta['source_evidence']['location'] = locations[n]
 
     # Clinical fields entered at intake are not automatically promoted unless
     # a named pharmacist confirmed them against an exact original PDF page.
@@ -325,7 +398,7 @@ def record_lock(patient):
 
 def validate(record):
     keys = {'header', *TEXT, *TABLES, 'clarify', 'consent', 'sources'}
-    if not isinstance(record, dict) or set(record) - {'saved', 'consent_file', 'details', 'revision', 'consent_signed_draft'} != keys: raise ValueError('invalid interview fields')
+    if not isinstance(record, dict) or set(record) - {'saved', 'consent_file', 'details', 'revision', 'consent_signed_draft', 'fidelity_warnings'} != keys: raise ValueError('invalid interview fields')
     def string(x): return isinstance(x, str) and len(x) <= 20000
     if not isinstance(record['header'], dict) or set(record['header']) != set(HEAD) or not all(string(x) for x in record['header'].values()): raise ValueError('invalid header')
     if not all(string(record[k]) for k in TEXT): raise ValueError('invalid text field')
@@ -355,6 +428,20 @@ def validate(record):
 def signed_file(folder):
     return sorted(f.name for f in folder.iterdir() if f.is_file() and 'signed' in f.name.lower())
 
+def fidelity_warnings(data):
+    """Read-only check of an already stored record for referral text that earlier imports could have mangled. Nothing is changed
+    or removed; the pharmacist is told to compare with the referral PDF."""
+    out = []
+    for i, row in enumerate(data.get('meds') or []):
+        if isinstance(row, list) and len(row) > 1 and isinstance(row[1], str):
+            starts = re.findall(r'(?:^|\.\s+)\d+(?:\s*-\s*\d+)?\s+[A-Za-z]', row[1])
+            if len(starts) >= 3: out.append('Medicine %d (%s): the stored referral directions look like several medicines\' directions joined together. Check the referral PDF and correct the directions; the original text is still in the row.' % (i + 1, str(row[0])[:60]))
+    reason = (data.get('details') or {}).get('reason') if isinstance(data.get('details'), dict) else ''
+    if isinstance(reason, str) and reason:
+        form = referral.form_checklist(reason.splitlines())[1]
+        if form: out.append('Reason for referral contains printed form checklist text (tick boxes cannot be read from the text). Check the referral PDF; the stored text is unchanged but would appear in the report letter.')
+    return out
+
 def load(conn, patient):
     folder = jobs.patient_folder(patient)
     content = records.get(conn, patient['id'], 'interview.json')
@@ -380,6 +467,7 @@ def load(conn, patient):
     if isinstance(data.get('header'), dict):
         for key, setting in [('pharmacist', 'pharmacist_name'), ('pharmacist_phone', 'pharmacist_phone'), ('pharmacist_credential', 'pharmacist_credential')]: data['header'][key] = settings.get(conn, setting)
     validate(data); data['saved'] = content is not None
+    data['fidelity_warnings'] = fidelity_warnings(data)
     signed = signed_file(folder)
     data['consent_file'] = signed[0] if signed else ''
     return data
@@ -412,7 +500,7 @@ def save(conn, patient, record, *, locked=False, signing=False):
                             if os.path.exists(temp): os.unlink(temp)
                 if isinstance(record, dict) and old_revision is not None: record['revision'] = old_revision
                 raise
-    validate(record); data = {k: v for k, v in record.items() if k not in ('saved', 'consent_file', 'revision')}
+    validate(record); data = {k: v for k, v in record.items() if k not in ('saved', 'consent_file', 'revision', 'fidelity_warnings')}
     folder = jobs.patient_folder(patient)
     previous_bytes = records.get(conn, patient['id'], 'interview.json')
     if record.get('revision') != records.digest(previous_bytes): raise Conflict('interview conflict')

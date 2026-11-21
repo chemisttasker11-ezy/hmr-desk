@@ -25,6 +25,8 @@ DEFS = {
     'followup_window_end_days': ('Follow-up window end days', 'int', 270, 1, None),
     'new_hmr_after_months': ('New HMR after months', 'int', 24, 1, None),
     'interview_export_format': ('Interview export format', 'select', 'docx', ['docx', 'pdf', 'both']),
+    'report_include_gp_plan': ('Add blank GP Plan column to HMR medicine table', 'bool', False),
+    'report_use_original_builder': ('Use original Word report builder (requires locally installed Word and private approved assets; output cannot be signed off)', 'bool', False),
     'flow_includes_ai_assist': ('Include AI assist in auto flow', 'bool', False),
 }
 

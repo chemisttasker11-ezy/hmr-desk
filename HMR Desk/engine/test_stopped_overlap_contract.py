@@ -2,7 +2,17 @@
 In this mode an 'ingredient' is the whole name normalised for case and spacing, so an overlap exists only when a medicine in the
 confirmed list has the same normalised name as a medicine marked not using. The alternative rule requires the chosen taking medicine
 to have the row's name and a name different from every stopped one, so no alternative can resolve a manual-mode overlap."""
+import pytest
+
 import api
+import external_helpers
+import manual_medicine_names
+
+
+@pytest.fixture(autouse=True)
+def manual_mode(monkeypatch):
+    # This file pins the manual mode, whatever helper files the machine holds (helper mode: test_helper_modes.py).
+    monkeypatch.setattr(external_helpers, 'mims', manual_medicine_names)
 
 
 def usage(name, status):
@@ -19,8 +29,8 @@ def check(meds, items, pick):
 
 
 def test_ingredient_in_manual_mode_is_the_whole_normalised_name():
-    assert api.mims.ingredients('Synthmed  A 10 MG tablet') == ['synthmed a 10 mg tablet']
-    assert api.mims.ingredients('Synthmed A 20 mg tablet') == ['synthmed a 20 mg tablet']
+    assert manual_medicine_names.ingredients('Synthmed  A 10 MG tablet') == ['synthmed a 10 mg tablet']
+    assert manual_medicine_names.ingredients('Synthmed A 20 mg tablet') == ['synthmed a 20 mg tablet']
 
 
 def test_different_strength_is_not_an_overlap_and_needs_no_alternative():

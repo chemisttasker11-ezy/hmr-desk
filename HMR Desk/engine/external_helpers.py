@@ -32,3 +32,11 @@ if _record_path.is_file():
     _record_spec = importlib.util.spec_from_file_location('hmr_record', _record_path)
     record = importlib.util.module_from_spec(_record_spec)
     _record_spec.loader.exec_module(record)
+
+
+def ingredient_names(name):
+    """Names used to compare medicines in the interview, review and interaction-scope checks, with spacing normalised.
+    Without a portal helper these are the application's whole normalised names (a different strength is a different name).
+    With the helper they are its ingredient names, which drop dose and form, so a stopped medicine and a taking one of a
+    different strength share a name and need the pharmacist's explicit resolution. That is the more cautious direction."""
+    return [' '.join(n.split()) for n in mims.ingredients(name)]

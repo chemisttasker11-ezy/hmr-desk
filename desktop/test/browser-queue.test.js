@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { shape, selectQueue } = require('../src/browser-queue');
+const { shape, selectQueue, emptyQueueMessage } = require('../src/browser-queue');
 
 test('one-off entries use the helper formats and require a folder and essential fields', () => {
   assert.deepEqual(
@@ -21,4 +21,13 @@ test('browser lists only contain matching waiting patients, or all entries when 
   assert.deepEqual(selectQueue('emims', entries, tasks).entries, [entries[1]]);
   assert.deepEqual(selectQueue('mhr', entries, tasks).entries, entries);
   assert.deepEqual(selectQueue('emims', [], tasks).entries, []);
+});
+
+test('an empty queue says why when the build has no helper, and stays the plain message otherwise', () => {
+  assert.equal(emptyQueueMessage({ lists: [], helper_available: false, message: ' The eMIMS list helper is not installed. ' }), 'The eMIMS list helper is not installed.');
+  assert.equal(emptyQueueMessage({ lists: [], helper_available: true }), 'Nothing to run');
+  assert.equal(emptyQueueMessage({ lists: [] }), 'Nothing to run');  // an older engine without the field
+  assert.equal(emptyQueueMessage([]), 'Nothing to run');
+  assert.equal(emptyQueueMessage({ helper_available: false, message: 5 }), 'Nothing to run');
+  assert.equal(emptyQueueMessage({ helper_available: false, message: 'x'.repeat(900) }).length, 400);
 });
