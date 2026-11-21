@@ -806,3 +806,5 @@ main:has(.interview-context) > header { height: 96px; min-height: 96px; }
 .interview-medicine-main .interview-chips legend, .interview-medicine-actions .interview-chips legend { float: none; margin: 0 4px 0 0; align-self: center; }
 .interview-medicine-actions > button { align-self: center; }
 .med-hint { font-size: .85em; color: #5a6a62; margin: 0 0 4px; }
+.interview-medicine-actions > label { display: flex; flex-direction: column; gap: 2px; font-size: 12px; font-weight: 600; color: #3b4a43; }
+.interview-medicine-actions > label select, .interview-medicine-actions > label input { font-size: 14px; font-weight: 400; color: inherit; }
