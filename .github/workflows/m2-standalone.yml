@@ -90,7 +90,9 @@ jobs:
         run: python scripts/smoke-template-pdf.py
       - name: Synthetic referral-to-signed-and-sent HMR journey (real PDF, DOCX and offline PDF)
         working-directory: HMR Desk/engine
-        run: python -m pytest -q test_synthetic_patient_journey.py
+        env:
+          HMR_REQUIRE_PDF_CONVERTER: '1'
+        run: python -m pytest -q -rs test_synthetic_patient_journey.py
       - name: Build NSIS installer with engine resources
         working-directory: desktop
         run: npm run dist

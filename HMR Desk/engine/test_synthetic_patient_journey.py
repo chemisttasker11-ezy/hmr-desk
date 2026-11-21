@@ -65,6 +65,14 @@ def _referral(path):
 
 
 def test_synthetic_pdf_referral_to_signed_sent_report(tmp_path, monkeypatch):
+    import os
+    import pdf_export
+    if not pdf_export.available():
+        # The whole-backend job has no bundled converter. The standalone Windows job bundles the pinned converter and sets
+        # HMR_REQUIRE_PDF_CONVERTER=1, where a missing converter is a failure, never a skip.
+        if os.environ.get('HMR_REQUIRE_PDF_CONVERTER') == '1':
+            pytest.fail('HMR_REQUIRE_PDF_CONVERTER is set but no PDF converter is available')
+        pytest.skip('No offline PDF converter here; this journey runs with the real converter in the standalone Windows job')
     root = tmp_path / 'workspace'
     root.mkdir()
     userdata = tmp_path / 'userdata'
