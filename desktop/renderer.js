@@ -8,7 +8,8 @@ if (typeof hmr.onEngineState === 'function') hmr.onEngineState(state => {
     notice.setAttribute('role', 'status');
     notice.className = 'error';
     notice.style.cssText = 'position:sticky;top:0;z-index:10000;padding:12px;background:#f6d8d8;color:#571515;font-weight:600';
-    document.body.prepend(notice);
+    // Inside <main>: body is a flex row, so a direct child of body becomes a pane beside the sidebar.
+    (document.querySelector('main') || document.body).prepend(notice);
   }
   notice.hidden = !!state.ready;
   notice.textContent = state.ready ? '' : (state.reason || 'Clinical engine is temporarily unavailable');

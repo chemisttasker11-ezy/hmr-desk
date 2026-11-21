@@ -421,7 +421,8 @@ def report_assist(patient_id):
         if record_store.exists(conn, patient['id'], 'report_spec.ai.json'):
             raise FileExistsError('Existing AI draft must be reviewed or removed before rerunning')
         manual = report.load(conn, patient)
-        if not manual.get('saved'):
+        if manual.get('saved') is False:
+            # Only an absent report carries saved=False; an existing report has no saved flag.
             # Start the manual report locally using the existing deterministic composer.
             manual = report.start(conn, patient)
         candidate = {k: v for k, v in manual.items() if k not in ('saved', 'interview_newer')}

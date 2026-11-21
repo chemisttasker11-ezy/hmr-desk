@@ -17,6 +17,59 @@ const {prepareMigration} = require('./workspace-migration');
 
 const MAX_UNCONFIRMED_LAUNCHES = 2;
 const ACTIVATION_RECORD = 'last-activation.json';
+const FAILURE_RECORD = 'last-activation-failure.json';
+/** Parse JSON text that a Windows editor or PowerShell 5.1 may have saved with a UTF-8 byte order mark.
+    Startup (config-load.js) already tolerates the mark; activation and rollback must read the same file the same way.
+    Only parsing strips it: the raw text is stored and restored byte-for-byte. */
+function parseJsonText(text) { return JSON.parse(String(text).replace(/^\uFEFF/, '')); }
+/** Tag an operational error with the activation stage that raised it.
+    Stage names and messages are operational only: no patient content, no key material. */
+function fail(stage, message) {
+  const error = Error(message);
+  error.stage = stage;
+  throw error;
+}
+async function withStage(stage, operation) {
+  try { return await operation(); }
+  catch (error) {
+    if (error && typeof error === 'object' && !error.stage) error.stage = stage;
+    throw error;
+  }
+}
+/** Reduce an error to values that cannot carry paths, patient names or key material:
+    an allowlisted stage, an OS-style error code (e.g. EACCES) and a fixed reason category.
+    The raw message is never stored. */
+const STAGES = new Set(['verify','config','validate','stage-database','migrate-workspace','stage-templates','activate']);
+const REASONS = [
+  [/manifest is invalid|unsafe manifest fields/i,'manifest-invalid'],
+  [/checksum (changed|mismatch)|failed verification/i,'checksum-mismatch'],
+  [/unsafe source path|symlink|Unsupported source workspace file/i,'unsafe-or-unsupported-file'],
+  [/too large|exceeds safe migration limits/i,'size-limit'],
+  [/configuration is invalid/i,'config-invalid'],
+  [/outside the active app data|independent folders|Destination exists/i,'folder-conflict'],
+  [/requires recovery/i,'journal-present'],
+  [/^SyntaxError/,'invalid-json'],
+  [/changed during migration/i,'source-changed'],
+];
+function safeFailure(error) {
+  const message = String((error && error.message) || error || '');
+  const kind = error && error.name === 'SyntaxError' ? 'SyntaxError' : '';
+  const code = error && typeof error.code === 'string' && /^[A-Z0-9_]{2,40}$/.test(error.code) ? error.code : null;
+  const hit = REASONS.find(([pattern]) => pattern.test(message) || (kind && pattern.test(kind)));
+  return {code, reason: hit ? hit[1] : (code ? 'os-error' : 'unclassified')};
+}
+/** Persist the last activation failure privately beside the data (mode 0600, atomic).
+    Sanitized only: stage, error code and reason category for the activation error and,
+    when the engine restart also failed, the same for that error. Never throws into the failure path. */
+async function recordActivationFailure(dataDir, entry) {
+  const record = {at: new Date().toISOString()};
+  if (entry && entry.activation) {
+    const stage = STAGES.has(entry.activation.stage) ? entry.activation.stage : 'unknown';
+    record.activation = {stage, ...safeFailure(entry.activation.error)};
+  }
+  if (entry && entry.restart) record.restart = safeFailure(entry.restart.error);
+  await writeAtomic(path.join(path.resolve(dataDir), FAILURE_RECORD), JSON.stringify(record, null, 2));
+}
 
 function inside(root, child) {
   const relative = path.relative(root, child);
@@ -144,7 +197,7 @@ async function rollbackLastActivation(dataDir,configPath) {
   await writeAtomic(configPath,record.previousConfig);
   await writeRecord(data,{...record,status:'rolled-back',rolledBackAt:new Date().toISOString(),
     failedActivationFolder:failed});
-  return {rolledBack:true,workspace:JSON.parse(record.previousConfig).base,failedActivationFolder:failed};
+  return {rolledBack:true,workspace:parseJsonText(record.previousConfig).base,failedActivationFolder:failed};
 }
 /** Call once at every launch before the engine opens data. */
 async function checkPendingActivation(dataDir,configPath) {
@@ -166,38 +219,47 @@ async function markActivationHealthy(dataDir) {
   return true;
 }
 async function activateRestored(restoredDir,dataDir,configPath) {
-  const restored = await verifyRestored(restoredDir);
+  const restored = await withStage('verify', () => verifyRestored(restoredDir));
   const data = path.resolve(dataDir);
   const stamp = Date.now() + '-' + crypto.randomUUID();
-  const previousConfig = await fs.readFile(configPath,'utf8');
-  const config = JSON.parse(previousConfig);
-  if (!config || typeof config.base !== 'string' || !path.isAbsolute(config.base))
-    throw Error('Current workspace configuration is invalid');
+  const previousConfig = await withStage('config', async () => {
+    const raw = await fs.readFile(configPath,'utf8');
+    const parsed = parseJsonText(raw);
+    if (!parsed || typeof parsed.base !== 'string' || !path.isAbsolute(parsed.base))
+      throw Error('Current workspace configuration is invalid');
+    return raw;
+  });
+  const config = parseJsonText(previousConfig);
   if (inside(restored.folder,data) || inside(data,restored.folder))
-    throw Error('Restore data must be outside the active app data directory');
+    fail('validate', 'Restore data must be outside the active app data directory');
   const targetWorkspace = path.join(data,'activated-workspaces','restore-'+stamp);
   const rollback = path.join(data,'restore-rollbacks','rollback-'+stamp);
   const staged = path.join(data,'.incoming-'+stamp+'.db');
   const stagedTemplates = path.join(data,'.incoming-templates-'+stamp);
   const journalPath = path.join(data,'restore-activation-journal.json');
-  try {await fs.access(journalPath);throw Error('Previous restore activation requires recovery');}
+  try {await fs.access(journalPath);fail('validate', 'Previous restore activation requires recovery');}
   catch(e) {if(e.code!=='ENOENT')throw e;}
   try {
-  const saved = await fs.stat(restored.database);
-  await fs.copyFile(restored.database,staged);
-  if (await hash(staged)!==await hash(restored.database) || (await fs.stat(staged)).size!==saved.size)
-    throw Error('Restored SQLite copy failed verification');
-  await prepareMigration(restored.workspace,targetWorkspace);
+  const saved = await withStage('stage-database', () => fs.stat(restored.database));
+  await withStage('stage-database', async () => {
+    await fs.copyFile(restored.database,staged);
+    if (await hash(staged)!==await hash(restored.database) || (await fs.stat(staged)).size!==saved.size)
+      throw Error('Restored SQLite copy failed verification');
+  });
+  await withStage('migrate-workspace', () => prepareMigration(restored.workspace,targetWorkspace));
   const hasTemplates = !!restored.templates;
   if (hasTemplates) {
-    await fs.cp(restored.templates,stagedTemplates,{recursive:true,errorOnExist:true});
-    const records = JSON.parse(await fs.readFile(path.join(restored.folder,'restore-manifest.json'),'utf8')).files;
-    for (const [relative, expected] of Object.entries(records)) {
-      if (!relative.startsWith('data/templates/')) continue;
-      const copy = path.join(stagedTemplates,...relative.split('/').slice(2));
-      if (await hash(copy) !== expected.sha256) throw Error('Restored approved template copy failed verification');
-    }
+    await withStage('stage-templates', async () => {
+      await fs.cp(restored.templates,stagedTemplates,{recursive:true,errorOnExist:true});
+      const records = JSON.parse(await fs.readFile(path.join(restored.folder,'restore-manifest.json'),'utf8')).files;
+      for (const [relative, expected] of Object.entries(records)) {
+        if (!relative.startsWith('data/templates/')) continue;
+        const copy = path.join(stagedTemplates,...relative.split('/').slice(2));
+        if (await hash(copy) !== expected.sha256) throw Error('Restored approved template copy failed verification');
+      }
+    });
   }
+  return await withStage('activate', async () => {
   await fs.mkdir(rollback,{recursive:true});
   await fs.writeFile(journalPath,JSON.stringify({rollback,originalConfig:previousConfig,
     newWorkspace:targetWorkspace,templates:hasTemplates}),{flag:'wx',mode:0o600});
@@ -221,11 +283,13 @@ async function activateRestored(restoredDir,dataDir,configPath) {
     await recoverInterruptedRestore(data,configPath);
     throw e;
   }
+  });
   } finally {
     await fs.rm(staged,{force:true});
     await fs.rm(stagedTemplates,{recursive:true,force:true});
   }
 }
-module.exports = {verifyRestored,activateRestored,recoverInterruptedRestore,
+module.exports = {parseJsonText,verifyRestored,activateRestored,recoverInterruptedRestore,
   hasUnconfirmedActivation,rollbackLastActivation,checkPendingActivation,
-  markActivationHealthy,MAX_UNCONFIRMED_LAUNCHES};
+  markActivationHealthy,recordActivationFailure,MAX_UNCONFIRMED_LAUNCHES,
+  FAILURE_RECORD};

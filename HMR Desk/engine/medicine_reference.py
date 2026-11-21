@@ -180,7 +180,8 @@ def install(source_path):
         previous = data_dir / 'medicine-reference.previous.sqlite'
         if previous.is_symlink() or target.is_symlink():
             raise ValueError('Unsafe reference files')
-        if target.exists():
+        had_previous = target.exists()
+        if had_previous:
             os.replace(target, previous)
         os.replace(temp, target)
     except Exception:
@@ -194,4 +195,4 @@ def install(source_path):
         else:
             target.unlink(missing_ok=True)
         raise ValueError('Installed reference failed verification; previous reference restored')
-    return {'installed': True, 'sources': installed['sources']}
+    return {'installed': True, 'sources': installed['sources'], 'previous_retained': had_previous}

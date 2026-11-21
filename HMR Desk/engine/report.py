@@ -112,6 +112,34 @@ def intro_text(record, name, visit):
     if clause: sentences.append(clause + '.')
     return ' '.join(sentences)
 
+def actual(r, m):
+    """Actual-use cell for a referral medicine row.
+
+    Confirmation of use and confirmation of directions stay distinct: an explicit
+    'taking' with no recorded directions is reported as confirmed use with missing
+    directions, never as 'Not yet confirmed' and never with invented directions.
+    """
+    prn = '; used ' + m['prn_use'] if m.get('prn_use') else ''
+    if m.get('use_status') == 'unknown':
+        return 'Not yet confirmed' + ('; previously recorded directions: ' + r[2] if r[2] else ('; referral: ' + r[1] if r[1] else '')) + prn
+    if r[2]:
+        return r[2] + prn
+    if m.get('use_status') == 'taking':
+        return 'Taking confirmed - actual directions not recorded' + ('; referral directions: ' + r[1] if r[1] else '') + prn
+    return ('Not yet confirmed; referral: ' + r[1] if r[1] else 'Not yet confirmed') + prn
+
+
+def other_actual(r, m):
+    """Actual-use cell for a medicine found during the interview (same rule as actual)."""
+    if m.get('use_status') == 'unknown':
+        return 'Not yet confirmed' + ('; previously recorded directions: ' + r[1] if r[1] else '')
+    if r[1]:
+        return r[1]
+    if m.get('use_status') == 'taking':
+        return 'Taking confirmed - actual directions not recorded'
+    return 'Not yet confirmed'
+
+
 def _derived(conn, patient):
     folder = jobs.patient_folder(patient)
     import api
@@ -129,12 +157,7 @@ def _derived(conn, patient):
     referral_meta = record['details']['meds']
     other_rows = record['other_meds']
     other_meta = record['details']['other_meds']
-    def actual(r, m):
-        if m.get('use_status') == 'unknown': return 'Not yet confirmed' + ('; previously recorded directions: ' + r[2] if r[2] else ('; referral: ' + r[1] if r[1] else '')) + ('; used ' + m['prn_use'] if m.get('prn_use') else '')
-        return (r[2] or ('Not yet confirmed; referral: ' + r[1] if r[1] else 'Not yet confirmed')) + ('; used ' + m['prn_use'] if m.get('prn_use') else '')
-    def other_actual(r, m):
-        if m.get('use_status') == 'unknown': return 'Not yet confirmed' + ('; previously recorded directions: ' + r[1] if r[1] else '')
-        return r[1] or 'Not yet confirmed'
+
     def other_note(r, m):
         return ' | '.join(filter(None, [*r[2:], interview.use_text(m)]))
     def referral_note(r, m):

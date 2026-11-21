@@ -184,3 +184,32 @@ test('rollback refuses when the previous database is gone', async ()=>{
     assert.ok(fs.readFileSync(path.join(s.data,'hmr.db')).equals(s.newDb));
   } finally {fs.rmSync(s.root,{recursive:true,force:true});}
 });
+
+test('a UTF-8 BOM in app-config.json is tolerated by activation and rollback, and kept byte-exact', async ()=>{
+  const s=scenario();
+  try {
+    const raw='\uFEFF'+JSON.stringify({base:s.oldWorkspace},null,2);
+    fs.writeFileSync(s.configPath,raw,'utf8');
+    const outcome=await activateRestored(s.recovered,s.data,s.configPath);
+    assert.equal(outcome.activated,true);
+    assert.equal(JSON.parse(fs.readFileSync(s.configPath,'utf8')).base,outcome.workspace);
+    const rolled=await rollbackLastActivation(s.data,s.configPath);
+    assert.equal(rolled.rolledBack,true);
+    assert.equal(rolled.workspace,s.oldWorkspace);
+    assert.equal(fs.readFileSync(s.configPath,'utf8'),raw);
+  } finally {fs.rmSync(s.root,{recursive:true,force:true});}
+});
+
+test('malformed app-config.json still fails at the config stage and is classified invalid-json', async ()=>{
+  const {recordActivationFailure,FAILURE_RECORD}=require('../src/restore-activation');
+  const s=scenario();
+  try {
+    fs.writeFileSync(s.configPath,'{"base": ');
+    const error=await activateRestored(s.recovered,s.data,s.configPath).then(()=>null,e=>e);
+    assert.equal(error&&error.stage,'config');
+    await recordActivationFailure(s.data,{activation:{stage:error.stage,error}});
+    const record=JSON.parse(fs.readFileSync(path.join(s.data,FAILURE_RECORD),'utf8'));
+    assert.deepEqual(record.activation,{stage:'config',code:null,reason:'invalid-json'});
+    assert.equal(fs.readFileSync(path.join(s.data,'hmr.db'),'utf8'),'old synthetic SQLite database contents');
+  } finally {fs.rmSync(s.root,{recursive:true,force:true});}
+});
