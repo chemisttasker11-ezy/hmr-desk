@@ -14,6 +14,9 @@ def main(argv):
     if not argv: print(__doc__); return 2
     path = argv[0]; show = '--show' in argv
     out = argv[argv.index('--geometry') + 1] if '--geometry' in argv else None
+    import fitz
+    with fitz.open(path) as doc:
+        for i, page in enumerate(doc, 1): print('page %d: text-layer words=%d images=%d' % (i, len(page.get_text('words')), len(page.get_images())))
     found = g.analyse_pdf(path)
     if not found: print('No page with a Current Medications heading was found.'); return 1
     for number, result, words in found:
