@@ -94,13 +94,14 @@ async function medicineLookupClick(b) {
     const found = await hmr.api('GET', '/api/medicines/search?grouped=1&q=' + medicineQuery(text));
     if (page !== 'interview' || interviewId !== patientId || interviewRecord !== record || record[key][i] !== medicine || medicine[0].trim() !== text || !out.isConnected) return true;
     if (!found.installed) { say('No medicine reference data is installed on this PC. Keep typing the name by hand; nothing is lost.'); return true; }
-    if (!found.results.length) { say('No match in the reference data. Keep your typed name, or try another spelling.'); return true; }
-    say('Pick the medicine you mean. Reference release ' + found.results[0].release + '. Check strength and form yourself.');
+    if (!found.results.length) { say('No match in the reference data. Your typed name stays as written, unlinked and not matched to reference data. Try another spelling if you want a match.'); return true; }
+    say('Pick the medicine you mean. Reference release ' + found.results[0].release + '. Check strength and form yourself. Down arrow moves through the matches, Enter chooses one.');
     const choose = (r) => {
       if (page !== 'interview' || interviewId !== patientId || interviewRecord !== record || record[key][i] !== medicine || medicine[0].trim() !== text || !out.isConnected) return;
       interviewRecord[key][i][0] = r.display;
       interviewRecord.details[key][i].reference = { source: r.source, code: r.code, display: r.display, release: r.release, ...catalogueIdentity(r.listings || [r]) };
       interviewChanged(key); renderInterview();
+      document.querySelector(`textarea[data-field="${key}"][data-row="${i}"][data-col="0"]`)?.focus?.();
     };
     // Identical PBS listings arrive as one group; each listing stays individually pickable. Older replies are flat.
     const groups = Array.isArray(found.groups) ? found.groups : found.results.map((r) => ({ grouped: false, label: '', listings: [r], count: 1 }));
@@ -120,6 +121,41 @@ async function medicineLookupClick(b) {
   } catch (error) { say('Lookup failed: ' + errorText(error) + '. Type the name by hand.'); }
   return true;
 }
+// Search as you type: after a short pause, run the same lookup the button runs. It only lists matches; nothing is
+// chosen or linked until the pharmacist picks one, and the typed name is never changed.
+let medicineTypeTimer;
+document.addEventListener('input', (e) => {
+  const el = e.target;
+  if (!el || !el.dataset || el.tagName !== 'TEXTAREA' || el.dataset.col !== '0' || el.dataset.row === undefined) return;
+  const key = el.dataset.field;
+  if ((key !== 'meds' && key !== 'other_meds') || typeof setTimeout !== 'function') return;
+  clearTimeout(medicineTypeTimer);
+  if (el.value.trim().length < 3) return;
+  medicineTypeTimer = setTimeout(() => {
+    if (!el.isConnected) return;
+    const b = document.querySelector(`[data-med-lookup="${key}"][data-row="${el.dataset.row}"]`);
+    if (b) medicineLookupClick(b);
+  }, 350);
+});
+// Keyboard: Down from the name box enters the matches, Up/Down moves, Escape returns to the box. Enter or Space on a
+// match presses its normal Use this button.
+document.addEventListener('keydown', (e) => {
+  const t = e.target;
+  if (!t || !t.closest || !['ArrowDown', 'ArrowUp', 'Escape'].includes(e.key)) return;
+  const name = t.tagName === 'TEXTAREA' && t.dataset.col === '0' && t.dataset.row !== undefined && (t.dataset.field === 'meds' || t.dataset.field === 'other_meds') ? t : null;
+  const inResults = t.closest('.med-lookup-results');
+  if (!name && !inResults) return;
+  const scope = name ? name.closest('tr') : inResults.closest('tr');
+  const buttons = [...(scope?.querySelectorAll('.med-lookup-result button') || [])];
+  if (!buttons.length) return;
+  if (name) { if (e.key === 'ArrowDown') { e.preventDefault(); buttons[0].focus(); } return; }
+  e.preventDefault();
+  const at = buttons.indexOf(t);
+  if (e.key === 'Escape') scope.querySelector('textarea[data-col="0"]')?.focus();
+  else if (e.key === 'ArrowDown') buttons[Math.min(buttons.length - 1, at + 1)].focus();
+  else if (at <= 0) scope.querySelector('textarea[data-col="0"]')?.focus();
+  else buttons[at - 1].focus();
+});
 document.addEventListener('click', (e) => { const b = e.target.closest && e.target.closest('[data-med-lookup], [data-med-unlink], [data-med-suggestion], [data-med-page-image]'); if (b) medicineLookupClick(b); });
 
 
