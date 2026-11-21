@@ -114,3 +114,19 @@ def test_stored_concatenated_directions_and_form_reason_raise_warnings_without_c
 
 def test_clean_stored_record_has_no_warning():
     assert interview.fidelity_warnings({'meds': [['A 5mg Tablet', '1 Tablet Daily. Take with food', '', '', '']], 'details': {'reason': 'Review please.'}}) == []
+
+
+
+def test_columns_first_unusual_direction_is_unattributed_not_corrected():
+    """Text-order-only parsing cannot infer a row pairing or fix a suspicious word."""
+    names_first = [
+        'Lunovex 5mg Tablet', 'Fictamol 10mg Capsule',
+        '1 Taplet Daily', '2 Capsules At night',
+    ]
+    source_lines, directions = [], []
+    rows, uncertain = referral.medicines(names_first, source_rows=source_lines,
+                                         unattributed=directions)
+    assert rows == [['Lunovex 5mg Tablet', ''], ['Fictamol 10mg Capsule', '']]
+    assert directions == ['1 Taplet Daily', '2 Capsules At night']
+    assert source_lines == [['Lunovex 5mg Tablet'], ['Fictamol 10mg Capsule']]
+    assert uncertain is True

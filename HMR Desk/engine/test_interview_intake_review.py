@@ -170,5 +170,14 @@ def test_confirmed_intake_preserves_source_supported_pdf_row_pairing(tmp_path, m
         assert any('unusual word' in x and 'Taplet' in x for x in record['clarify'])
         assert all(not m.get('use_status') and not m.get('checked') for m in record['details']['meds'])
         interview.validate(record)
+        # A reviewer list differing in even one letter has no exact verified
+        # pairing. Keep the full reviewer lines and show the old parsed text
+        # rather than silently deciding which source is correct.
+        reviewed['medicines'] = reviewed['medicines'].replace('1 Taplet Daily', '1 Tablet Daily')
+        (folder / 'referral_source.json').write_text(json.dumps({'clinical_review': reviewed}))
+        uncertain = interview.blank(conn, patient)
+        assert uncertain['meds'][0][:2] == ['Lunovex 5mg Tablet - 1 Tablet Daily', '']
+        assert any('Parser read:' in x and 'Taplet' in x for x in uncertain['clarify'])
+        assert all(not meta.get('use_status') for meta in uncertain['details']['meds'])
     finally:
         conn.close()

@@ -154,3 +154,27 @@ def test_every_word_is_accounted_for(tmp_path):
     got = sorted(' '.join(' '.join(x) for x in r['rows']).split() + ['Page', '1'])
     region = sorted(w[4] for w in g.medicine_region(words))
     assert got == region
+
+
+
+def test_pdf_text_layer_columns_first_still_yields_distinct_verbatim_rows(tmp_path):
+    """The PDF may write all names before any direction even when the page is two-column."""
+    target = tmp_path / 'synthetic-columns-first.pdf'
+    names = ['Lunovex 5mg Tablet', 'Fictamol 10mg Capsule', 'Nuvrala 20mg Tablet']
+    directions = ['1 Taplet Daily', '2 Capsules At night', '1 Tablet With meals']
+    doc = fitz.open(); page = doc.new_page()
+    page.insert_text((50, 70), 'Current Medications')
+    for i, name in enumerate(names):
+        page.insert_text((50, 100 + 24 * i), name)
+    for i, direction in enumerate(directions):
+        page.insert_text((310, 100 + 24 * i), direction)
+    page.insert_text((50, 240), 'Allergies')
+    doc.save(target); doc.close()
+    with fitz.open(target) as source:
+        text = source[0].get_text()
+        assert text.index(names[-1]) < text.index(directions[0]), 'fixture must encode column-first order'
+    paired = pair(str(target))
+    assert paired['ok'], paired
+    assert paired['rows'] == [[name, direction] for name, direction in zip(names, directions)]
+    assert 'Taplet' in g.unusual_direction_words(paired['rows'][0][1])
+    assert paired['rows'][0][0] == names[0] and paired['rows'][1][0] == names[1]
