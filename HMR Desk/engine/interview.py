@@ -325,6 +325,17 @@ def blank(conn, patient):
                     parsed = [r for i, r in enumerate(record['meds']) if i not in keep]
                     norm = lambda t: ' '.join(str(t).split()).casefold()
                     same = {norm(' '.join(x for x in r[:2] if x)) for r in parsed} == {norm(x) for x in lines}
+                    # A confirmed list may contain an explicit "name - directions" separator.
+                    # Preserve *existing* PDF-geometry pairings only if every confirmed line
+                    # exactly replays the corresponding two-column row in source order.
+                    # Do not split reviewed strings or infer missing/changed text.
+                    if (not same and found is not None
+                            and len(found.get('medicine_locations', [])) == len(parsed) == len(lines)):
+                        same = all(
+                            row[0].strip() and row[1].strip()
+                            and ' '.join(line.split()) == ' '.join((row[0] + ' - ' + row[1]).split())
+                            for row, line in zip(parsed, lines)
+                        )
                     if parsed and not same:
                         kept_rows = [(r, record['details']['meds'][i]) for i, r in enumerate(record['meds']) if i in keep and r[0].strip().casefold() not in {x.casefold() for x in lines}]
                         record['meds'] = [r for r, _ in kept_rows]; record['details']['meds'] = [m for _, m in kept_rows]
