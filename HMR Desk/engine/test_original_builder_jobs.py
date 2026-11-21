@@ -134,6 +134,10 @@ def test_original_builder_enabled_without_assets_fails_explicitly(tmp_path, monk
     import settings
     with connection() as conn:
         patient, saved = _saved_report(conn)
+        report.save(conn, patient, dict(saved,
+            followup_decision='required',
+            followup='Synthetic plan: review in three months.',
+            expected_revision=saved['revision']))
         settings.update(conn, {'report_use_original_builder': True})
         conn.commit()
     assert not adapter.assets_present(db.DATA_DIR)
