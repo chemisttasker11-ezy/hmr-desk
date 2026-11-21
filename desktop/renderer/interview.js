@@ -206,9 +206,7 @@ async function interviewScreen() {
     authorised_name: '',
     ...interviewRecord.consent,
   };
-  normalizeInterviewDetails(interviewRecord, false);
-  const recovery = offline ? interviewSaver.resetOffline(interviewRecord) : interviewSaver.reset(interviewRecord);
-  normalizeInterviewDetails(interviewRecord);
+  const recovery = interviewResetBaseline(interviewRecord, offline);
   interviewConflict = offline ? interviewSaver.hasConflict() : recovery.conflict;
   interviewEdited = new Set();
   interviewOutput = '';
@@ -229,6 +227,15 @@ async function interviewScreen() {
   renderInterview();
   if (!offline && typeof medicinePrefillSuggestions === 'function') void medicinePrefillSuggestions();
   $('interview-notes')?.focus();
+}
+// Open an interview: fill defaults BEFORE taking the saved baseline, so an unedited open is not dirty and leaving it
+// does not write. A recovered draft replaces the record afterwards, so defaults are filled again for it.
+function interviewResetBaseline(record, offline, saver = interviewSaver) {
+  normalizeInterviewDetails(record, false);
+  if (!offline) normalizeInterviewDetails(record);
+  const recovery = offline ? saver.resetOffline(record) : saver.reset(record);
+  normalizeInterviewDetails(record);
+  return recovery;
 }
 function normalizeInterviewDetails(record, newEntries = true, assignIds = true) {
   if (!record.details) record.details = { version: 1, manager: '', manager_details: '', daa: '', daa_type: '', daa_pharmacy: '', smoking: '', alcohol: '', alcohol_details: '', height_referral: '', height_actual: '', weight_referral: '', weight_actual: '', bmi_referral: '', bmi_actual: '', height_as_listed: false, weight_as_listed: false, bmi_as_listed: false, meds: (record.meds || []).map(() => ({ packed: '', as_instructed: false })) };
