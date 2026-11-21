@@ -191,6 +191,10 @@ def blank(conn, patient):
             record['alcohol_smoking'] = '\n'.join(k.title() + ': ' + found[k] for k in ('alcohol', 'smoking') if found[k])
             record['social'] = found['social']
             record['clarify'].extend('Referral section not fully read: ' + k for k in found['unparsed'])
+            if found.get('unattributed_directions'):
+                record['clarify'].append('Referral directions not matched to a medicine (the referral text lists names and directions separately, so the pairing is unknown; check the referral PDF and enter each medicine directions yourself): ' + ' | '.join(str(x)[:200] for x in found['unattributed_directions'][:60]))
+            if found.get('form_checklist'):
+                record['clarify'].append('Referral form checklist lines (a ticked box cannot be read from the text; check the referral PDF): ' + ' | '.join(str(x)[:120] for x in found['form_checklist'][:30]))
             for k in ('meds', 'conditions', 'allergies', 'obs', 'alcohol_smoking', 'social', 'renal'):
                 value = found['renal'] if k == 'renal' else record[k] if k != 'obs' else any(obs.values())
                 if value: record['sources'].append(k + ' from referral - check')
