@@ -267,3 +267,24 @@ Reviewed PR36 changes, why each is in:
 - `handover/ACCEPTANCE-SAFETY-REVIEW-2026-11-21.md` from PR36. Its eMIMS / manual-exception / pathology-exception section is a PROPOSAL for pharmacist decision: unapproved, not implemented, not an authority to change any gate.
 
 Tested (Linux, with the msvcrt shim; not Windows proof): see the test counts reported with the bundle. Unverified: Windows full regression and packaged build of this exact head, sign-off block and unchanged-evidence behaviour in the app, C09 on the installed app, the PR CI results, and real older encrypted database restore (the synthetic migration test does not prove it).
+
+## Evidence refresh: Windows run of c66ae6e (operator report 2026-11-21 19:02 AEST)
+
+Scope: candidate c66ae6eecd65cc580eb966c67242e4fe7140f3d6 on 39fc703, packaged win-unpacked build, operator sandbox, synthetic fixture only. This section records evidence and limits. It is not clinical or Windows acceptance of any other head.
+
+Windows-tested (operator, packaged app):
+- (a) The per-row "Show page image for this row" control is present in the "Extracted referral text (not current use)" block and shows the row's page region.
+- (b) Expand and collapse work at 900 px and maximised; the image renders at both widths.
+- Real referral, row 1: a TRUE GEOMETRY CROP rendered. No fallback was exercised. Only row 1 was proved; there is no all-rows fidelity claim.
+- (d) Report semantic text unchanged: stripped word/document.xml was identical (2027 chars) between the baseline and a rebuild after image show/hide. Not proved: persisted interview/spec/database state (only a 5-file patient-folder inventory was compared; it was unchanged), and formatting, headers and footers.
+- (8) The conditions control is "Recent hospital or specialist change". Answering No does not erase or reject conditions; the report editor Conditions field kept its text. It does mark the saved report stale (edits stale reports).
+- (9) Per screen: Scan, "Taplet" and unconfirmed-referral warnings are visible in the Interview "To clarify" box; they were not seen in the queue or in the editor sections inspected. There is no name-specific final protection.
+- Row 3 shows the crop of "Sonedrug" beside the extracted "Sanedrug". "Sanedrug" is a deliberately wrong extracted name in the fixture. Nothing was corrected.
+- Build node tests: 506 pass, 12 skipped, exit 0. Installer execution was not tested.
+- Observation: the image control is show-only; the image hides when the expander is collapsed. Recorded, not changed.
+
+Still unverified (pending on the combined candidate 51a4b1e): no-geometry and hash-mismatch fallbacks (synthetic), PR36 sign-off block on changed interaction evidence in the app, C09 on the installed app, real older encrypted DB restore, installer execution, Word rendering of the report, helper scripts on Windows.
+
+Build provenance note: the combined run uses git 51a4b1e plus the private helper overlay (three sanitised scripts; hashes in the pack MANIFEST). That is not a clean-clone build and must be labelled so.
+
+Staged presentation items (source not changed; to follow the pinned candidate): "Directions" column label, explicit white header text, report section order (salutation/intro before Patient Profile in the owner template, only if confirmed), bulleted allergies and observations, empty OTC/ceased table rows that never imply a clinical fact. "Source / notes" stays as provenance. Closing boilerplate and sample text from the template are not copied.
