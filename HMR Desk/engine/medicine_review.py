@@ -34,9 +34,9 @@ def proposal(conn, p):
                     identity = interview.reference_identity(detail)  # catalogue-owned names only; otherwise the row text, as before
                     meds.append([identity['generic_name'] or row[0], identity['brand_name'] or ''])
         usage = interview_usage(conn, p)
-        stopped = {name for item in usage if item['status'] == 'not_using' for name in external_helpers.mims.ingredients(item['name'])}
-        taking = {name for item in usage if item['status'] == 'taking' for name in external_helpers.mims.ingredients(item['name'])}
-        meds = [row for row in meds if not stopped.intersection(external_helpers.mims.ingredients(row[0])) or set(external_helpers.mims.ingredients(row[0])) <= taking]
+        stopped = {name for item in usage if item['status'] == 'not_using' for name in external_helpers.ingredient_names(item['name'])}
+        taking = {name for item in usage if item['status'] == 'taking' for name in external_helpers.ingredient_names(item['name'])}
+        meds = [row for row in meds if not stopped.intersection(external_helpers.ingredient_names(row[0])) or set(external_helpers.ingredient_names(row[0])) <= taking]
         return {'meds': meds, 'allergies': [x.strip() for x in data['allergies'].splitlines() if x.strip()], 'proposed': True}
     path = jobs.interview_spec_path(p)
     stored_spec = records.get_json(conn, p['id'], 'interview_spec.json')
@@ -45,11 +45,11 @@ def proposal(conn, p):
     for row in spec.get('meds', []):
         text = row[0] if isinstance(row, list) and row else row
         if not isinstance(text, str) or external_helpers.mims.SKIP.match(text.strip()): continue
-        for name in external_helpers.mims.ingredients(text):
+        for name in external_helpers.ingredient_names(text):
             if name not in [r[0] for r in meds]: meds.append([name, external_helpers.mims.brand(text) or ''])
     usage = interview_usage(conn, p)
-    stopped = {name for item in usage if item['status'] == 'not_using' for name in external_helpers.mims.ingredients(item['name'])}
-    taking = {name for item in usage if item['status'] == 'taking' for name in external_helpers.mims.ingredients(item['name'])}
+    stopped = {name for item in usage if item['status'] == 'not_using' for name in external_helpers.ingredient_names(item['name'])}
+    taking = {name for item in usage if item['status'] == 'taking' for name in external_helpers.ingredient_names(item['name'])}
     meds = [row for row in meds if row[0] not in stopped or row[0] in taking]
     allergy = spec.get('allergies', '')
     allergies = [item for text in allergy for item in external_helpers.mims.allergies(text) if isinstance(text, str)] if isinstance(allergy, list) else external_helpers.mims.allergies(allergy)
@@ -70,22 +70,22 @@ def interview_usage(conn, p):
     return result
 
 def conflicting_medicines(conn, p, meds):
-    stopped = {name for item in interview_usage(conn, p) if item['status'] == 'not_using' for name in external_helpers.mims.ingredients(item['name'])}
-    return [row[0] for row in meds if stopped.intersection(external_helpers.mims.ingredients(row[0]))]
+    stopped = {name for item in interview_usage(conn, p) if item['status'] == 'not_using' for name in external_helpers.ingredient_names(item['name'])}
+    return [row[0] for row in meds if stopped.intersection(external_helpers.ingredient_names(row[0]))]
 
 def relevant_usage(usage, meds):
-    names = {name for row in meds for name in external_helpers.mims.ingredients(row[0])}
-    return [item for item in usage if names.intersection(external_helpers.mims.ingredients(item['name']))]
+    names = {name for row in meds for name in external_helpers.ingredient_names(row[0])}
+    return [item for item in usage if names.intersection(external_helpers.ingredient_names(item['name']))]
 
 def valid_alternatives(meds, usage, alternatives):
     stopped = [item for item in usage if item['status'] == 'not_using']
     if not isinstance(alternatives, list) or len(alternatives) != len(meds): return False
     def normal(value): return re.sub(r'[^a-z0-9]+', '', value.casefold())
     for row, choice in zip(meds, alternatives):
-        names = set(external_helpers.mims.ingredients(row[0]))
-        overlap = {name for item in stopped for name in external_helpers.mims.ingredients(item['name']) if name in names}
+        names = set(external_helpers.ingredient_names(row[0]))
+        overlap = {name for item in stopped for name in external_helpers.ingredient_names(item['name']) if name in names}
         if not overlap: continue
-        if not isinstance(choice, dict) or choice not in usage or choice.get('status') != 'taking' or not overlap <= set(external_helpers.mims.ingredients(choice['name'])): return False
+        if not isinstance(choice, dict) or choice not in usage or choice.get('status') != 'taking' or not overlap <= set(external_helpers.ingredient_names(choice['name'])): return False
         # The exact recorded taking product must be selected; ingredient overlap alone is ambiguous.
         if normal(row[0]) != normal(choice['name']) or any(normal(choice['name']) == normal(item['name']) for item in stopped): return False
     return True

@@ -108,3 +108,21 @@ Review PR33 against `main`. Read its commit diff rather than replaying missing d
 - Change: paths use one separator and `Join-Path`; one `$venvPython` is reused. `Find-BuildPython` tries `HMR_PYTHON` (full path to a python.exe), then `py -3.12`, then `python3.12` and `python` on PATH, and accepts only version 3.12. If none qualifies it stops with a message naming `HMR_PYTHON`. No host path is in the repo.
 - Tests: `test_build_script_contract.py` (static text checks, 3 tests). Plain pytest 899 passed, 1 skipped at this commit.
 - Unverified: PowerShell was not run here. Whether the doubled separators alone caused the reported ObjectNotFound is not confirmed. An unmodified run of the committed script on the Windows host is still required.
+
+## Addendum: recovered helper review and helper-mode tests
+
+Source of the recovery: a ZIP supplied by Es from his working machine, with a README written by his recovery assistant. Provenance in that README is a report, not independent proof: the helpers are not under Git, whether the installed app matches commit 90b2419 is unknown, the spec-JSON writer was not traced, no clean-machine run was made.
+
+Review (private scratch copy of d8c54f7 with the files dropped in; nothing from the ZIP is committed):
+- Archive is text-only code. No patient data or credentials found; lists.js was left out by the sender and claims.js is an empty list.
+- New to the repo: `make-lists.py`, `make-claims.py`, `record_report.py` (plus `background.js`, `file-results.ps1`, two READMEs). The recovered `content.js` and manifests are older and looser than the hardened repo versions and are rejected: MIMS content.js selects ambiguous or first-option matches and drops the incomplete-result errors; PPA content.js always ticks written consent held and carries the pharmacist's name and accreditation number. Es's working machine therefore runs pre-hardening extension scripts.
+- The engine loader works with the real scripts (stops at the `lists`/`claims` assignments).
+- With the real scripts present the full suite gave 7 failures. Cause: tests silently depended on whether a helper file exists on the machine. Two assumed the helper is absent; five pinned manual-mode names. This was a test-isolation defect, not a product defect.
+
+Decision record:
+- Accepted (test change): every helper-dependent test now sets its mode explicitly. `test_helper_modes.py` covers a synthetic resource folder with no helper, a synthetic helper file (loader stops at the data assignment), a dose-stripping stand-in (contract only, not the licensed helper), and spacing. `test_stopped_overlap_contract.py` pins manual mode by fixture. `test_offline_helpers.py` uses an empty resource folder and patched absent helpers.
+- Rejected: making reconciliation use the application's whole-name identity in helper mode too. It would stop a stopped 10 mg and a taking 5 mg of the same ingredient from needing the pharmacist's explicit resolution, a less cautious result, and it contradicts the existing helper-mode test in test_report.py. Behaviour stays: manual mode compares whole normalised names (different strength = different record); with a dose-stripping helper the same ingredient at different strengths needs explicit resolution. Both are now pinned.
+- Adapted (code): `external_helpers.ingredient_names` wraps the helper's names with spacing normalised, because the real helper leaves doubled spaces ("synthmed  a") that can defeat a match. medicine_review.py and interaction_scope.py call it.
+- Not adopted: `record_report.py` command line writes Consent = Yes unconditionally and defaults Referral Reason to polypharmacy. The engine imports only its `outcomes()` and `reasons()`. Both would need removing before any publication. `make-claims.py` self-check names a doctor. The ZIP README has local account names and paths. Publication of the three scripts is therefore held pending sanitisation and Es's explicit approval.
+
+Testing (Linux, exact tree = this commit): plain pytest 905 passed, 1 skipped, 0 failed with no helpers; also 905 passed, 1 skipped, 0 failed in a scratch copy with the three real helper scripts present. Not run: Windows, packaged app, real eMIMS, real helper on the host.

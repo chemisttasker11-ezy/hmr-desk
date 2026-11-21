@@ -122,7 +122,7 @@ def for_patient(conn, p):
             for row, meta in zip(data.get(key, []), data.get('details', {}).get(key, [])):
                 rows.append({'name': row[0], 'status': meta.get('use_status', ''), 'source': key, 'has_text': bool(row[col].strip())})
     names = [m[0] for m in confirmed['meds']] if isinstance(confirmed, dict) and isinstance(confirmed.get('meds'), list) else None
-    return compute(names, rows, evidence_state(conn, p), external_helpers.mims.ingredients)
+    return compute(names, rows, evidence_state(conn, p), external_helpers.ingredient_names)
 
 
 def apply_to_report(conn, p, data):

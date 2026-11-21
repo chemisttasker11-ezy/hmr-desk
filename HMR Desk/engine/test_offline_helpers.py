@@ -4,11 +4,14 @@ import api
 import manual_medicine_names
 
 
-def test_missing_browser_helper_code_does_not_prevent_manual_api_import():
-    assert api.mims is manual_medicine_names
-    assert not api.MIMS_PATH.exists()
-    assert api.claims_helper is None
-    assert api.record is None
+def test_missing_browser_helper_code_does_not_prevent_manual_api_import(tmp_path):
+    # Deterministic: an empty resource folder, not whatever helper files this machine happens to hold.
+    import test_helper_modes
+    loaded = test_helper_modes.fresh_external_helpers(tmp_path)
+    assert loaded.mims is manual_medicine_names
+    assert not loaded.MIMS_PATH.exists()
+    assert loaded.claims_helper is None
+    assert loaded.record is None
 
 
 def test_offline_medicine_names_do_not_claim_therapeutic_equivalence():
@@ -25,6 +28,9 @@ def test_new_installation_has_no_unlicensed_agent_or_external_dev_paths():
 def test_missing_helpers_are_reported_plainly_and_keep_the_existing_response_keys(tmp_path, monkeypatch):
     import db
     monkeypatch.setattr(db, 'BASE', str(tmp_path)); monkeypatch.setattr(db, 'DATA_DIR', str(tmp_path))
+    # Absent helpers, whatever this machine holds.
+    monkeypatch.setattr(api, 'MIMS_PATH', tmp_path / 'absent' / 'make-lists.py')
+    monkeypatch.setattr(api, 'claims_helper', None); monkeypatch.setattr(api, 'record', None)
     conn = db.connect(str(tmp_path / 'h.db'))
     try:
         status, lists = api.handle(conn, 'GET', '/api/mims/lists', {}, None)
