@@ -29,3 +29,12 @@ test('source keeps the legacy pathology section and the verified section id', ()
   assert.match(src, /\+ pathologySourcesLink\(\)/);
   assert.match(src, /pathologyLegacyHint\(\) \+ input/);
 });
+
+test('pathology records table keeps one-line headers and scrolls inside its card', () => {
+  const src = fs.readFileSync(require.resolve('../renderer/interview.js'), 'utf8');
+  const css = fs.readFileSync(require.resolve('../style.css'), 'utf8');
+  assert.match(src, /class="table-scroll pathology-records"/);
+  assert.match(css, /\.pathology-records \{ overflow-x: auto/);
+  assert.match(css, /\.pathology-records th \{ white-space: nowrap/);
+  assert.match(css, /\.interview-context \{ flex-wrap: wrap/);
+});

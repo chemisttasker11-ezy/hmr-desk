@@ -810,3 +810,17 @@ main:has(.interview-context) > header { height: 96px; min-height: 96px; }
 .interview-medicine-actions > label select, .interview-medicine-actions > label input { font-size: 14px; font-weight: 400; color: inherit; }
 .link-button { min-height: 0; padding: 0; border: 0; background: none; color: #176451; font: inherit; font-weight: 600; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
 .link-button:focus-visible { outline: 3px solid #176451; outline-offset: 2px; }
+
+/* Pathology records table: keep headers on one line and fields usable; scroll sideways instead of squeezing. */
+.pathology-records { overflow-x: auto; max-width: 100%; }
+.pathology-records table { min-width: 880px; }
+.pathology-records th { white-space: nowrap; }
+.pathology-records td input[type=text], .pathology-records td input[type=date] { width: 100%; box-sizing: border-box; }
+.pathology-records [data-pathology-field=test] { min-width: 12em; }
+.pathology-records [data-pathology-field=value], .pathology-records [data-pathology-field=unit] { min-width: 6em; }
+.pathology-records [data-pathology-field=reference_interval] { min-width: 8em; }
+.pathology-records [data-pathology-field=sample_date] { min-width: 10.5em; }
+.pathology-records [data-pathology-field]:not([type=checkbox]) { min-width: 8em; }
+/* Interview sticky bar: wrap instead of overflowing narrow windows. */
+.interview-context { flex-wrap: wrap; }
+#interview-outstanding { flex: 1 1 260px; min-width: 0; }
