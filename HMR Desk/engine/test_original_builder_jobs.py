@@ -104,3 +104,33 @@ def test_signoff_stays_blocked_for_original_builder_evidence_until_approval_rule
         with pytest.raises(ValueError, match='owner-approved'):
             report_auth.check_approval(conn, p, {'action': 'signed_off', 'report_file': detail['file'], 'report_sha256': detail['sha256'],
                                                  'reviewer': 'Synthetic Pharmacist', 'clinical_reviewed': True})
+
+
+def test_private_assets_alone_never_override_standalone_default(tmp_path, monkeypatch):
+    # Put private-looking assets in place without enabling the optional mode.
+    connection = _setup(tmp_path, monkeypatch)
+    folder = adapter.asset_dir(db.DATA_DIR)
+    folder.mkdir(parents=True)
+    for name in adapter.PINNED:
+        (folder / name).write_bytes(b'placeholder')
+    import settings
+    assert adapter.assets_present(db.DATA_DIR)
+    with connection() as conn:
+        assert settings.get(conn, 'report_use_original_builder') is False
+        patient, saved = _saved_report(conn)
+    monkeypatch.setattr(adapter, 'build_with_assets', lambda *a, **k: pytest.fail('Original builder started despite being off'))
+    output = jobs.report_build(patient['id'], pdf=False)
+    assert 'original report builder' not in output.lower()
+    assert 'provisional' in output.lower() or 'approved-layout' in output.lower()
+
+
+def test_original_builder_enabled_without_assets_fails_explicitly(tmp_path, monkeypatch):
+    connection = _setup(tmp_path, monkeypatch)
+    import settings
+    with connection() as conn:
+        patient, saved = _saved_report(conn)
+        settings.update(conn, {'report_use_original_builder': True})
+        conn.commit()
+    assert not adapter.assets_present(db.DATA_DIR)
+    with pytest.raises(ValueError, match='private assets are unavailable'):
+        jobs.report_build(patient['id'], pdf=False)
