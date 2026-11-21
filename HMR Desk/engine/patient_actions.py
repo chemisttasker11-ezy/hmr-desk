@@ -179,6 +179,10 @@ def _action(conn, p, body, moved_items):
         if outcome == 'saved_by_hand': conn.execute('UPDATE patients SET has_pathology=1,updated_at=? WHERE id=?', (db.now(), pid))
         db.log(conn, pid, 'pathology_result', {'status': statuses[outcome], 'note': note}, 'app')
         conn.execute("UPDATE tasks SET state=?,output=?,finished=? WHERE patient_id=? AND step='pathology' AND state IN ('queued','waiting')", ('cancelled' if outcome == 'access_code' else 'done', statuses[outcome], db.now(), pid))
+    elif name == 'pathology_recheck':
+        # Online later: collect pathology again for a patient who already has results or a hand-entered outcome.
+        if p['state'] not in (*steps.PRE, 'visited', 'report_drafted', 'signed_off'): raise ValueError('invalid patient state')
+        db.log(conn, pid, 'pathology_recheck', {}, 'app')
     elif name == 'interactions_manual':
         if p['state'] not in ('visited', 'report_drafted', 'signed_off'): raise ValueError('invalid patient state')
         text = body.get('text')

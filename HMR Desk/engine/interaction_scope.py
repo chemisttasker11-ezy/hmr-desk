@@ -110,6 +110,35 @@ def evidence_state(conn, p):
     return 'manual_note' if manual else ('stale' if seen else 'none')
 
 
+def evidence_files(conn, p):
+    """Every saved interaction result with its kind, when it was saved and whether it counts as current evidence.
+    A rerun adds a file; nothing is replaced. The list is for display and for the build record."""
+    import records, steps
+    confirmed_stamp = records.stamp(conn, p['id'], 'confirmed_meds.json')
+    out = []
+    for name in records.names_like(conn, p['id'], 'mims interactions'):
+        if not name.lower().endswith('.txt'): continue
+        automated = name.lower().startswith('mims interactions generated')
+        saved = records.stamp(conn, p['id'], name)
+        if automated: current = bool(steps.interactions_result_current(conn, p, name))
+        else: current = confirmed_stamp is not None and saved is not None and saved >= confirmed_stamp
+        out.append({'name': name, 'kind': 'automated' if automated else 'manual', 'saved_at': saved, 'current': current})
+    out.sort(key=lambda f: (f['saved_at'] or '', f['name']))
+    return out
+
+
+def evidence_digest(conn, p):
+    """Changes when the evidence state changes or a current result file is added, replaced or rewritten.
+    Recorded in the build evidence so a later check marks the report outdated for review."""
+    import hashlib, json, records
+    current = []
+    for f in evidence_files(conn, p):
+        if f['current']:
+            body = records.get(conn, p['id'], f['name']) or b''
+            current.append([f['name'], hashlib.sha256(body).hexdigest()])
+    return hashlib.sha256(json.dumps([evidence_state(conn, p), current], sort_keys=True).encode()).hexdigest()
+
+
 def for_patient(conn, p):
     import records, interview, external_helpers
     data = records.get_json(conn, p['id'], 'interview.json')

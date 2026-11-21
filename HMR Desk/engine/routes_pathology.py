@@ -14,7 +14,9 @@ from patient_actions import anydate, folder
 def handle(conn, method, path, query, body):
     if method == 'GET' and path == '/api/pathology/queue':
         result = []
-        for p in conn.execute("SELECT * FROM patients WHERE archived_at IS NULL AND state IN ('confirmed','pathology_ready','sheet_ready') AND COALESCE(has_pathology,0)=0 AND folder IS NOT NULL AND folder!=''"):
+        for p in conn.execute("SELECT * FROM patients WHERE archived_at IS NULL AND state IN ('confirmed','pathology_ready','sheet_ready','visited','report_drafted','signed_off') AND folder IS NOT NULL AND folder!=''"):
+            # Scheduled patients without pathology, or any patient the pharmacist asked to re-check (online later).
+            if not (steps.pathology_recheck_pending(conn, p) or (p['state'] in steps.PRE and not p['has_pathology'])): continue
             if steps.done('pathology', conn, p): continue
             dob = p['dob'] or ''
             try: dob = anydate(dob).strftime('%d-%b-%Y')
@@ -28,7 +30,9 @@ def handle(conn, method, path, query, body):
         if not p: return 404, {'error': 'patient not found'}
         if not isinstance(body.get('saved'), list) or not isinstance(body.get('status'), str): raise ValueError('invalid result')
         if body['saved']:
-            db.set_state(conn, p['id'], 'sheet_ready' if p['state'] == 'sheet_ready' else 'pathology_ready', source='app')
+            # A later re-check must never move a visited or reported patient back to a scheduled stage.
+            if p['state'] in steps.PRE:
+                db.set_state(conn, p['id'], 'sheet_ready' if p['state'] == 'sheet_ready' else 'pathology_ready', source='app')
             conn.execute('UPDATE patients SET has_pathology=1,irn=COALESCE(?,irn),updated_at=? WHERE id=?', (body.get('irn'), db.now(), p['id']))
         db.log(conn, p['id'], 'pathology_result', body, 'app')
         waiting = None

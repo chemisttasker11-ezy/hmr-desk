@@ -268,13 +268,52 @@ const H = (() => {
     const linked = (snapshotItems || []).some((item) => item?.metadata?.reference && String(item.values?.[0] || '').trim() === text);
     return linked ? LINKED_CATALOGUE_NOTE : '';
   }
+  // Per-patient results from GET /api/patients/<id>/results. Display only: it never says a result is approved.
+  function resultsHtml(r, patientId) {
+    if (!r || typeof r !== 'object' || !r.pathology || !r.interactions) return '<p class="muted" role="status">Results could not be loaded.</p>';
+    const stamp = (value) => (value ? esc(String(value).replace('T', ' ').slice(0, 16)) : 'date not recorded');
+    const basis = {
+      used_by_report: 'The latest built report was made from the results now on file.',
+      changed_since_build: 'These results changed after the report was built. Refresh the report, review it, then build and sign off again. A signed version is never changed by this.',
+      no_report: 'No report has been built yet.',
+      not_recorded: 'The report was built before this was tracked, so it cannot say whether it used these results.',
+      unknown: 'Could not check whether the report used these results.',
+    };
+    const evidence = {
+      automated_current: 'An eMIMS result for the current confirmed medicine list is on file.',
+      manual_note: 'Only a manually saved interaction note is on file.',
+      stale: 'The saved result does not match the current confirmed medicine list. There is no current result.',
+      none: 'No interaction result is on file.',
+      no_current_confirmation: 'The medicine list has not been confirmed for the current interview.',
+    };
+    const path = r.pathology, inter = r.interactions, id = esc(patientId);
+    const rows = (path.records || []).map((x) => `<tr><td>${esc(x.test)}</td><td>${esc(x.value)}</td><td>${esc(x.unit)}</td><td>${esc(x.reference_interval)}</td><td>${esc(x.sample_date) || 'no date'}</td><td>${esc(x.source)}</td><td>${x.verified ? 'Verified' : 'Not verified'}</td></tr>`).join('');
+    const collected = path.collection ? `Last collection: ${esc(path.collection.status || 'recorded')} (${stamp(path.collection.at)}).` : 'No pathology collection recorded yet.';
+    const pdfs = (path.source_pdfs || []).map((f) => `<li>${esc(f.name)} <span class="muted">saved ${f.modified ? esc(new Date(f.modified * 1000).toISOString().slice(0, 10)) : 'date not recorded'}</span></li>`).join('');
+    const files = (inter.files || []).map((f) => `<li>${f.kind === 'automated' ? 'eMIMS result' : 'Checked by hand'} <span class="muted">saved ${stamp(f.saved_at)}</span> ${f.current ? '<strong>current</strong>' : '<span class="muted">not current</span>'}</li>`).join('');
+    return `<div class="results-view" data-results>
+      <section class="panel-section" data-results-pathology><h3>Pathology</h3>
+        <p role="status">${collected}${path.recheck_pending ? ' A re-check is requested and waiting for the My Health Record tab.' : ''}</p>
+        ${rows ? `<div class="table-scroll"><table><thead><tr><th scope="col">Test</th><th scope="col">Result</th><th scope="col">Unit</th><th scope="col">Range</th><th scope="col">Sample date</th><th scope="col">Source</th><th scope="col">Check</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<p class="muted">No pathology results are entered in the record yet.</p>'}
+        ${pdfs ? `<h4>Pathology files</h4><ul>${pdfs}</ul>` : ''}
+        <p class="muted" data-results-basis="pathology">${esc(basis[path.report] || basis.unknown)} (This refers to the whole saved pathology record and its files, not single rows.)</p>
+        <div class="actions"><button type="button" data-results-recheck-pathology="${id}">Re-check pathology online</button></div>
+      </section>
+      <section class="panel-section" data-results-interactions><h3>Interactions</h3>
+        <p role="status" data-results-evidence="${esc(inter.evidence_state)}">${esc(evidence[inter.evidence_state] || 'Interaction status unknown.')}</p>
+        ${files ? `<ul>${files}</ul>` : '<p class="muted">No interaction results saved.</p>'}
+        <p class="muted" data-results-basis="interactions">${esc(basis[inter.report] || basis.unknown)}</p>
+        <div class="actions"><button type="button" data-results-run-interactions="${id}">Run interactions again</button></div>
+      </section>
+      <p class="muted">${esc(r.note || '')}</p></div>`;
+  }
   // Freshness and recorded-state checklist from GET /api/patients/<id>/report-status. Display only: it never
   // says approved or ready, and unknown or unverifiable stays visibly uncertain.
   function reportStatusHtml(status) {
     if (!status || typeof status !== 'object') return '';
     const reasonText = {
       document_changed: 'the Word file changed', pdf_changed: 'the PDF changed or is missing', report_content_changed: 'the report content changed since it was built',
-      interview_changed: 'the interview changed', pathology_changed: 'the pathology changed', source_files_changed: 'the original referral or pathology files changed',
+      interview_changed: 'the interview changed', pathology_changed: 'the pathology changed', interactions_changed: 'the interaction results changed', source_files_changed: 'the original referral or pathology files changed',
       clinical_record_changed: 'the clinical record changed', pharmacist_identity_changed: 'the pharmacist details in Settings changed', cannot_verify: 'the report could not be checked',
     };
     const reasons = (Array.isArray(status.reasons) ? status.reasons : []).map((r) => reasonText[r] || 'a change was detected');
@@ -869,6 +908,7 @@ const H = (() => {
     linkedCatalogueNote,
     buildDisabledReason,
     reportStatusHtml,
+    resultsHtml,
     commonStep,
     suburb,
     displayAddress,

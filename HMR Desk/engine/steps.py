@@ -109,9 +109,9 @@ def ready(name, conn, p):
         return (False, 'Use New referrals to review PDFs before adding patients')
     if name in ('register_xlsx', 'sheet_sync', 'import_history', 'import_history_apply'): return (True, '')
     if p is None: return (False, 'patient required')
-    if done(name, conn, p): return (False, 'already done')
+    if done(name, conn, p) and name not in REPEATABLE: return (False, 'already done')
     if name == 'pathology':
-        if p['state'] not in PRE: return (False, 'patient is not scheduled')
+        if p['state'] not in PRE and not pathology_recheck_pending(conn, p): return (False, 'patient is not scheduled')
         if not folder(p): return (False, 'patient folder missing')
         if not all((p['name'] and len(p['name'].split()) >= 2, p['dob'], p['sex'], p['medicare'] or p['ihi'])): return (False, 'surname, DOB, sex and Medicare or IHI required')
     elif name in ('interview_sheet', 'interview_pack', 'interview_assist'):
@@ -158,9 +158,24 @@ def ready(name, conn, p):
         if not event_date(conn, p, 'visited') or not event_date(conn, p, 'report_sent'): return (False, 'visit and report sent dates required')
     return (True, '')
 
+# A deliberate "run again" is allowed after the step is done: the service can hold newer information with the same
+# medicine list. The automatic flow still skips a done step (it tests done() first), so nothing is queued twice.
+REPEATABLE = ('interactions',)
+
+
+def pathology_recheck_pending(conn, p):
+    """The pharmacist asked to collect pathology again and no newer pathology result has been recorded."""
+    if conn is None or p is None: return False
+    def latest(kind):
+        row = conn.execute("SELECT id FROM events WHERE patient_id=? AND type=? ORDER BY id DESC LIMIT 1", (p['id'], kind)).fetchone()
+        return row[0] if row else 0
+    return latest('pathology_recheck') > latest('pathology_result')
+
+
 def done(name, conn, p):
     if p is None: return False
     if name == 'pathology':
+        if pathology_recheck_pending(conn, p): return False
         row = conn.execute("SELECT detail FROM events WHERE patient_id=? AND type='pathology_result' ORDER BY id DESC LIMIT 1", (p['id'],)).fetchone() if conn else None
         status = json.loads(row[0] or '{}').get('status') if row else None
         return False if status == 'access code needed' else bool(p['has_pathology'] or status == 'no report to read')

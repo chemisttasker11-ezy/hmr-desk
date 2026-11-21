@@ -162,7 +162,7 @@ function selectPatientTab(tab) {
   const detail = $('detail');
   if (!detail) return;
   detail.querySelectorAll('[data-tab]').forEach(b => { b.classList.toggle('active', b.dataset.tab === tab); b.setAttribute('aria-selected', String(b.dataset.tab === tab)); });
-  for (const name of ['Overview', 'Conversation', 'Activity', 'Files']) {
+  for (const name of ['Overview', 'Conversation', 'Activity', 'Files', 'Results']) {
     const section = detail.querySelector(`.${name.toLowerCase()}-view`);
     if (section) section.hidden = name !== tab;
   }
@@ -216,12 +216,13 @@ async function showPatient(id, action, background = false) {
   const timeline = await hmr.api('GET', `/api/patients/${encodeURIComponent(id)}/timeline`);
   if (!$('detail') || selected !== String(id) || request !== patientRequest || (typeof page !== 'undefined' && page !== startedPage) || (typeof navToken !== 'undefined' && navToken !== startedNav)) return false;
   if (offerPatient !== String(id)) { offerPatient = String(id); offerDraft = null; offerStatus = ''; }
-  const [board, agents, reportCurrency] = await Promise.all([
+  const [board, agents, reportCurrency, patientResults] = await Promise.all([
     hmr.api('GET', '/api/messages/board').catch(() => ({})),
     hmr.api('GET', '/api/agents').catch(() => ({})),
     ['visited', 'report_drafted', 'signed_off', 'sent', 'claimed'].includes(p.state)
       ? hmr.api('GET', `/api/patients/${encodeURIComponent(id)}/report-status`).catch(() => null)
       : Promise.resolve(null),
+    hmr.api('GET', `/api/patients/${encodeURIComponent(id)}/results`).catch(() => null),
   ]);
   if (!$('detail') || selected !== String(id) || request !== patientRequest || (typeof page !== 'undefined' && page !== startedPage) || (typeof navToken !== 'undefined' && navToken !== startedNav) || formOpen || (background && $('detail').querySelector?.('details[open]'))) return false;
   const milestones = timeline.milestones || {};
@@ -326,7 +327,8 @@ async function showPatient(id, action, background = false) {
   const isConversationTab = ['Conversation', 'Messages'].includes(detailTab);
   const isActivityTab = ['Activity', 'Timeline'].includes(detailTab);
   const isFilesTab = detailTab === 'Files';
-  const isOverviewTab = !isConversationTab && !isActivityTab && !isFilesTab;
+  const isResultsTab = detailTab === 'Results';
+  const isOverviewTab = !isConversationTab && !isActivityTab && !isFilesTab && !isResultsTab;
 
   const convCount = (p.messages || []).length;
   const actCount = (timeline.entries || []).length;
@@ -385,6 +387,7 @@ async function showPatient(id, action, background = false) {
       <button data-tab="Conversation" class="${isConversationTab ? 'active' : ''}">Conversation${convCount ? ` (${convCount})` : ''}</button>
       <button data-tab="Activity" class="${isActivityTab ? 'active' : ''}">Activity${actCount ? ` (${actCount})` : ''}</button>
       <button data-tab="Files" class="${isFilesTab ? 'active' : ''}">Files (${filesCount})</button>
+      <button data-tab="Results" class="${isResultsTab ? 'active' : ''}">Results</button>
     </div>
     <div class="overview-view" ${isOverviewTab ? '' : 'hidden'}>
       ${pathway.length ? `<div class="patient-pathway card"><h4>HMR Pathway</h4><div class="pathway-steps">${pathway.map((s) => `<div class="pathway-step ${s.completed ? 'is-completed' : s.current ? 'is-current' : ''}"><strong>${esc(s.title)}</strong><br><small>${s.completed ? '&#10003; Done' : esc(s.detail)}</small></div>`).join('')}</div></div>` : ''}
@@ -469,6 +472,7 @@ async function showPatient(id, action, background = false) {
       </section>
       ${['followup', 'done'].includes(p.stage) ? `<section class="panel-section"><h4>Follow-ups</h4>${followupRows(p, milestones, actions)}</section>` : ''}
     </div>
+    <div class="results-view" ${isResultsTab ? '' : 'hidden'}>${H.resultsHtml(patientResults, p.id)}</div>
     <div class="files-view" ${isFilesTab ? '' : 'hidden'}>
       <h3>Folder</h3><ul>${files(p.files?.folder)}</ul>
       <h3>Pathology</h3><ul>${files(p.files?.pathology)}</ul>

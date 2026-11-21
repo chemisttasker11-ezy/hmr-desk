@@ -25,6 +25,12 @@ def handle(conn, method, path, query, body):
                {'sha256': result['sha256'], 'pages': result['page_count'], 'name': result['name']}, 'api')
         conn.commit()
         return 200, result
+    match = re.fullmatch(r'/api/patients/(\d+)/results', path)
+    if match and method == 'GET':
+        import results
+        p = conn.execute('SELECT * FROM patients WHERE id=?', (int(match[1]),)).fetchone()
+        if not p: return 404, {'error': 'patient not found'}
+        return 200, results.for_patient(conn, p)
     match = re.fullmatch(r'/api/patients/(\d+)/pathology-records', path)
     if match and method in ('GET', 'POST'):
         import pathology_records

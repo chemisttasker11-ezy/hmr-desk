@@ -465,7 +465,7 @@ async function reportEditorClick(b) {
   if (d.heldResolve !== undefined) {
     const id = reportId;
     hmr.api('POST', `/api/patients/${encodeURIComponent(id)}/report/held-actions`, { id: d.heldResolve, action: 'resolve' })
-      .then((updated) => { if (reportId === id && reportRecord) { reportRecord.held_medicine_actions = updated.held_medicine_actions || []; if ($('held-actions')) $('held-actions').innerHTML = heldActionsHtml(); } })
+      .then((updated) => { if (reportId === id && reportRecord) { reportRecord.held_medicine_actions = updated.held_medicine_actions || []; if ($('held-actions')) $('held-actions').innerHTML = heldActionsHtml(); loadReportStatus(); } })
       .catch((error) => alert(errorText(error)));
     return true;
   }

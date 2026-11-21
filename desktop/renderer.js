@@ -383,6 +383,17 @@ document.addEventListener('click', async (event) => {
         { visit: 'visited', 'send report': 'report_sent', claim: 'claimed', 'offer a time': 'book_phone' }[step],
       );
     }
+    if (b.dataset.resultsRecheckPathology !== undefined || b.dataset.resultsRunInteractions !== undefined) {
+      // Online later: neither button is blocked by an earlier manual outcome or an earlier result, and neither asks
+      // for a native confirmation. The pathology re-check is recorded first so the My Health Record tab can pick it up.
+      const id = Number(b.dataset.resultsRecheckPathology ?? b.dataset.resultsRunInteractions);
+      const pathology = b.dataset.resultsRecheckPathology !== undefined;
+      if (pathology) await hmr.api('POST', `/api/patients/${encodeURIComponent(id)}/action`, { action: 'pathology_recheck' });
+      await enqueue([pathology ? 'pathology' : 'interactions'], [id]);
+      if (runMessage.includes('\n') || !/^[1-9]\d* task\(s\) queued/.test(runMessage)) alert(runMessage);
+      if (/^[1-9]\d* task\(s\) queued/.test(runMessage)) await navigate(pathology ? 'mhr' : 'emims');
+      return;
+    }
     if (b.dataset.amhRow !== undefined) {
       const name = H.genericName(b.closest('td').querySelector('[data-col="0"]').value);
       if (!name) return;

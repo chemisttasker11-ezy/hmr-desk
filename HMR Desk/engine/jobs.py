@@ -286,6 +286,7 @@ def report_build(patient_id, pdf=False):
             'demographics': report.demographic_status(conn, p, data),  # block name -> matches/kept/unresolved, no text
         }
         import interaction_scope
+        snapshot['interactions_evidence_sha256'] = interaction_scope.evidence_digest(conn, p)
         data, interaction_scope_result = interaction_scope.apply_to_report(conn, p, data)
         import pharmacist_identity
         identity = pharmacist_identity.resolve(conn)
@@ -388,6 +389,7 @@ def report_build(patient_id, pdf=False):
             'clinical_snapshot_sha256': snapshot['clinical_snapshot_sha256'],
             'clinical_snapshot_contract': snapshot['clinical_snapshot_contract'],
             'demographics': snapshot['demographics'],
+            'interactions_evidence_sha256': snapshot['interactions_evidence_sha256'],
             'pharmacist_identity_sha256': pharmacist_identity.digest(identity),
         }
         db.log(conn, patient_id, 'report_build', evidence, 'job')

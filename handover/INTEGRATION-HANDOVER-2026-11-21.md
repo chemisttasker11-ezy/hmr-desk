@@ -185,3 +185,18 @@ Levels: S = implemented in source; L = Linux tests (msvcrt stand-in, not Windows
 | Save, quit, restart | yes | yes | DPAPI crash/restart step succeeded | restart persistence shown once (held unresolved) | resolved state across restart |
 
 Reading rule: a green count is not a row above. Only the H column from the operator and exact-commit C results count towards acceptance, and C is synthetic. The installer the host built is from the operator's equivalent driver at b184b95; the committed script build at 97db47b is still to come.
+
+## Stage: per-patient results area and later-online refresh (source only)
+
+Implemented in source (Linux tests only, not Windows-run, not clinically accepted):
+- `GET /api/patients/<id>/results` (engine/results.py): pathology records, pathology PDFs, last collection, re-check pending, interaction evidence state and files, and whether the latest built report used them. Display only; no gate or sign-off policy changed.
+- New patient action `pathology_recheck` (allowed before and after the visit, including after sign-off). A pending re-check keeps the pathology step available; a result clears it. A signed version is never changed.
+- `interactions` is repeatable: the Run-again button is never disabled by an earlier result. The automatic flow still skips a done step, so there are no automatic duplicate checks.
+- Build records `interactions_evidence_sha256`; report status can say "the interaction results changed" only for builds that recorded it. Older builds read `not_recorded`, never outdated.
+- Wording: "used by the report" refers to the whole saved record, not single rows.
+- Held-action resolve now refreshes the status panel (fixes the stale "2 held" line).
+- Desktop: Results tab in the patient workspace with "Re-check pathology online" and "Run interactions again".
+
+Evidence at this stage: engine plain pytest 912 passed, 1 skipped (baseline 905 plus 7 new); desktop node 507 passed, 1 skipped, 0 failed (508 tests). Visual: headless Chrome render of the results markup with the app stylesheet inspected (content, table, buttons legible; the tab strip in that image is a test harness, not the real layout). Not verified: the real Electron window, the buttons' click path, Windows.
+
+Unverified: whether the online-later flow works in the installed app; whether report build/sign-off should hard-gate on stale interactions (Es's answer pending, no gate written).
