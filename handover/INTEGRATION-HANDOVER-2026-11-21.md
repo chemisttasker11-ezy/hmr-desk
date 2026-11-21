@@ -1,6 +1,6 @@
 # Integration handover: combined clinical safeguards and optional original Word builder
 
-Date: 21 November 2026 (Australia/Brisbane). Status: **PARTIALLY COMPLETED. Source integrated. The regression suite is NOT all passing under a plain `pytest` run on Linux (2 failed, 5 files error at collection); section 6 gives the cause and the result with those legacy script files excluded. Windows installer and installed-app evidence for this exact commit is NOT recorded. No clinical acceptance.**
+Date: 21 November 2026 (Australia/Brisbane). Status: **PARTIALLY COMPLETED. Source integrated. On Linux, plain `pytest` now passes with nothing excluded (905 passed, 1 skipped at the head named in section 9; the older 2-failure and 5-collection-error figures below are historical and superseded). Windows build, installed-app and clinical-matrix evidence for the final head is still being collected by the operator and is NOT recorded here. No clinical acceptance.**
 Not merged to main. No deployment. Clinical release approval stays with the application owner.
 
 ## 1. Purpose and scope
@@ -77,7 +77,7 @@ What the source does for that sequence (code read; Linux logic tests only; no li
 - Defect: the adapter timeout test depended on the wall clock (see decision record). Fixed.
 - The original builder path would have ignored the GP Plan setting. Now refused.
 - Cause of the 2 failures (`test_full_flow_integrity::test_referral_to_report_flow_stays_consistent`, `test_offline_helpers::test_missing_browser_helper_code_does_not_prevent_manual_api_import`): both pass alone. They fail only when plain pytest also imports legacy script-style files (`test_consent_sign.py`, `test_engine.py` found by bisection), because those assert and change global state at import. Same names fail on unmodified main. This is a test-isolation artefact, not a product defect. It is not fixed here. CI avoids it by running those files through `test_legacy_scripts.py`.
-- Cause of the 5 collection errors (`test_actions`, `test_api`, `test_api_presignoff`, `test_independent_repairs`, `test_manual_workflow`): documented in `test_legacy_scripts.py`. Several later sections need an explicit pharmacist review and an owner-approved built pair before sign-off, or the optional PPA helper. Their pre-sign-off parts run as the `*_presignoff` scripts. The later sign-off checks in the full scripts are NOT run anywhere on Linux. Sign-off gating itself is covered by `test_report_auth` and `test_report_signoff_consent`.
+- HISTORICAL (superseded by `b184b95` and `2453b11`): the 5 collection errors (`test_actions`, `test_api`, `test_api_presignoff`, `test_independent_repairs`, `test_manual_workflow`) came from import-time legacy scripts. They now run to their end in their own interpreters, the `*_presignoff` files are deleted, and the sign-off gate runs unchanged on real hash-bound synthetic evidence. Sign-off gating is also covered by `test_report_auth` and `test_report_signoff_consent`.
 
 ## 7. Testing (Linux with an msvcrt stub; NOT Windows proof). Each line names the commit it ran on.
 Update after commit `68847ac`: the legacy-script harness was repaired (see section 6). Results below are for the commit that carries this text (its SHA is in section 9); the older numbers are superseded.
@@ -90,7 +90,7 @@ Update after commit `68847ac`: the legacy-script harness was repaired (see secti
   - The CLI, skill and developer-default AI agent checks (seeded Claude/Codex/agy agents, stub agents run over raw referral and case text) test behaviour removed on purpose (commit 2aa2171 removed default agents; `jobs.agent_step` now raises PrivacyBlocked). Replaced by: `report_draft` must fail with "disabled", write no spec, `default_route` and route validation still checked, fresh installs have no agents.
   - Claim assertions on `reasons` and `outcomes` were dropped because those come from the absent PPA helper. Engine-owned claim fields (medicare, gpProvider, dates) are still asserted.
 - **Still not covered (Linux):** (1) The licensed MIMS and PPA helpers are absent, so the scripts use synthetic doubles (`legacy_mims_double.py`, `legacy_ppa_double.py`). They prove engine wiring only, not the real helpers' parsing. (2) API-key storage uses Windows DPAPI, so the HTTP-agent and key-redaction block in `test_api.py` runs only on Windows (guarded by `sys.platform == 'win32'`). It is unverified on this Linux run. (3) `test_manual_workflow` no longer uses the old external build script; its build output is a synthetic Word and PDF pair with hand-built evidence, distinct from real renderer output. (4) The HTTP token check in `test_api.py` now uses the handler without a static directory.
-- Earlier cause analysis (kept): the 2 failures and 5 collection errors under plain pytest came from import-time legacy scripts. Same names fail on unmodified main.
+- HISTORICAL (kept for the record): the 2 failures and 5 collection errors under plain pytest came from import-time legacy scripts. Same names fail on unmodified main. Superseded: see the addendum on the harness fix.
 - Candidate cross-check: the 9 backend test files changed by the developer candidate `cb6f14e`, run unmodified against this integration: 61 passed. The changed desktop GP Plan test is byte-identical.
 
 ### 7b. Desktop (run on the final code head; see the result line below)
@@ -108,7 +108,7 @@ Commits on the integration branch after the PR #33 merge: the merge itself `4908
 3. Visual check of the GP Plan column on and off in the approved template and PDF.
 4. Original builder with Word and the private assets: separate run, compared against the approved layout. Decide template approval rules and the Word COM failure.
 5. The ten-case pharmacist matrix with commit and template version recorded.
-6. Investigate the 5 collection errors and 2 failures on Linux so API routes can be tested without Windows.
+6. DONE (historical item): the 5 collection errors and 2 failures on Linux were fixed by `b184b95` and `2453b11`. The remaining Linux gap is the Windows-only DPAPI block, which must run on Windows.
 7. Portal end-to-end tests listed in the earlier handover.
 
 ## 11. Completion status
@@ -116,3 +116,45 @@ Partially completed. Integration and Linux tests done. Windows evidence and clin
 
 ## 12. Reproduce
 Branch `integration/hmr-combined-nov21` at commit `6f416c9175f8e85b53d1cb6eedd3f6eaf02416c6` on main `46d7df2`. PR link: to be added when the operator publishes the branch.
+
+## Addendum: build script path and Python discovery
+
+- Finding (source reading, same on origin/main): `scripts/build-windows.ps1` and `scripts/bundle-libreoffice.ps1` used single-quoted PowerShell paths with literal doubled backslashes, which PowerShell keeps as two separators. The script also assumed the `py -3.12` launcher.
+- Change: paths use one separator and `Join-Path`; one `$venvPython` is reused. `Find-BuildPython` tries `HMR_PYTHON` (full path to a python.exe), then `py -3.12`, then `python3.12` and `python` on PATH, and accepts only version 3.12. If none qualifies it stops with a message naming `HMR_PYTHON`. No host path is in the repo.
+- Tests: `test_build_script_contract.py` (static text checks, 3 tests). Plain pytest 899 passed, 1 skipped at this commit.
+- Unverified: PowerShell was not run here. Whether the doubled separators alone caused the reported ObjectNotFound is not confirmed. An unmodified run of the committed script on the Windows host is still required.
+
+## Addendum: recovered helper review and helper-mode tests
+
+Source of the recovery: a ZIP supplied by Es from his working machine, with a README written by his recovery assistant. Provenance in that README is a report, not independent proof: the helpers are not under Git, whether the installed app matches commit 90b2419 is unknown, the spec-JSON writer was not traced, no clean-machine run was made.
+
+Review (private scratch copy of d8c54f7 with the files dropped in; nothing from the ZIP is committed):
+- Archive is text-only code. No patient data or credentials found; lists.js was left out by the sender and claims.js is an empty list.
+- New to the repo: `make-lists.py`, `make-claims.py`, `record_report.py` (plus `background.js`, `file-results.ps1`, two READMEs). The recovered `content.js` and manifests are older and looser than the hardened repo versions and are rejected: MIMS content.js selects ambiguous or first-option matches and drops the incomplete-result errors; PPA content.js always ticks written consent held and carries the pharmacist's name and accreditation number. Es's working machine therefore runs pre-hardening extension scripts.
+- The engine loader works with the real scripts (stops at the `lists`/`claims` assignments).
+- With the real scripts present the full suite gave 7 failures. Cause: tests silently depended on whether a helper file exists on the machine. Two assumed the helper is absent; five pinned manual-mode names. This was a test-isolation defect, not a product defect.
+
+Decision record:
+- Accepted (test change): every helper-dependent test now sets its mode explicitly. `test_helper_modes.py` covers a synthetic resource folder with no helper, a synthetic helper file (loader stops at the data assignment), a dose-stripping stand-in (contract only, not the licensed helper), and spacing. `test_stopped_overlap_contract.py` pins manual mode by fixture. `test_offline_helpers.py` uses an empty resource folder and patched absent helpers.
+- Rejected: making reconciliation use the application's whole-name identity in helper mode too. It would stop a stopped 10 mg and a taking 5 mg of the same ingredient from needing the pharmacist's explicit resolution, a less cautious result, and it contradicts the existing helper-mode test in test_report.py. Behaviour stays: manual mode compares whole normalised names (different strength = different record); with a dose-stripping helper the same ingredient at different strengths needs explicit resolution. Both are now pinned.
+- Adapted (code): `external_helpers.ingredient_names` wraps the helper's names with spacing normalised, because the real helper leaves doubled spaces ("synthmed  a") that can defeat a match. medicine_review.py and interaction_scope.py call it.
+- Not adopted: `record_report.py` command line writes Consent = Yes unconditionally and defaults Referral Reason to polypharmacy. The engine imports only its `outcomes()` and `reasons()`. Both would need removing before any publication. `make-claims.py` self-check names a doctor. The ZIP README has local account names and paths. Publication of the three scripts is therefore held pending sanitisation and Es's explicit approval.
+
+Testing (Linux, exact tree = this commit): plain pytest 905 passed, 1 skipped, 0 failed with no helpers; also 905 passed, 1 skipped, 0 failed in a scratch copy with the three real helper scripts present. Not run: Windows, packaged app, real eMIMS, real helper on the host.
+
+## Addendum: C09 UI hang, build stall check and helper output contract (documentation only, no code change)
+
+- C09 UI hang, cause confirmed on the Windows candidate window (operator observation): the report Refresh button handler opens a native confirm() first (`desktop/renderer/report-editor.js`). It had been open since the 11:43 automated click. While it is open the renderer cannot run JavaScript, so `ui/snapshot` and `ui/click` (executeJavaScript, no time cap in `src/control.js`) time out, although the engine, app-control `/identity` and a direct API refresh all answered. Answering OK at 12:00 let the refresh run, the held-actions banner showed 2 held entries, the API state matched (A kept, changed B and duplicate C held), and the snapshot returned 87 controls without any restart. It was not an engine, lock or MCP fault. Engineer first suspected a lock holder; the lock probe (400 held-not-found in 378 ms) and direct refresh (200) ruled that out.
+- Not known: whether the earlier 11:00 refresh dialog was answered by a person or the refresh was done by API.
+- Source gap, not fixed here: the automation refusal list (`UI_BLOCKED` in `src/control.js`) lacks "refresh" and other confirm-guarded controls, and the snapshot/click handlers have no time cap. Any fix keeps the human confirmation (no auto-confirm, no bypass), is tested first, and is a separate stage after the current candidate build.
+- Build stall check: a silent log at the npm summary was the in-process LibreOffice MSI download and extraction (windows PowerShell hides progress), not a hang.
+- Helper output contract (private pack, synthetic tests, nothing committed): standalone `make-lists.py` writes `lists.js` beside the script with each entry's folder taken from its spec's `out` path and produces no interaction results; the legacy `file-results.ps1` trusts a first-line folder and overwrites. In the app, each list entry carries the patient's id and folder_path from the patient record, and results are filed as `MIMS interactions generated <meds-revision> <sha256>.txt` in that patient folder without overwriting, only when the name matches exactly one queued patient. Generated lists are not real interaction results; those need the logged-in service. Unverified: real files on the host, the Scheduled folder examples, Windows run of the helpers.
+
+## Addendum: reconciliation with the PR #35 review comments (21 Nov, 12:07)
+
+Two comments on PR #35 (https://github.com/chemisttasker11-ezy/hmr-desk/pull/35#issuecomment-7055480036 and https://github.com/chemisttasker11-ezy/hmr-desk/pull/35#issuecomment-7055489678), both posted by the repository owner's account, which is also the account the operator pushes from. They are treated as external evidence, checked against the source, not as instructions.
+- Documentation hygiene (valid, fixed here): the top status and three section 6/10 lines still described the old 2-failure and 5-error state; they are now marked historical. The `test_legacy_scripts.py` docstring still said the `test_api` tail is not run and named `HMR_RUN_STALE_API_TAIL`; that switch no longer exists and the docstring is corrected.
+- Handover location: an earlier set of addenda was appended to `SENIOR-REVIEW-RENDERER-2026-11-21.md` by mistake (the PR #33 stack file). They are moved here and that file is restored to its PR #33 content.
+- Clinical interaction gate, missing clean-machine helpers, exact-head Windows acceptance, real Word COM failure, encrypted migration: already open items in this handover. No source change; owner decisions (gate policy) and the operator's Windows evidence remain the route.
+- Test counts: the reviewer reports CI counts (686 backend passed, 3 skipped, 496 desktop passed, 9 skipped at 97db47b). They differ from the local counts (905 passed, 1 skipped; 504 passed, 1 skipped). The reviewer's CI runs are not reconciled with the local runs here (different selection or platform skips); the CI run pages were not inspected.
+- Commit mapping: the product code under test is unchanged from `6f416c9` except the engine changes in `b184b95` (tests), `eef1580`/`90b6479` (helper status), `5ea2fdc` (desktop message), `d8c54f7` (build scripts) and `97db47b` (helper names and tests). The head of PR #35 is the commit that carries this addendum; read it from the PR, not from this file.

@@ -10,8 +10,7 @@ gate runs unchanged. The licensed MIMS list helper and the PPA claim helper are 
 use the wiring doubles `legacy_mims_double` and `legacy_ppa_double`; they prove engine wiring only, NOT the real
 helpers' parsing.
 Known remaining limits:
-- test_api: the tail after the retired BUILD_SCRIPT report job is stale against the standalone renderer and is not run
-  (set HMR_RUN_STALE_API_TAIL=1 to run it while repairing it). The standalone renderer has its own tests.
+- test_api: runs to its end. The retired BUILD_SCRIPT tail was replaced with current-behaviour coverage, and the Windows-only DPAPI HTTP-agent block runs on Windows only.
 - test_referral_entry (pytest): 1 case needs a scripts/intake folder in the default data directory.
 """
 import os
