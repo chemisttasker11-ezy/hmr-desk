@@ -54,7 +54,27 @@ def worker_main(argv):
 
     Only ever called in a child process started by build(), so argv, stdout and the temp folder it touches
     belong to that child alone and no other engine job can see them."""
+    if len(argv) != 2:
+        return 6
     script, spec = argv
+    # The bundled engine exposes this worker switch as a local CLI. A manually
+    # invoked frozen engine must not run an arbitrary Python file through runpy.
+    # Parent-side checks alone do not protect that invocation.
+    if getattr(sys, 'frozen', False):
+        try:
+            root = Path(script).resolve(strict=True).parent
+            if Path(script).is_symlink() or Path(script).name != 'build.py':
+                return 6
+            for name, digest in PINNED.items():
+                asset = root / name
+                if asset.is_symlink() or not asset.is_file():
+                    return 6
+                if hashlib.sha256(asset.read_bytes()).hexdigest() != digest:
+                    return 6
+            if not Path(spec).is_file():
+                return 6
+        except (OSError, ValueError):
+            return 6
     sys.argv = [script, spec]
     try:
         runpy.run_path(script, run_name='__main__')
@@ -146,15 +166,33 @@ def lingering_word(before, started, instances=None, grace=10, sleep=None):
 
 
 def claim(source, target):
-    """Atomic no-clobber placement: hard link fails if the target exists (also if created a moment ago by
-    another job). Where links are unavailable, an exclusive create plus copy keeps the same guarantee."""
+    """Publish a complete report atomically and without ever overwriting a target.
+
+    The worker output is often under TEMP on another volume. A direct hard
+    link is preferable, but EXDEV needs a fully synced sibling temporary file
+    *inside the destination directory*, followed by a no-clobber hard link.
+    Never stream directly to the clinical report's final filename: an I/O
+    failure there would leave an apparently finished, truncated report.
+    Filesystems without hard-link support fail closed.
+    """
+    source, target = Path(source), Path(target)
     try:
         os.link(source, target)
+        return
     except FileExistsError:
         raise
     except OSError:
-        with open(source, 'rb') as src, open(target, 'xb') as dst:
+        pass
+    fd, scratch = tempfile.mkstemp(prefix='.hmr-report-publish-', suffix='.tmp', dir=target.parent)
+    try:
+        with os.fdopen(fd, 'wb') as dst, source.open('rb') as src:
             shutil.copyfileobj(src, dst)
+            dst.flush()
+            os.fsync(dst.fileno())
+        os.link(scratch, target)
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(scratch)
 
 
 def _fonts(pdf):
