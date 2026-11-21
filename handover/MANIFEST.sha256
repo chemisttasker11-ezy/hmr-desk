@@ -1,6 +1,3 @@
-eca02510dfb292dbb93ea9b1b29014c1940af1ce397db5b4bc4d581a591da095  ./HANDOVER-HMR-DESK-WIP.md
-c281f6cbf263dbc3dd7c79bbc7bf38fda57dd2e0a6d89a07498c9372cbc9f0e8  ./patches/0001-Wire-original-report-builder-adapter-into-report_bui.patch
-d18a11cacf83f91e828b53a163bc61741a87972d478a26eee849bad4b4f41b04  ./patches/0002-Template-review-aid-keyword-screen-of-past-case-temp.patch
-0aa85a468c4d683ea1c77a8e067c8aa2bbf528fcfe09df35cbb2b2f34f72b2e2  ./pr29-stack/0001-PR29-snapshot-contract-compat.patch
-9edc868eaa99b0cc881424c1e4557842cd1cf147a99e3a9d5921c85869158ec2  ./pr29-stack/0002-PR29-held-medicine-actions.patch
-ce364246727966a0c9915b6d414f2d4e8f07a5b3d400d9313b5293a3fbbb20e6  ./pr29-stack/report-editor-held-hunks-against-PR29-head.diff
+37e8e398ebc81f705ab1609f4e0b6eca3a418960a5b2318c617968a111fd139b  ./HANDOVER-HMR-DESK-WIP.md
+db03aa01c2c8c2a04b5bbb3d4f90edf2b34c15ab0a8c46f6b118a6f35ef01183  ./inventory/LOCAL-WORK-ACCOUNTING.md
+a2e5358ec5a87fd816d672c983dd9526544a5ec50c598c9b895414156a124642  ./inventory/rebuild-297e780-desktop-package-lock-peer-flags.diff
