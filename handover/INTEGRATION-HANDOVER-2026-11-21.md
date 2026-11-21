@@ -165,3 +165,23 @@ Finding: the CI backend steps name an explicit file list. Of 138 backend test fi
 Change: the fast-regression backend job (windows-2022, Python 3.12) now also runs plain `python -m pytest -q` after the curated step, so a new test file cannot be left out. The curated steps stay.
 Status: implemented in source only. Not run on a Windows runner. Tests that were only run locally with an msvcrt stand-in may fail or behave differently on real Windows; the first CI run will show it, and any failure is to be fixed, not excluded. Tests set helper mode explicitly, so a runner without the private helper files is the case they cover.
 Unverified: the CI step log counts (reviewer cited 686 backend and 496 desktop); logs need authenticated access.
+
+## Addendum: journey coverage matrix (21 Nov, 12:25) - what each stage has actually proven
+
+Levels: S = implemented in source; L = Linux tests (msvcrt stand-in, not Windows proof); C = GitHub Windows runner at 97db47ba (synthetic, exact commit, step result only, logs not read); H = operator run on the Windows test candidate (named evidence only); U = unverified. Nothing here is clinical acceptance.
+
+| Stage (Es's workflow order) | S | L | C | H | Remaining gate |
+|---|---|---|---|---|---|
+| Referral and patient setup | yes | yes | synthetic referral-to-signed-and-sent step succeeded | not recorded in this stream | run on the Scheduled ready files |
+| Pathology from My Health Record before the interview | yes (PRODA tab, pathology helper, local SMS code receiver) | synthetic only | no | U | Es signs in to PRODA himself on the host; code mechanism and phone bridge state unchecked |
+| Interview, confirmed medicines | yes | yes | partly (journey step) | held-medicine refresh preserved clinical text on two refreshes | none beyond Windows matrix cases |
+| Held medicine actions | yes | yes | no | unresolved held survived app and engine restart; Build blocked with count 2; both held items marked handled through the UI | editor still said 2 held and "reconciliation not done" after resolve and Save: stale panel or gate defect, under test; resolved state across restart not yet shown |
+| AMH per-medicine button | yes (generic name, search route) | navigation tests | no | U | cloud browser only: signed-in search route works and lands on search results; installed app tab, packaged button and Back position unverified |
+| eMIMS on the confirmed list, before the report | yes (private helper absent from public source) | helper-present and helper-absent tests | no | U | cloud browser only: signed in, Interaction Checker page present; no check run; helper output and filing into the patient folder unverified on the host |
+| Report build and sign-off protections | yes | yes | synthetic journey | Build gate dialog seen; Copy exact text failed in that environment (clipboard, app versus remote not separated) | interaction-evidence policy at build and sign-off awaits Es (visible optional offline exception; no code written) |
+| Original Word builder (opt-in) | yes | yes | not exercised on the runner | real Word COM failure reported earlier | separate run, never a silent replacement |
+| Delivery and claiming | existing | yes | partly | U | Scheduled-file run |
+| Offline manual path | yes | yes | no | U | host run with eMIMS unavailable |
+| Save, quit, restart | yes | yes | DPAPI crash/restart step succeeded | restart persistence shown once (held unresolved) | resolved state across restart |
+
+Reading rule: a green count is not a row above. Only the H column from the operator and exact-commit C results count towards acceptance, and C is synthetic. The installer the host built is from the operator's equivalent driver at b184b95; the committed script build at 97db47b is still to come.
