@@ -184,7 +184,8 @@ class WordNeverKilledTests(unittest.TestCase):
     def test_timeout_with_concurrent_unrelated_automation_word_ends_only_the_worker(self):
         import subprocess as sp
         ended, spawned = [], []
-        real = (adapter.kill_tree, adapter.word_instances, sp.run, adapter.os.kill, adapter.time.sleep)
+        real = (adapter.kill_tree, adapter.word_instances, sp.run, adapter.os.kill, adapter.time.sleep, adapter._utc_stamp)
+        adapter._utc_stamp = lambda delta=None: self.STARTED  # fixture times are fixed; do not depend on the wall clock
         table = {77: self.AUTO_OTHER, 88: self.USER}  # another program's automation Word plus a user's Word, both stay
         adapter.kill_tree = lambda child: ended.append(('worker', child.pid))
         adapter.word_instances = lambda: ({} if not spawned else table)
@@ -202,7 +203,7 @@ class WordNeverKilledTests(unittest.TestCase):
             code = adapter.run_worker(Path(adapter.__file__), Path(adapter.__file__), tempfile.gettempdir(), timeout=0.01)
         finally:
             sp.Popen = real_popen
-            adapter.kill_tree, adapter.word_instances, sp.run, adapter.os.kill, adapter.time.sleep = real
+            adapter.kill_tree, adapter.word_instances, sp.run, adapter.os.kill, adapter.time.sleep, adapter._utc_stamp = real
         self.assertEqual(code, 5)  # warned, not killed
         self.assertEqual([e[0] for e in ended], ['worker'])
         self.assertEqual([x for x in spawned if x != 'popen'], [])
