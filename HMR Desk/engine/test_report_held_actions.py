@@ -245,3 +245,23 @@ def test_unresolved_held_recommendation_blocks_the_original_builder_route_too(tm
     monkeypatch.setattr(adapter, 'run_worker', lambda *a, **k: pytest.fail('original builder ran with an unresolved held recommendation'))
     with pytest.raises(ValueError, match='Handle held medicine recommendations'):
         jobs.report_build(patient['id'])
+
+
+def test_held_recommendation_resolution_persists_after_reopen(tmp_path, monkeypatch):
+    """C09 synthetic: resolving a held pharmacist Action stays resolved across connections."""
+    connection = _setup(tmp_path, monkeypatch)
+    with connection() as conn:
+        patient = _hold_one(conn)
+        conn.commit()
+        held = report.held_actions(conn, patient)
+        assert len(held) == 1
+        resolved = report.resolve_held_action(conn, patient, held[0]['id'])
+        assert resolved['held_medicine_actions'] == []
+        conn.commit()
+    with connection() as reopened:
+        assert report.held_actions(reopened, patient) == []
+        preserved = records.get_json(reopened, patient['id'], report.HELD_RECORD)
+        assert len(preserved['entries']) == 1
+        assert preserved['entries'][0]['resolved'] is True
+        assert preserved['entries'][0]['action'] == 'Synthetic held text'
+        assert report.load(reopened, patient)['held_medicine_actions'] == []

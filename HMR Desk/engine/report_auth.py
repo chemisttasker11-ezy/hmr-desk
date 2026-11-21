@@ -204,6 +204,13 @@ def check_approval(conn, patient, body):
         raise ValueError('Interview changed after report; refresh and rebuild')
     if pathology_records.revision(conn, patient) != detail.get('pathology_revision'):
         raise ValueError('Pathology changed after report; refresh and rebuild')
+    # Current builds record interaction evidence as part of their source provenance.
+    # Preserve legacy report compatibility, but never sign a newer report whose recorded
+    # interaction evidence changed after the pharmacist reviewed the generated document.
+    if detail.get('interactions_evidence_sha256'):
+        import interaction_scope
+        if detail['interactions_evidence_sha256'] != interaction_scope.evidence_digest(conn, patient):
+            raise ValueError('Interaction evidence changed after report generation; rebuild and review before sign-off')
     import report
     open_blocks = report.unresolved_demographics(conn, patient, json.loads(spec_bytes.decode('utf-8-sig')))
     if open_blocks:

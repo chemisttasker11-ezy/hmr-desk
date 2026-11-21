@@ -166,3 +166,24 @@ def test_signoff_refuses_unresolved_demographic_mismatch_and_honours_a_bound_kee
     record_changed('Dr Synthetic Third')
     with pytest.raises(ValueError, match='differs from the patient record'):
         report_auth.check_approval(conn, current(), body)
+
+
+def test_signoff_blocks_changed_interaction_evidence_for_new_builds(tmp_path, monkeypatch):
+    """Build-time interaction provenance cannot silently change before signing."""
+    import interaction_scope
+    conn, patient, folder, body = case(tmp_path, monkeypatch)
+    evidence = {'sha': 'initial-interaction-evidence'}
+    monkeypatch.setattr(interaction_scope, 'evidence_digest', lambda conn, p: evidence['sha'])
+    latest = conn.execute(
+        "SELECT id,detail FROM events WHERE patient_id=? AND type='report_build' ORDER BY id DESC LIMIT 1",
+        (patient['id'],),
+    ).fetchone()
+    detail = json.loads(latest['detail'])
+    detail['interactions_evidence_sha256'] = evidence['sha']
+    with conn:
+        conn.execute('UPDATE events SET detail=? WHERE id=?', (json.dumps(detail), latest['id']))
+    assert report_auth.check_approval(conn, patient, body)['reviewer'] == 'Synthetic Pharmacist'
+    evidence['sha'] = 'updated-interaction-evidence'
+    with pytest.raises(ValueError, match='Interaction evidence changed'):
+        report_auth.check_approval(conn, patient, body)
+    conn.close()
