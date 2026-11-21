@@ -50,3 +50,13 @@ def test_a_direction_with_no_row_to_sit_beside_fails_closed(tmp_path):
 
 def test_shape_hides_letters_and_digits():
     assert g.shape('Alpha 50mg.') == 'Aaaaa 99aa.'
+
+
+def test_long_names_close_to_the_direction_column_still_split(tmp_path):
+    p = str(tmp_path / 'd.pdf'); doc = fitz.open(); page = doc.new_page(); y = 100
+    page.insert_text((50, 70), 'Current Medications', fontsize=11)
+    for name, d in [('Breo Ellipta 200/25 200mcg/25mcg Powder for', '1 Puff Daily'), ('Alphadrug 50mg Tablet', '1 Tablet Daily'), ('Betadrug 5mg Tablet', '2 Tablets Daily')]:
+        page.insert_text((50, y), name, fontsize=10); page.insert_text((300, y), d, fontsize=10); y += 24
+    doc.save(p)
+    r = pair(p)
+    assert r['ok'] and [x[1] for x in r['rows']] == ['1 Puff Daily', '1 Tablet Daily', '2 Tablets Daily']

@@ -36,13 +36,16 @@ def medicine_region(words):
     return [w for _, _, ws in lines[start + 1:end] for w in ws]
 
 
-def split_columns(words, min_gap=40.0):
-    xs = sorted({round(w[0], 1) for w in words})
-    best = None
-    for a, b in zip(xs, xs[1:]):
-        if b - a >= min_gap and sum(1 for w in words if w[0] <= a) >= 3 and sum(1 for w in words if w[0] >= b) >= 3:
-            if best is None or b - a > best[1] - best[0]: best = (a, b)
-    return None if best is None else best[1] - (best[1] - best[0]) / 2
+def split_columns(words, min_gap=10.0):
+    """Widest vertical channel that no word crosses (word extents, not word starts), with words on both sides."""
+    spans = sorted((w[0], w[2]) for w in words)
+    best = None; reach = spans[0][1] if spans else 0
+    for x0, x1 in spans[1:]:
+        if x0 - reach >= min_gap and (best is None or x0 - reach > best[1] - best[0]):
+            left = sum(1 for w in words if w[2] <= reach + 0.01); right = sum(1 for w in words if w[0] >= x0 - 0.01)
+            if left >= 3 and right >= 3: best = (reach, x0)
+        reach = max(reach, x1)
+    return None if best is None else (best[0] + best[1]) / 2
 
 
 def pair_table(words):
