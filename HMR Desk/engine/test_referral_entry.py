@@ -283,3 +283,24 @@ class IntakeInterviewPreparationTests(unittest.TestCase):
         assert data['revision'] != 'missing'
         assert data['conditions'] == 'Reviewed synthetic condition'
         assert any(s == 'Conditions confirmed: referral.pdf page 1; Synthetic Pharmacist' for s in data['sources'])
+
+
+    def test_duplicate_referral_reimport_cannot_overwrite_saved_pharmacist_edits(self):
+        """Actual duplicate review/commit remains non-destructive; no parsing reset is required."""
+        import interview
+        row = referral_entry.review(self.conn, [str(self.pdf)])['rows'][0]
+        pid = referral_entry.commit(self.conn, row['token'], row['fields'])['patient_id']
+        patient = self.conn.execute('SELECT * FROM patients WHERE id=?', (pid,)).fetchone()
+        data = interview.load(self.conn, patient)
+        assert data['meds']  # the generated synthetic source included a parseable medicine
+        data['meds'][0][0] = 'Syntheticmed 5 mg MR tablet (pharmacist edited)'
+        data['meds'][0][1] = 'Pharmacist-entered fictional directions'
+        interview.save(self.conn, patient, data)
+        self.conn.commit()
+        reviewed = referral_entry.review(self.conn, [str(self.pdf)])['rows'][0]
+        assert reviewed['status'] == 'duplicate' and reviewed['duplicate_kind'] == 'content'
+        with self.assertRaisesRegex(ValueError, 'already added'):
+            referral_entry.commit(self.conn, reviewed['token'], reviewed['fields'])
+        after = interview.load(self.conn, patient)
+        assert after['meds'][0][:2] == ['Syntheticmed 5 mg MR tablet (pharmacist edited)',
+                                      'Pharmacist-entered fictional directions']
