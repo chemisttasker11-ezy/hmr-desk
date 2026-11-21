@@ -1,6 +1,6 @@
 # Integration handover: combined clinical safeguards and optional original Word builder
 
-Date: 21 November 2026 (Australia/Brisbane). Status: **PARTIALLY COMPLETED. Source integrated and Linux-tested. Windows installer and installed-app evidence for this exact commit is NOT yet recorded. No clinical acceptance.**
+Date: 21 November 2026 (Australia/Brisbane). Status: **PARTIALLY COMPLETED. Source integrated. The regression suite is NOT all passing under a plain `pytest` run on Linux (2 failed, 5 files error at collection); section 6 gives the cause and the result with those legacy script files excluded. Windows installer and installed-app evidence for this exact commit is NOT recorded. No clinical acceptance.**
 Not merged to main. No deployment. Clinical release approval stays with the application owner.
 
 ## 1. Purpose and scope
@@ -34,6 +34,15 @@ Three evidence levels, kept apart. Nothing in the second or third level should b
 - Portal tabs (eMIMS, My Health Record via PRODA, PPA, AMH) end to end. AMH has no helper script. Only mocked-page node tests exist.
 - The ten-case pharmacist acceptance matrix.
 
+**Intended clinical workflow (owner, 11:05 on 21 Nov, replaces earlier garbled transcripts).** Before the interview: fetch the patient's pathology and tests from My Health Record. After the interview, once the medicines actually taken are confirmed: run the eMIMS Interaction Checker on that confirmed list, before the report is written. The owner says this works on his own working machine today. That is user-reported, not tested by us.
+
+What the source does for that sequence (code read; Linux logic tests only; no live portal run):
+- Step order in `steps.py`: collect pathology (MHR), interview sheet, confirm medicines, check interactions (eMIMS), report assist, report start, report build.
+- Pathology is offered only before the visit (states confirmed, pathology_ready, sheet_ready) and needs surname, DOB, sex and Medicare or IHI. Results come back through `/api/pathology/queue` and `/api/pathology/result`.
+- The eMIMS list is built from the confirmed medicines only. It refuses to build if the confirmed list is stale. A result file is bound by SHA-256 to the confirmed list, so a changed list makes the check "not current". Report start, report assist and report draft refuse until the check is current.
+- **Gaps found in source:** (1) `report_build` and sign-off readiness do not require a current interaction check or current confirmed medicines; `interaction_scope.py` states it deliberately adds no gate so the pharmacist can document uncertainty. Whether to enforce one is a clinical policy decision for the owner; we did not change it. (2) The eMIMS list generator `MIMS Interaction Helper/make-lists.py` (also `PPA Claim Helper/make-claims.py` and `record_report.py`) is not in the repository. Without it `mims_lists` returns an empty queue ("licensed portal integration unavailable"), so on a clean build the eMIMS step has nothing to run on. The helper `content.js` that drives the portal is in the repository. The owner's working machine presumably has these files; a narrow comparison (file names and SHA-256 only, no contents) would settle it. (3) Nothing orders "MHR before interview" as a hard gate: a patient can reach the interview without pathology.
+- Not verified live: portal sign-in, My Health Record fetch, eMIMS run, helper behaviour against current portal pages.
+
 ## 4. Chronology of the preceding work (for collaborators)
 1. Baseline: main `46d7df2` contains PR #27 (development baseline) and PR #28 (screenshot staleness check, tool failure).
 2. PR #29 (`5c9b486`) added GP Plan, practice details and safer refresh. PR #30 and #31 were closed as folded into it.
@@ -46,14 +55,14 @@ Three evidence levels, kept apart. Nothing in the second or third level should b
 ## 5. Decision record
 | Item | Disposition | Reason | Our existing alternative | Combined behaviour | Evidence or limit |
 |---|---|---|---|---|---|
-| PR32 GP Plan option, GP/practice details, migration | Accepted | Same behaviour as our candidate, cleaner base | Candidate branch had the same | Unchanged from PR32 | PR32 tests, passed here. Real template layout unverified. |
+| PR32 GP Plan option, GP/practice details, migration | Accepted | Same behaviour as our candidate (the candidate's own tests pass against this code) | Candidate branch had the same | Unchanged from PR32 | PR32 tests, passed here. Real template layout unverified. |
 | PR32 held Actions, refresh preservation | Accepted | Content-identical to our held design (verified line for line against the candidate tree) | Candidate held-actions patch | Build and sign-off blocked while unresolved | Existing tests plus new test: blocked on the Word route too. Installed-app journey unverified. |
 | PR32 snapshot contract compat | Accepted | Same as ours | Candidate compat patch | Unmarked old reports compare with legacy digest | Linux tests. No encrypted legacy round trip yet. |
 | PR32 DOB format comparison, atomic export | Accepted | Real defects (split identity, truncated export) our candidate lacked | None | Replaces main's plain string and `xb` write | `test_handover_safety.py`. Hard-link export fails closed on FAT or network shares. |
 | PR33 opt-in setting (default off) | Accepted | Presence of private files must not replace the standalone renderer | Our adapter used the files if present | `report_use_original_builder` default off | New test: standalone stays default with assets present. |
 | PR33 atomic publication, pinned frozen worker, CI lists | Accepted | Real partial-output and bypass risks | Our adapter copied straight to target | Used unchanged | PR33 tests, passed here. Not a sandbox. |
 | Template-review aid | Accepted | Merged cleanly | Ours (same code) | "Check first" list only | Keyword limits: false negatives and positives remain. |
-| Original builder with GP Plan on | **Adapted (new)** | The private template cannot honour GP Plan; silently ignoring a setting is not allowed | None | Build refuses with an explicit message and writes nothing | New test. |
+| Original builder with GP Plan on | **Adapted (new)** | Owner's rule: never silently ignore GP Plan. PR33's review says the private template cannot be assumed to honour it, and the adapter has no GP Plan input. We therefore refuse. Whether the real template could honour it is NOT tested (no asset or layout test) | None | Build refuses with an explicit message and writes nothing | New test. |
 | Held Actions vs original builder | **Adapted (verified)** | The gate must not depend on the renderer | None | Gate runs before either renderer | New test. |
 | Original builder sign-off | Kept as in PR33 | Approval rule for its template is undecided | Same | `template_approved` false, so sign-off stays blocked | PR33 tests. |
 | Flaky adapter test | **Fixed here** | `test_timeout_with_concurrent_unrelated_automation_word_ends_only_the_worker` hard-coded timestamps near 01:00 UTC on 21 Nov, so it began failing at that time of day on PR33 itself | None | Test now pins the worker-start stamp | Passes (892 passed). |
@@ -65,13 +74,19 @@ Three evidence levels, kept apart. Nothing in the second or third level should b
 - PR #32 contains our candidate. The only differences are its own fixes plus PR #28 items our candidate lacked. No unique candidate behaviour was found missing.
 - Defect: the adapter timeout test depended on the wall clock (see decision record). Fixed.
 - The original builder path would have ignored the GP Plan setting. Now refused.
-- Remaining pre-existing Linux failures (identical names on unmodified main): 2 failed and 5 files erroring at collection. Causes not investigated beyond confirming they are the same set. They hide legacy script-style API tests on Linux, so API route behaviour still needs Windows proof.
+- Cause of the 2 failures (`test_full_flow_integrity::test_referral_to_report_flow_stays_consistent`, `test_offline_helpers::test_missing_browser_helper_code_does_not_prevent_manual_api_import`): both pass alone. They fail only when plain pytest also imports legacy script-style files (`test_consent_sign.py`, `test_engine.py` found by bisection), because those assert and change global state at import. Same names fail on unmodified main. This is a test-isolation artefact, not a product defect. It is not fixed here. CI avoids it by running those files through `test_legacy_scripts.py`.
+- Cause of the 5 collection errors (`test_actions`, `test_api`, `test_api_presignoff`, `test_independent_repairs`, `test_manual_workflow`): documented in `test_legacy_scripts.py`. Several later sections need an explicit pharmacist review and an owner-approved built pair before sign-off, or the optional PPA helper. Their pre-sign-off parts run as the `*_presignoff` scripts. The later sign-off checks in the full scripts are NOT run anywhere on Linux. Sign-off gating itself is covered by `test_report_auth` and `test_report_signoff_consent`.
 
-## 7. Testing (exact integration commit, Linux with an msvcrt stub; NOT Windows)
-- Commit `6f416c9175f8e85b53d1cb6eedd3f6eaf02416c6`.
-- Backend: `python -m pytest -q -p no:cacheprovider --continue-on-collection-errors` from `HMR Desk/engine` with the stub on `PYTHONPATH` and APPDATA, LOCALAPPDATA, USERPROFILE pointing to a scratch folder. Result: 892 passed, 2 failed, 1 skipped, 5 collection errors. The failed and erroring names equal the main baseline.
-- Desktop: `node --test` in `desktop/`: 504 tests, 503 pass, 0 fail, 1 skipped. Run on the earlier combined commit `101808d` (only an adapter test file changed since).
-- GitHub Actions for this commit: not run, since nothing was pushed by me. A Windows packaging run is required.
+## 7. Testing (Linux with an msvcrt stub; NOT Windows proof). Each line names the commit it ran on.
+Commit `6f416c9` (code) = `28495ac` minus the handover document; later commits change only documents or this section.
+- Plain run, every backend file collected: `python -m pytest -q -p no:cacheprovider --continue-on-collection-errors` from `HMR Desk/engine`: **892 passed, 2 failed, 1 skipped, 5 collection errors.** Not all passing.
+- The same run with the legacy script-style files left out of collection (they run in their own interpreter through `test_legacy_scripts.py`, which is how CI treats them): **894 passed, 1 skipped, 0 failed.**
+- `test_legacy_scripts.py` (24 script runs, including lifecycle, MIMS binding, PRODA/SMS, interview, referral, planner): 24 passed.
+- Candidate cross-check: the 9 backend test files changed by the developer candidate `cb6f14e`, taken from that branch, were run unmodified against this integration's code: 61 passed. The one changed desktop GP Plan test is byte-identical.
+- Desktop `node --test`: see section 7b.
+
+### 7b. Desktop (run on the final code head; see the result line below)
+`node --test` in `desktop/` on commit `6f416c9` (code identical to the final head): 504 tests, 503 passed, 0 failed, 1 skipped. Mocked pages only. Not Windows proof.
 
 ## 8. Verification limits
 No Windows run of this commit. No Word. No installer. No migration test on an older encrypted database. No real template, no real patient data. No browser portals. Visual layout (GP Plan on and off, long reports) not inspected.
