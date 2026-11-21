@@ -271,10 +271,12 @@ const H = (() => {
   // The acknowledgement is a named pharmacist attestation, so a blank name is never filled in automatically.
   function reconciliationReviewer(header) {
     const name = typeof header?.pharmacist === 'string' ? header.pharmacist.trim() : '';
-    if (!name) return { ok: false, reviewer: '', hint: 'Enter the reviewing pharmacist name in the pharmacist field at the top of this interview, then acknowledge again.' };
-    if (name.length > 120) return { ok: false, reviewer: '', hint: 'The pharmacist name is too long. Shorten it, then acknowledge again.' };
+    if (!name) return { ok: false, reviewer: '', hint: 'Enter the reviewing pharmacist name in the box above the Acknowledge button, then acknowledge again.' };
+    if (name.length > 120) return { ok: false, reviewer: '', hint: 'The pharmacist name is too long. Shorten it in the box above the Acknowledge button.' };
     return { ok: true, reviewer: name, hint: '' };
   }
+  // Mirrors the desktop allow-list in src/patient-file-open.js; the desktop side re-checks every open.
+  function fileOpenable(name) { return typeof name === 'string' && !name.startsWith('.') && /\.(pdf|txt|docx)$/i.test(name); }
   // Per-patient results from GET /api/patients/<id>/results. Display only: it never says a result is approved.
   function resultsHtml(r, patientId) {
     if (!r || typeof r !== 'object' || !r.pathology || !r.interactions) return '<p class="muted" role="status">Results could not be loaded.</p>';
@@ -916,6 +918,7 @@ const H = (() => {
     buildDisabledReason,
     reportStatusHtml,
     resultsHtml,
+    fileOpenable,
     reconciliationReviewer,
     commonStep,
     suburb,

@@ -440,6 +440,8 @@ function renderInterview() {
       ? `<p role="status">${esc(interviewReconciliation.reviewed ? 'Reviewed and acknowledged for the saved medicines' : interviewReconciliation.stale ? 'Review is stale: medicines changed. Acknowledge again for the current medicines' : reconciliationRows.length + ' discrepancies require review')}</p>
          <ul>${reconciliationRows.map(f => `<li><strong>${esc(f.medicine_id)}</strong>: ${esc(f.message)} <button type="button" data-interview-jump="meds">Go to medicines</button></li>`).join('')}</ul>`
       : '<p>Save changes, then load the current reconciliation checklist.</p>'}
+    ${canAcknowledgeReconciliation(interviewReconciliation)
+      ? `<label>Reviewing pharmacist (the name recorded with this acknowledgement)<input id="reconciliation-reviewer" maxlength="120" autocomplete="name" value="${esc(record.header?.pharmacist || '')}"></label>` : ''}
     <div class="actions"><button type="button" data-reconciliation-load>Save and refresh checklist</button>
     ${canAcknowledgeReconciliation(interviewReconciliation)
       ? '<button type="button" data-reconciliation-ack>Acknowledge reviewed discrepancies</button>' : ''}</div>
@@ -858,9 +860,15 @@ async function interviewClick(b) {
     return true;
   }
   if (b.dataset.reconciliationAck !== undefined) {
+    const typed = document.getElementById('reconciliation-reviewer')?.value ?? ''; // read before the save re-renders the form
     if (!interviewReconciliation || !(await saveInterview(true))) return true;
-    const who = H.reconciliationReviewer(interviewRecord.header);
-    if (!who.ok) { interviewOutput = who.hint; renderInterview(); document.getElementById('section-reconciliation')?.scrollIntoView(); return true; }
+    const who = H.reconciliationReviewer({ pharmacist: typed });
+    if (!who.ok) {
+      interviewOutput = who.hint; renderInterview();
+      const field = document.getElementById('reconciliation-reviewer');
+      if (field) { field.value = typed; field.scrollIntoView({ block: 'center' }); field.focus({ preventScroll: true }); }
+      return true;
+    }
     try {
       const reviewer = who.reviewer;
       const result = await hmr.api('POST', `/api/patients/${encodeURIComponent(interviewId)}/reconciliation`,

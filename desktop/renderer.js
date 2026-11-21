@@ -383,6 +383,11 @@ document.addEventListener('click', async (event) => {
         { visit: 'visited', 'send report': 'report_sent', claim: 'claimed', 'offer a time': 'book_phone' }[step],
       );
     }
+    if (b.dataset.openFile !== undefined) {
+      try { await hmr.openPatientFile(Number(selected), b.dataset.openSection, b.dataset.openFile); if ($('file-open-message')) $('file-open-message').textContent = ''; }
+      catch (error) { if ($('file-open-message')) $('file-open-message').textContent = errorText(error); }
+      return;
+    }
     if (b.dataset.resultsRecheckPathology !== undefined || b.dataset.resultsRunInteractions !== undefined) {
       // Online later: neither button is blocked by an earlier manual outcome or an earlier result, and neither asks
       // for a native confirmation. The pathology re-check is recorded first so the My Health Record tab can pick it up.

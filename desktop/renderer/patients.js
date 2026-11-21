@@ -231,7 +231,7 @@ async function showPatient(id, action, background = false) {
   const reportWorkflow = H.reportWorkflowStatus(p.state, (p.steps || []).find((step) => step.name === 'report_build'), reportCurrency);
   const visibleSteps = (p.steps || []).map((step) => step.name === 'report_build' ? { ...step, ...reportWorkflow.build } : step);
   const pathway = H.patientPathway ? H.patientPathway(p, milestones, visibleSteps) : [];
-  const files = (list) => (list?.length ? list.map((x) => `<li>${esc(x)}</li>`).join('') : '<li>None</li>');
+  const files = (list, section) => (list?.length ? list.map((x) => `<li>${esc(x)}${H.fileOpenable(x) ? ` <button type="button" class="link-button" data-open-file="${esc(x)}" data-open-section="${section}" aria-label="Open ${esc(x)}">Open</button>` : ''}</li>`).join('') : '<li>None</li>');
 
   const actions = availableActions(p, milestones);
   const more = ['note', 'update', ...(p.can_undo ? ['undo_stage'] : [])];
@@ -474,8 +474,8 @@ async function showPatient(id, action, background = false) {
     </div>
     <div class="results-view" ${isResultsTab ? '' : 'hidden'}>${H.resultsHtml(patientResults, p.id)}</div>
     <div class="files-view" ${isFilesTab ? '' : 'hidden'}>
-      <h3>Folder</h3><ul>${files(p.files?.folder)}</ul>
-      <h3>Pathology</h3><ul>${files(p.files?.pathology)}</ul>
+      <h3>Folder</h3><ul>${files(p.files?.folder, 'folder')}</ul>
+      <h3>Pathology</h3><ul>${files(p.files?.pathology, 'pathology')}</ul><p id="file-open-message" class="error" role="alert"></p>
     </div>
     <section class="panel-section" id="offer-section" data-available="${['intake', 'booking', 'ready'].includes(p.stage)}" ${!isConversationTab || !['intake', 'booking', 'ready'].includes(p.stage) ? 'hidden' : ''}>
     ${canChange ? `<details class="offer-details" ${action === 'offer_new' ? 'open' : ''}><summary>Appointment: Change the time</summary><p>Ask keeps current time unless patient replies YES. Have to change moves it now.</p>` : `<h3>Offer a new time</h3>`}
