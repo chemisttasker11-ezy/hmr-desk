@@ -314,23 +314,37 @@ def report_build(patient_id, pdf=False):
             pass
         # Missing owner approval always means provisional, never a final layout.
         # An installed but invalid manifest must fail closed (do not downgrade).
-        with tempfile.TemporaryDirectory(prefix='.hmr-docx-', dir=folder) as directory:
-            draft = Path(directory) / target.name
-            if approved:
-                template_report_builder.render(data, draft, approved[0])
-                placed = template_report_builder.has_marker(approved[0], 'PHARMACIST')
-            else:
-                local_report_builder.render(data, draft)
-            if not draft.is_file(): raise RuntimeError('Draft Word report failed to render')
-            if target.exists(): raise FileExistsError('Output appeared during report rendering')
-            os.replace(draft, target)
-        output = ('Built approved-layout Word draft ' + approved[1]['version']
-                  if approved else 'Built a provisional local Word report (not owner-approved)')
-        if identity['text'] and approved and not placed:
+        import original_builder_adapter
+        import settings
+        use_original = settings.get(conn, 'report_use_original_builder')
+        if use_original and not original_builder_adapter.assets_present(db.DATA_DIR):
+            raise ValueError('Original Word report builder was selected but its private assets are unavailable')
+        placed = False
+        if use_original:
+            # The owner's original builder, run unmodified in an isolated worker. No fallback renderer: any failure
+            # raises. Neither output may already exist (no overwrite); the Word PDF it checks is the PDF we keep.
+            original_builder_adapter.build_with_assets(data, target, db.DATA_DIR, pdf_target if pdf else None)
+        else:
+            with tempfile.TemporaryDirectory(prefix='.hmr-docx-', dir=folder) as directory:
+                draft = Path(directory) / target.name
+                if approved:
+                    template_report_builder.render(data, draft, approved[0])
+                    placed = template_report_builder.has_marker(approved[0], 'PHARMACIST')
+                else:
+                    local_report_builder.render(data, draft)
+                if not draft.is_file(): raise RuntimeError('Draft Word report failed to render')
+                if target.exists(): raise FileExistsError('Output appeared during report rendering')
+                os.replace(draft, target)
+        output = ('Built with the original report builder (Word render)' if use_original else
+                  'Built approved-layout Word draft ' + approved[1]['version'] if approved
+                  else 'Built a provisional local Word report (not owner-approved)')
+        if identity['text'] and approved and not placed and not use_original:
             output += '. Pharmacist details were not placed: the approved layout has no pharmacist placeholder.'
         if identity['name'] and identity['note']:
             output += '. ' + identity['note']
-        if pdf:
+        if pdf and use_original:
+            output += '. Word PDF created'
+        if pdf and not use_original:
             try:
                 converted = pdf_export.convert(target, pdf_target)
             except (OSError, ValueError, RuntimeError) as exc:
@@ -358,9 +372,11 @@ def report_build(patient_id, pdf=False):
             'report_spec_sha256': hashlib.sha256(spec_bytes).hexdigest(),
             'interview_revision': snapshot['interview_revision'],
             'pathology_revision': snapshot['pathology_revision'],
-            'template_version': approved[1]['version'] if approved else '',
-            'template_sha256': approved[1]['sha256'] if approved else '',
-            'template_approved': bool(approved),
+            'template_version': 'original-template-copy' if use_original else approved[1]['version'] if approved else '',
+            'template_sha256': original_builder_adapter.PINNED['Template - Copy.docx'] if use_original else approved[1]['sha256'] if approved else '',
+            # Original-builder output stays unapproved for sign-off until the approval rule for it is decided.
+            'template_approved': False if use_original else bool(approved),
+            **({'renderer': 'original_builder'} if use_original else {}),
             'source_files_sha256': snapshot['source_files_sha256'],
             'clinical_snapshot_sha256': snapshot['clinical_snapshot_sha256'],
             'demographics': snapshot['demographics'],
