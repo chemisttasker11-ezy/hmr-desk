@@ -5,7 +5,10 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 from contextlib import closing
-import api, db, export_plan, importer, inbox, lifecycle, messaging, steps, timeline
+import api, db, export_plan, importer, inbox, lifecycle, messaging, records, steps, timeline
+import legacy_signoff_support
+import followup
+import legacy_ppa_double
 
 with tempfile.TemporaryDirectory() as tmp:
     with closing(db.connect(str(Path(tmp) / 'test.db'))) as c:
@@ -50,9 +53,12 @@ with tempfile.TemporaryDirectory() as tmp:
         act('book_phone', date=past, time='09:00', end='10:00')
         act('visited', date=past)
         (folder / 'report.docx').write_bytes(b'synthetic')
-        (folder / 'report_spec.json').write_text(json.dumps({'out':str(folder / 'report.docx')}))
-        assert steps.built(patient())
-        act('report_drafted'); act('signed_off'); act('report_sent', date=past); act('claimed', date=past)
+        records.put(c, pid, 'report_spec.json', json.dumps({'out':str(folder / 'report.docx')}).encode('utf-8')); c.commit()
+        assert steps.built(c, patient())
+        act('report_drafted')
+        request = legacy_signoff_support.approve(c, pid)  # real hash-bound evidence; the sign-off gate runs unchanged
+        with legacy_signoff_support.reviewed_interview():
+            act('signed_off', **{k: v for k, v in request.items() if k != 'action'}); act('report_sent', date=past); act('claimed', date=past)
         follow = api.patient_followups(c, pid, today)
         assert follow['next_action'] == 'followup1' and not follow['due']
         assert lifecycle.stage(c, patient(), today)['stage'] == 'followup'
@@ -61,9 +67,13 @@ with tempfile.TemporaryDirectory() as tmp:
         act('followup_done', kind='followup1', date=past)
         act('followup_done', kind='followup1', date=past)
         assert c.execute("SELECT count(*) FROM visits WHERE patient_id=? AND kind='followup1'", (pid,)).fetchone()[0] == 1
+        # Follow-ups from 1 Nov 2026 must document the delivery choice before they count as ready to claim.
+        assert api.patient_followups(c, pid)['next_action'] == 'followup1_document'
+        def document(number): followup.save(c, patient(), number, dict(date=past, method='phone', preferred_method='phone', choice_offered_on=past, spoke_with='Patient', med_changes='', recommendations=[], issues='', outcome='', notes=''))
+        document(1)
         assert api.patient_followups(c, pid)['next_action'] == 'followup1_claimed'
         act('followup_claimed', kind='followup1', date=past)
-        act('followup_done', kind='followup2', date=past); act('followup_claimed', kind='followup2', date=past)
+        act('followup_done', kind='followup2', date=past); document(2); act('followup_claimed', kind='followup2', date=past)
         assert api.patient_followups(c, pid)['next_action'] is None
         act('archive'); assert lifecycle.stage(c, patient())['stage'] == 'archived'
         assert pid not in [x['id'] for x in api.handle(c, 'GET', '/api/patients', {}, None)[1]['patients']]
@@ -73,13 +83,19 @@ with tempfile.TemporaryDirectory() as tmp:
         c.execute("INSERT INTO visits(patient_id,kind,visit_date,report_sent,source) VALUES (?,'hmr','2019-01-01','2019-01-02','import')", (legacy_id,))
         db.log(c, legacy_id, 'visited', {'date':past}, 'legacy')
         legacy = lambda: c.execute('SELECT * FROM patients WHERE id=?', (legacy_id,)).fetchone()
-        api.action(c, legacy(), {'action':'report_sent', 'date':past})
+        (root / 'Scheduled' / 'Legacy Patient').mkdir(parents=True); c.execute("UPDATE patients SET folder='Scheduled/Legacy Patient' WHERE id=?", (legacy_id,)); c.commit()
+        legacy_request = legacy_signoff_support.approve(c, legacy_id, 'HMR Legacy')  # signed-off evidence the sent check can verify
+        import report_auth
+        with legacy_signoff_support.reviewed_interview():
+            db.log(c, legacy_id, 'signed_off', report_auth.check_approval(c, legacy(), legacy_request), 'app'); c.commit()
+            api.action(c, legacy(), {'action':'report_sent', 'date':past})
         assert steps.event_date(c, legacy(), 'visited') == past
         assert timeline.build(c, legacy())['milestones']['visit'] == past
         api.action(c, legacy(), {'action':'undo_stage'})
         assert steps.event_date(c, legacy(), 'report_sent') is None
         assert timeline.build(c, legacy())['milestones']['report_sent'] is None
         db.set_state(c, legacy_id, 'sent', source='app', force=True)
+        api.claims_helper, api.record = legacy_ppa_double.claims_helper, legacy_ppa_double.record  # wiring doubles, see their docstring
         claim = next(item for item in api.claim_list(c) if item['family'] == 'Patient' and item['given'] == 'Legacy')
         assert not claim['reportSent']
 

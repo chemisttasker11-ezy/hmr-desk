@@ -78,12 +78,14 @@ What the source does for that sequence (code read; Linux logic tests only; no li
 - Cause of the 5 collection errors (`test_actions`, `test_api`, `test_api_presignoff`, `test_independent_repairs`, `test_manual_workflow`): documented in `test_legacy_scripts.py`. Several later sections need an explicit pharmacist review and an owner-approved built pair before sign-off, or the optional PPA helper. Their pre-sign-off parts run as the `*_presignoff` scripts. The later sign-off checks in the full scripts are NOT run anywhere on Linux. Sign-off gating itself is covered by `test_report_auth` and `test_report_signoff_consent`.
 
 ## 7. Testing (Linux with an msvcrt stub; NOT Windows proof). Each line names the commit it ran on.
-Commit `6f416c9` (code) = `28495ac` minus the handover document; later commits change only documents or this section.
-- Plain run, every backend file collected: `python -m pytest -q -p no:cacheprovider --continue-on-collection-errors` from `HMR Desk/engine`: **892 passed, 2 failed, 1 skipped, 5 collection errors.** Not all passing.
-- The same run with the legacy script-style files left out of collection (they run in their own interpreter through `test_legacy_scripts.py`, which is how CI treats them): **894 passed, 1 skipped, 0 failed.**
-- `test_legacy_scripts.py` (24 script runs, including lifecycle, MIMS binding, PRODA/SMS, interview, referral, planner): 24 passed.
-- Candidate cross-check: the 9 backend test files changed by the developer candidate `cb6f14e`, taken from that branch, were run unmodified against this integration's code: 61 passed. The one changed desktop GP Plan test is byte-identical.
-- Desktop `node --test`: see section 7b.
+Update after commit `68847ac`: the legacy-script harness was repaired (see section 6). Results below are for the commit that carries this text (its SHA is in section 9); the older numbers are superseded.
+- Plain `python -m pytest -q -p no:cacheprovider` from `HMR Desk/engine`, nothing excluded by hand: **895 passed, 1 skipped, 0 failed, 0 collection errors.**
+- The legacy script files (older complete tests) still all run, each in its own interpreter, through `test_legacy_scripts.py` (25 runs). `conftest.py` only keeps them out of in-process import, where they corrupted other tests.
+- `test_api`, `test_manual_workflow`, `test_independent_repairs` and `test_actions` now run through sign-off, send and claim. The sign-off gate runs unchanged on real hash-bound synthetic evidence (`legacy_signoff_support.py`). The old `*_presignoff` copies were deleted because the full scripts replace them.
+- Stale expectations were updated to current, source-read behaviour: records now live in the record store, medicines must be confirmed before findings, AI assist is opt-in, follow-ups from 1 Nov 2026 need documented delivery choice, the database is SQLCipher.
+- **Still not covered:** (1) the tail of `test_api.py` after the retired BUILD_SCRIPT report job (it is stale against the standalone renderer; the renderer has its own tests; run it with HMR_RUN_STALE_API_TAIL=1). (2) The licensed MIMS list helper and PPA claim helper are not in the repo, so these scripts use synthetic doubles (`legacy_mims_double.py`, `legacy_ppa_double.py`). They prove engine wiring only, not the real helpers' ingredient, brand, allergy, name or outcome parsing. (3) `test_manual_workflow` no longer runs the old external build script; its build output is a synthetic Word and PDF pair.
+- Earlier cause analysis (kept): the 2 failures and 5 collection errors under plain pytest came from import-time legacy scripts. Same names fail on unmodified main.
+- Candidate cross-check: the 9 backend test files changed by the developer candidate `cb6f14e`, run unmodified against this integration: 61 passed. The changed desktop GP Plan test is byte-identical.
 
 ### 7b. Desktop (run on the final code head; see the result line below)
 `node --test` in `desktop/` on commit `6f416c9` (code identical to the final head): 504 tests, 503 passed, 0 failed, 1 skipped. Mocked pages only. Not Windows proof.
