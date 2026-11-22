@@ -76,3 +76,20 @@ def test_modified_source_invalidates_resumed_cache(tmp_path):
     updated = evaluator.run(root, output, secret)
     assert updated['pages_processed'] == 0
     assert updated['status_counts']['unreadable_or_unsupported'] == 1
+
+
+def test_direct_synthetic_parser_inspection_has_source_coverage(tmp_path):
+    """Diagnose source parsing failures without logging any real patient material."""
+    import hashlib
+    root = tmp_path / 'source'
+    root.mkdir()
+    source = root / 'example.pdf'
+    _pdf(source)
+    intake = evaluator._module('private_intake', evaluator.HERE / 'scripts' / 'intake' / 'intake.py')
+    referral = evaluator._module('private_referral', evaluator.HERE / 'HMR Desk' / 'engine' / 'referral.py')
+    page_audit = evaluator._module('private_page_audit', evaluator.HERE / 'HMR Desk' / 'engine' / 'referral_page_audit.py')
+    parsed = evaluator._inspect(source.read_bytes(), '.pdf', intake, referral,
+                                page_audit, hashlib.sha256(b'fictional').digest())
+    assert parsed['page_count'] == 1
+    assert parsed['status'] == 'readable'
+    assert parsed['scan_pages'] == 0
