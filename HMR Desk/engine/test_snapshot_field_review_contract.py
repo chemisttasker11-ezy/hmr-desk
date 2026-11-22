@@ -5,6 +5,10 @@ signed report evidence. Contract 3 is for newly built reports only.
 """
 import clinical_snapshot
 import report_auth
+import db
+import json
+import pytest
+from test_report_auth import case
 from test_report_save_revision import _setup, _saved_report
 
 
@@ -56,3 +60,30 @@ def test_existing_contract_2_digest_and_marker_remain_valid(tmp_path, monkeypatc
             conn, patient, {'clinical_snapshot_contract': 3, 'clinical_snapshot_sha256': new})
         assert not report_auth.clinical_snapshot_matches(
             conn, patient, {'clinical_snapshot_contract': 3, 'clinical_snapshot_sha256': old}) if new != old else True
+
+
+def test_contract_3_report_signoff_and_sent_uses_new_hash_without_rewriting_old(tmp_path, monkeypatch):
+    conn, patient, folder, body = case(tmp_path, monkeypatch)
+    row = conn.execute(
+        "SELECT id,detail FROM events WHERE patient_id=? AND type='report_build' ORDER BY id DESC LIMIT 1",
+        (patient['id'],)
+    ).fetchone()
+    detail = json.loads(row['detail'])
+    detail['clinical_snapshot_contract'] = 3
+    detail['clinical_snapshot_sha256'] = report_auth.clinical_snapshot_hash(conn, patient, 3)
+    with conn:
+        conn.execute('UPDATE events SET detail=? WHERE id=?',
+                     (json.dumps(detail), row['id']))
+    proof = report_auth.check_approval(conn, patient, body)
+    assert proof['clinical_snapshot_contract'] == 3
+    with conn:
+        db.log(conn, patient['id'], 'signed_off', proof, 'app')
+    assert report_auth.check_sent(conn, patient)
+    with conn:
+        conn.execute('UPDATE patients SET gp=? WHERE id=?',
+                     ('Dr Invented Changed', patient['id']))
+    changed = conn.execute('SELECT * FROM patients WHERE id=?',
+                           (patient['id'],)).fetchone()
+    with pytest.raises(ValueError, match='Clinical source contract'):
+        report_auth.check_sent(conn, changed)
+    conn.close()
