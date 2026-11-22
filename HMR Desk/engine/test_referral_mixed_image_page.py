@@ -145,3 +145,40 @@ def test_mixed_page_local_ocr_is_comparison_only_not_new_prescribed_directions(t
             conn.close()
     finally:
         db.BASE = saved_base
+
+
+def test_empty_local_ocr_is_not_silently_taken_as_no_clinical_information(tmp_path):
+    """Fictional blank text layer with image: explicit incomplete-reading warning."""
+    source = tmp_path / 'fictional-scan.pdf'
+    bitmap = fitz.open()
+    bitmap_page = bitmap.new_page()
+    bitmap_page.insert_text((30, 55), 'Fictional visual referral requiring OCR')
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_image(page.rect, pixmap=bitmap_page.get_pixmap())
+    doc.save(source)
+    doc.close()
+    bitmap.close()
+
+    class EmptyOCR:
+        def ocr_pdfs(self, paths):
+            return {str(paths[0]): ['']}
+        def classify(self, text):
+            return 'other', [], []
+        def extract_fields(self, text):
+            raise AssertionError('No field should be proposed from an unread scan')
+
+    old_base = db.BASE
+    try:
+        db.BASE = str(tmp_path)
+        conn = db.connect(str(tmp_path / 'scan.db'))
+        try:
+            with patch.object(referral_entry, 'parser', return_value=EmptyOCR()):
+                row = referral_entry.review(conn, [str(source)])['rows'][0]
+            assert row['status'] == 'manual'
+            assert any('local OCR returned no readable text' in flag for flag in row['flags'])
+            assert row['page_previews'][0]['text'] == ''
+        finally:
+            conn.close()
+    finally:
+        db.BASE = old_base
