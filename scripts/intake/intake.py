@@ -378,7 +378,7 @@ def main():
     folder = args.folder.resolve()
     # Files already named "<Name>_ <GP initials>" were processed in an earlier run.
     paths = sorted(p for p in folder.iterdir() if p.is_file() and not p.name.startswith('~$') and p.suffix.lower() in ('.pdf', '.docx', '.doc') and not re.search(r'_ [A-Z]{1,4}$', p.stem))
-    pages, errors, needs_ocr = {}, {}, []
+    pages, errors, needs_ocr, annotation_counts = {}, {}, [], {}
     for path in paths:
         try:
             if path.suffix.lower() == '.pdf':
@@ -389,7 +389,8 @@ def main():
                     _source_spec = _importlib_util.spec_from_file_location('referral_source_text', _source_path)
                     _source_module = _importlib_util.module_from_spec(_source_spec)
                     _source_spec.loader.exec_module(_source_module)
-                    pages[path], _ignored_typed_overlays = _source_module.extract_original_pages(doc)
+                    pages[path], _annotations = _source_module.extract_original_pages(doc)
+                    annotation_counts[path] = sum(page['count'] for page in _annotations)
                 if any(len(page.strip()) < 200 for page in pages[path]):
                     needs_ocr.append(path)
             elif path.suffix.lower() == '.doc':  # old Word format: let Word export it to PDF, read-only
@@ -426,6 +427,8 @@ def main():
                     texts = [text if len(text.strip()) >= 200 else scanned[i] for i, text in enumerate(texts)]
             if not flags:
                 kind, keywords, flags = classify('\n'.join(texts))
+        if annotation_counts.get(path):
+            flags.append('PDF contains typed FreeText annotations; source text preserved, author attribution requires pharmacist review')
         record = dict(file=path.name, kind=kind, keywords=keywords, fields=None, flags=flags, known=[], planned=None, applied=None)
         if kind == 'referral':
             record['fields'], more = extract_fields('\n'.join(texts[:3]))
