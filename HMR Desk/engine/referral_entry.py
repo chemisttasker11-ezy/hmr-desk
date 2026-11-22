@@ -18,6 +18,7 @@ import referral_source_text
 MAX_PDF = 25 * 1024 * 1024
 MAX_PAGES = 150
 MAX_TEXT_PER_PAGE = 150000
+MAX_MIXED_OCR_PAGES = 10  # bounded automatic local comparison, never auto-accepts values
 FIELDS = ('name', 'phone', 'address', 'suburb', 'gp', 'clinic', 'gp_provider', 'clinic_address', 'clinic_phone', 'referral_date', 'dob', 'sex', 'medicare', 'irn', 'ihi')
 
 
@@ -63,16 +64,27 @@ def review(conn, paths):
                 page_audits = [referral_page_audit.inspect_page(p) for p in doc]
             if not pages: raise ValueError('PDF has no pages')
             methods = ['text' if len(page.strip()) >= 25 else 'ocr' for page in pages]
+            mixed = [i for i, audit in enumerate(page_audits) if audit['needs_image_review']]
             ocr_flags = []
-            if 'ocr' in methods:
+            ocr_comparison = {}
+            has_sparse_pages = 'ocr' in methods
+            run_ocr = has_sparse_pages or (bool(mixed) and len(pages) <= MAX_MIXED_OCR_PAGES)
+            if mixed and not run_ocr:
+                ocr_flags.append('Mixed image/text pages require visual source review; automatic OCR comparison is limited to PDFs of 10 pages or fewer.')
+            if run_ocr:
                 try:
-                    ocr = module.ocr_pdfs([Path(source)]).get(str(Path(source)), [])
+                    extracted = module.ocr_pdfs([Path(source)]).get(str(Path(source)), [])
                 except Exception:
-                    ocr = []
-                if len(ocr) == len(pages):
-                    pages = [page if len(page.strip()) >= 25 else (ocr[i] or '') for i, page in enumerate(pages)]
-                else:
+                    extracted = []
+                if len(extracted) == len(pages):
+                    # OCR on a searchable image is a comparison only: never merge
+                    # OCR strings or their unverified directions into source facts.
+                    ocr_comparison = {i: (extracted[i] or '')[:1200] for i in mixed}
+                    pages = [page if len(page.strip()) >= 25 else (extracted[i] or '') for i, page in enumerate(pages)]
+                elif has_sparse_pages:
                     ocr_flags.append('OCR unavailable or incomplete: inspect the original PDF and enter referral details manually')
+                if mixed and not ocr_comparison:
+                    ocr_flags.append('Mixed-page OCR comparison unavailable: compare original pixels against the searchable text layer.')
                 if hashlib.sha256(read_pdf(source)).hexdigest() != digest: raise ValueError('Source changed during review; try again')
             kind, _, flags = module.classify('\n'.join(pages))
             flags.extend(ocr_flags)
@@ -101,7 +113,8 @@ def review(conn, paths):
             seen_hashes.add(digest)
             if key: seen_keys.add(key)
             token = uuid.uuid4().hex
-            excerpts = [{'page': i + 1, 'method': ('text+unread_image' if page_audits[i]['needs_image_review'] else methods[i]), 'text': text[:1200]}
+            excerpts = [{'page': i + 1, 'method': ('text+unread_image' if page_audits[i]['needs_image_review'] else methods[i]),
+                         'text': text[:1200], 'ocr_comparison_unverified': ocr_comparison.get(i, '')}
                         for i, text in enumerate(pages[:20])]
             item = {'source': source, 'sha256': digest, 'fields': fields, 'kind': kind,
                     'page_previews': excerpts, 'annotation_evidence': annotation_pages[:20],
