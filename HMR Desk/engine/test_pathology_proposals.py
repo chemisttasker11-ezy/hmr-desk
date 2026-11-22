@@ -131,3 +131,25 @@ def test_other_patient_source_rejected_and_scan_abstains(tmp_path, monkeypatch):
     response = proposals.for_source(conn, {'id': 1}, scanned['id'])
     assert response['proposals'] == []
     assert response['pages'][0]['status'] == 'unavailable'
+
+
+def test_original_crop_is_bound_to_source_and_hash(case):
+    import base64
+    import pathology_source_image
+    conn, folder, source = case
+    result = proposals.for_source(conn, {'id': 1}, source['id'])
+    original = result['proposals'][0]
+    image = pathology_source_image.for_proposal(conn, {'id': 1}, source['id'],
+                                               original['id'], source['sha256'])
+    assert image['kind'] == 'row'
+    assert base64.b64decode(image['png']).startswith(b'\x89PNG\r\n\x1a\n')
+    assert 'unverified' in image['note'].lower()
+    with pytest.raises(ValueError, match='changed'):
+        pathology_source_image.for_proposal(conn, {'id': 1}, source['id'],
+                                           original['id'], 'f'*64)
+    with pytest.raises(ValueError, match='not found for this patient'):
+        pathology_source_image.for_proposal(conn, {'id': 2}, source['id'],
+                                           original['id'], source['sha256'])
+    with pytest.raises(ValueError, match='no longer matches'):
+        pathology_source_image.for_proposal(conn, {'id': 1}, source['id'],
+                                           '1'*64, source['sha256'])
