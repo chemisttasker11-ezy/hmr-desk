@@ -165,12 +165,13 @@ def _inspect(data, suffix, intake, referral, page_audit, secret_key):
     kind = SUPPORTED[suffix]
     if kind == 'pdf' and not data.startswith(b'%PDF-'):
         raise ValueError('invalid_pdf')
+    source_text = _module('private_referral_source_text', HERE / 'HMR Desk' / 'engine' / 'referral_source_text.py')
     with fitz.open(stream=data, filetype=kind) as doc:
         if doc.needs_pass:
             raise ValueError('password protected')
         if not 1 <= doc.page_count <= MAX_PAGES:
             raise ValueError('page limit exceeded')
-        pages = [page.get_text('text')[:150000] for page in doc]
+        pages, excluded_overlays = source_text.extract_original_pages(doc)
         layouts = [page_audit.inspect_page(page) for page in doc]
     raw = '\n'.join(pages)
     document_class, _, flags = intake.classify(raw)
@@ -183,6 +184,7 @@ def _inspect(data, suffix, intake, referral, page_audit, secret_key):
         'layout_class': referral.layout(raw), 'page_count': len(pages),
         'pages': layouts, 'scan_pages': sum(p['native_characters'] < 25 for p in layouts),
         'mixed_pages': sum(p['needs_image_review'] for p in layouts),
+        'typed_overlay_annotations_excluded': sum(excluded_overlays),
         'fields_proposed_unverified': fields,
         'field_presence': sorted(key for key, value in fields.items() if value),
         'parser_flag_count': len(flags) + len(more),
@@ -207,6 +209,7 @@ def _aggregate(records):
         'pages_processed': sum(item.get('page_count', 0) for item in records.values()),
         'native_text_insufficient_pages': sum(item.get('scan_pages', 0) for item in records.values()),
         'mixed_text_image_review_pages': sum(item.get('mixed_pages', 0) for item in records.values()),
+        'typed_overlay_annotations_excluded': sum(item.get('typed_overlay_annotations_excluded', 0) for item in records.values()),
         'manual_review_files': sum(bool(item.get('manual_review')) for item in records.values()),
         'exact_duplicate_extra_files': sum(max(count - 1, 0) for count in digests.values()),
         'patient_groups': 'NOT VERIFIED - parser identity is only a proposal',
