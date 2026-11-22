@@ -347,3 +347,48 @@ The mission is complete ONLY when all of the following have named evidence at th
 If external clinical acceptance is unavailable, complete all engineering work possible and mark only the external acceptance gate BLOCKED, leaving PR Draft and release HOLD. Do not claim DONE or ask the owner to re-explain already documented requirements.
 
 **Current truthful conclusion at this handover:** backend/desktop/visual synthetic gates passed on code SHA 3275356c; Linux privacy and Windows synthetic journey/packaging gates FAILED. No original-source end-to-end clinical field accuracy, clean Windows 11 non-admin installation, owner-template visual fidelity or pharmacist clinical acceptance has been established. Release HOLD.
+
+
+## 14. 22 November 2026 continuation: CI recovery and safe re-signing checkpoint
+
+**Working branch:** `qa/full-flow-source-report-20261122`. **Base:** `integration/hmr-reviewed-nov22-v8`. **Related pathology:** PR #39 remains separate and Draft. **Release:** HOLD, no clinical acceptance or main merge.
+
+### Exact failures and root causes confirmed from prior runs
+
+- Linux privacy run [44982302755](https://github.com/chemisttasker11-ezy/hmr-desk/actions/runs/44982302755), job 137085246006: all 21 assertions passed but 21 teardown errors. Autouse fixture `engine/conftest.py::_restore_legacy_signoff_overrides` imported the legacy helper unconditionally; the legacy inbox/outbox dependency graph imported `Android_SMS_Integration/sms_bridge.py`, which requires Windows-only `msvcrt`. This was a fixture portability fault, not demonstrated PHI leakage.
+- Windows standalone run [44982302713](https://github.com/chemisttasker11-ezy/hmr-desk/actions/runs/44982302713), job 137085554021: `test_synthetic_patient_journey.py:256` expected `signed_version_intact=True` after new manual interaction evidence was stored post-signature. `report_auth.check_sent` correctly marks changed interaction digest stale. Earlier frozen engine, PDF converter and Electron stages passed; NSIS packaging and installed smoke were skipped.
+
+### Narrow source changes (fictional data only)
+
+1. `95aae8d`: `engine/conftest.py` no longer imports `legacy_signoff_support` at teardown. It checks `sys.modules` and calls `restore()` only on an already-loaded module, so actual overrides still get cleaned after each test.
+2. `115c1aa`: new `engine/test_legacy_signoff_fixture.py` exercises no-import Linux teardown, restoration of a loaded synthetic helper and a Windows-only actual helper/template restoration. An intentional skip on Linux applies only to the native Windows test.
+3. `f5fcf9d`: `.github/workflows/clinical-privacy.yml` now triggers for fixture/test changes and executes the new regressions alongside the original 21 privacy/security tests. **Exact-code SHA `c9b4d784f45f44d8bf56baf9dced652ebe7addfc` privacy run [44984184991](https://github.com/chemisttasker11-ezy/hmr-desk/actions/runs/44984184991): PASS, 23 passed, 1 Windows-only skip, zero teardown errors.** Intermediate run [44984166222](https://github.com/chemisttasker11-ezy/hmr-desk/actions/runs/44984166222) was also green but cannot substitute for final-HEAD validation.
+4. `c9b4d78`: `engine/test_synthetic_patient_journey.py` now asserts a recheck request alone leaves signed evidence unchanged, adding new manual interaction text invalidates signed authorisation, attempted `report_sent` fails closed, the original signed DOCX/PDF and SAMP spec hashes remain identical, a new version is generated with a unique filename and matching actual PDF/DOCX checksums, and an independent new sign-off permits sent status. Previous sign-off event and both generated versions remain in audit and survive database reopening.
+5. `f66d521`: the same real-converter synthetic journey additionally requires the **normal queued worker readiness** for rebuilding a stale signed report. This is a regression for a real application inconsistency found after reviewing `steps.ready`.
+6. `791b7a6`: `engine/steps.py::ready('report_build')` permits a new build in `signed_off` only if `report_auth.check_sent` has already rejected the old authorisation with a `ValueError`. Still refuses a current signed report, and a report build does not mark a report sent or manufacture a pharmacist sign-off. Existing state machine and final sent gate remain unchanged.
+
+### Test evidence, interpretation and remaining work
+
+- Privacy run [44984184991](https://github.com/chemisttasker11-ezy/hmr-desk/actions/runs/44984184991): **PASS at `c9b4d78`: 23 passed, 1 native-Windows test skipped.** This predates the additional `steps.py` fix, so run again on the final HEAD before declaring the gate closed.
+- Whole-backend, desktop and visual at `c9b4d78`: [44984184975](https://github.com/chemisttasker11-ezy/hmr-desk/actions/runs/44984184975). **Pending exact completed result at handover-writing time.**
+- Windows frozen engine, actual converter, revised whole journey, NSIS/package, installed smoke at `c9b4d78`: [44984184997](https://github.com/chemisttasker11-ezy/hmr-desk/actions/runs/44984184997). **Pending exact completed result at handover-writing time.**
+- Follow-up exact HEAD `791b7a6` CI must be checked separately and added to this section. Do not treat previous green runs as validation of this change or a true non-admin Windows 11 installed workflow.
+- This continuation could not run a local checked-out repo because the execution container cannot resolve GitHub DNS. All source writes used the authenticated GitHub connector; GitHub Actions is the execution evidence. No local Python/Node tests or owner Windows installation are claimed.
+
+### Private source custody, acceptance limits and compatibility
+
+The owner-authorised Chemist 11 Google Drive folders were located through the connected account and independently enumerated at top level: **Scheduled contains 23 patient directories**, and **Visited SEP-OCT / zzz Not sent to Islam contains 28** (51 patient folders). The historical pathology inventory count of **293 PDFs** was not independently recounted in this continuation. No new source-pixel field scoring, 12-case training cohort, 8-case independent holdout, original clinical report template pixel acceptance, clean Windows 11 x64 standard-user installation or pharmacist approval has been completed at this checkpoint. No private patient filenames, demographics, source text, laboratory values, screenshots, credentials, helper scripts or licensed content have been added to git.
+
+Legacy clinical snapshot contract 1/2 and new contract 3 were not changed; `report_auth.check_sent` retains strict interaction digest validation; prior report bytes/events remain immutable, with new revision generated separately. Re-signing requires the user/pharmacist's explicit actual event action. Tests use a temporary fictional referral and synthetic QA template, **not** the owner-approved template.
+
+### Open issues and next reproducible steps
+
+1. Complete GitHub Actions against exact latest code commit; review actual test result, job and error. Check privacy 0 teardown errors, whole backend/Electron/visual, then complete actual Windows converter + revised sign-and-send journey, NSIS/packed app and installed smoke. For any failure add a fictional red regression and narrow fix; preserve security and signed-file gates.
+2. Prove renderer and queued API expose a safe rebuild/re-sign path for stale signed reports; no implicit sign-off or auto-send. Run negative cases for unchanged signed version and real source changes.
+3. Investigate `records._linked_component` skipping legitimate linked folders silently, Windows NTFS junctions/reparse semantics, hard links, and read-time TOCTOU; show blocked migrations in operator status rather than a false empty-success outcome.
+4. Perform private original PDF/pixel source adjudication on >=12 dev plus >=8 holdout cases; actual route/UI save/reopen and report cells; keep individual ledger encrypted/off GitHub and publish only counts with denominators, corrections and uncertainty.
+5. Coordinate PR #39 via stable unverified/verified pathology contract only, separately test combined integration before any merge. Do not cherry-pick experimental extractor.
+6. Run clean Windows 11 x64 non-admin installed fully offline AI-OFF acceptance without separately installed Python, Node, Word or LibreOffice; inspect actual owner-approved DOCX/PDF, source/test unit/date and pharmacist-written SAMP preservation, recovery/backup/migration.
+7. Obtain independent accredited pharmacist review and explicit owner release approval. No merge, patient transmission or production clinical release before these gates.
+
+**Interim completion classification:** privacy harness implementation complete with passing `c9b4d78` CI; full journey and stale queued rebuild implementation submitted but still awaiting latest SHA Windows end-to-end CI; private source, native installed app, open security and clinical acceptance remain HOLD.
