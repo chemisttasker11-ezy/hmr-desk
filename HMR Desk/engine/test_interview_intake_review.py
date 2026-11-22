@@ -257,7 +257,10 @@ def test_real_intake_four_medicine_source_to_saved_interview(tmp_path, monkeypat
         # a replacement parser or a seeded interview JSON document.
         item = referral_entry.review(conn, [str(original)])['rows'][0]
         assert item['status'] == 'review', item
-        assert item['page_previews'][0]['method'] == 'text'
+        expected_method = 'text+unread_image' if scenario == 'image_layer' else 'text'
+        assert item['page_previews'][0]['method'] == expected_method
+        if scenario == 'image_layer':
+            assert any('searchable text overlay' in flag for flag in item['flags'])
         assert 'Taplet' in item['page_previews'][0]['text']
         assert item['sha256']
         confirmation_lines = [name + ' ' + direction for name, direction in rows]
