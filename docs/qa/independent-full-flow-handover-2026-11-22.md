@@ -56,6 +56,8 @@ All 51 folder list operations succeeded. These figures are deliberately **not** 
 
 **Limitation:** path inspection then read is not race-free under a hostile concurrent filesystem replacement; native no-follow handle protection and reparse-point hardening remain separate security work.
 
+**Additional related fix:** a second audit found that `records.status` and `records.removable_files` still dereferenced linked paths even after migration was protected. These now refuse linked leaves and linked patient directories. A link counts conservatively as unprotected/unknown rather than a safe matching copy; retirement previews exclude linked paths. Added fictional mocked-Windows regression checks for both. Commits `8744deb` (tests) and `44571d9` (code).
+
 ### S1: Pathology source-list async response could cross patient UI state
 
 **Before:** the `data-pathology-reload-sources` click action awaited the API using mutable `interviewId`, then installed the returned source list unconditionally into the current screen. If the pharmacist switched patients during the request, the first patient's source-list response (or error) could display under the second patient.
@@ -79,6 +81,8 @@ All 51 folder list operations succeeded. These figures are deliberately **not** 
 - `5d253c1` — guarded UI reload
 - `2e6c5fe` — interaction digest stale-after-sign regression tests
 - `32e8c18` — preserve and enforce interaction digest in signed events
+- `8744deb` — RED regressions for linked status and retirement previews
+- `44571d9` — guard status and retirement-preview reads
 
 The first three commits were separately checked through Windows CI before subsequent changes. Follow-up CI must be judged by the most recent head, **not** a previously green commit.
 
