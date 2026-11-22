@@ -236,6 +236,11 @@ def check_approval(conn, patient, body):
         'template_version': detail['template_version'],
         'source_files_sha256': detail['source_files_sha256'],
         'clinical_snapshot_sha256': detail['clinical_snapshot_sha256'],
+        # Preserve interaction evidence that was approved at the report build.
+        # Without it the later "report sent" transition cannot detect a
+        # changed interaction result after signing.
+        **({'interactions_evidence_sha256': detail['interactions_evidence_sha256']}
+           if detail.get('interactions_evidence_sha256') else {}),
         **({'clinical_snapshot_contract': detail['clinical_snapshot_contract']}
            if 'clinical_snapshot_contract' in detail else {}),
         'reviewer': reviewer.strip(),
@@ -270,6 +275,10 @@ def check_sent(conn, patient):
         raise ValueError('Original source files changed after sign-off')
     if not clinical_snapshot_matches(conn, patient, evidence):
         raise ValueError('Clinical source contract was changed after signing')
+    if evidence.get('interactions_evidence_sha256'):
+        import interaction_scope
+        if interaction_scope.evidence_digest(conn, patient) != evidence['interactions_evidence_sha256']:
+            raise ValueError('Interaction evidence changed after sign-off; review and sign a new report')
     if legacy_gp_block_changed(conn, patient, evidence):
         raise ValueError('GP details changed after signing')
     import reconciliation
