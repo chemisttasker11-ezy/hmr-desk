@@ -133,6 +133,17 @@ def names(conn, patient_id):
     return [r[0] for r in conn.execute('SELECT name FROM records WHERE patient_id=? ORDER BY name', (patient_id,))]
 
 
+def _linked_component(path):
+    """Refuse legacy imports through linked leaves or parent directories.
+
+    Checks are deliberately performed before any file bytes are opened. This is
+    a conservative Windows-compatible guard, not an atomic defence against a
+    hostile process racing to replace a path between checking and reading.
+    """
+    path = Path(path)
+    return any(part.is_symlink() for part in (path, *path.parents))
+
+
 def import_folder(conn, patient_id, folder):
     """Copy record files from a patient folder into the database, verified by read-back.
 
@@ -141,9 +152,13 @@ def import_folder(conn, patient_id, folder):
     ensure(conn)
     folder = Path(folder)
     result = {}
+    # A legacy workspace directory may itself be a link to someone else's
+    # records. Never enumerate or admit such records into this patient's ID.
+    if _linked_component(folder):
+        return result
     for name in sorted(n for n in os.listdir(folder) if is_record_name(n)):
         path = folder / name
-        if not path.is_file():
+        if _linked_component(path) or not path.is_file():
             continue
         body = path.read_bytes()
         current = get(conn, patient_id, name)
@@ -239,7 +254,7 @@ def import_file(conn, patient_id, name, path):
     """Copy one plain file into the store, verified by read-back. Same rules as import_folder."""
     ensure(conn)
     path = Path(path)
-    if not path.is_file():
+    if _linked_component(path) or not path.is_file():
         return None
     body = path.read_bytes()
     current = get(conn, patient_id, name)
