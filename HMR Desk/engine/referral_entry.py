@@ -78,8 +78,6 @@ def review(conn, paths):
             for page_index, audit in enumerate(page_audits):
                 if audit['needs_image_review']:
                     flags.append('Page ' + str(page_index + 1) + ': substantial image content may contain unread clinical information. Inspect the original page; native text is incomplete evidence.')
-                if audit['possible_interview_markup']:
-                    flags.append('Page ' + str(page_index + 1) + ': possible handwritten or coloured interview annotations. Review these separately from the original prescribed referral; no doses or clinical facts inferred.')
             # Intake never fills the clinical box: the pharmacist enters it from the original. Later, the interview can
             # read medicines, conditions and allergies only from recognised referral layouts, so say plainly when
             # this PDF is not one. A flag only; nothing is inferred or changed.
