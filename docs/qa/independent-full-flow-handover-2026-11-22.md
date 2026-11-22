@@ -76,7 +76,7 @@ All 51 folder list operations succeeded. These figures are deliberately **not** 
 
 `clinical_snapshot.canonical` currently computes `reviewed = clinical_review.is_reviewed(review)` for the *whole* referral, then sets `conditions.review = source_state(interview.conditions, reviewed)`. A referral review that verifies only allergies therefore makes an absent conditions field look `confirmed_empty`, or may label later interview-entered conditions as source-confirmed. `clinical_review.populated(review, 'conditions')` and `source_pages` already provide finer field-specific evidence; the canonical projection does not use them for this status. This is a concrete source-provenance correctness defect, not evidence that the underlying condition text is altered.
 
-**Do not fix by silently changing existing `clinical_snapshot` digests.** Signed reports and old build evidence depend on historical canonical contract 1 and current contract 2. Fix on a reviewed **contract 3** with tests showing: legacy contract 1/2 fingerprints preserved; unknown condition vs explicit evidence state correctly separate; no invented confirmed absence; version marker required for all new signed proof; sign-off/sent/new-vs-old compatibility. This can be addressed in this full-flow PR after new contract review and CI, but remains a current known blocker. No actual patient diagnosis text used in this finding.
+**Implemented in this PR, acceptance still open:** `clinical_snapshot` now supports contract 3 for newly built reports only. Contract 3 treats conditions as source-confirmed only when the pharmacist-reviewed source has a supported conditions page and the saved conditions text exactly matches the source; otherwise the field remains unknown/unverified. Contracts 1 and 2 retain their historical canonical content/digests and sign-off matching. `jobs.report_build` now records contract 3 and its corresponding digest; `report_auth` accepts exact markers 2 or 3 and keeps legacy unmarked contract 1. Added fictional unknown-vs-confirmed, edited-conditions, legacy-contract, and signed/sent regressions. **This is code plus tests submitted to Windows CI, not yet a release-tested clinical guarantee.** Real-case report verification still open.
 
 ## 4. Exact commits in this incremental PR
 
@@ -89,6 +89,13 @@ All 51 folder list operations succeeded. These figures are deliberately **not** 
 - `32e8c18` — preserve and enforce interaction digest in signed events
 - `8744deb` — RED regressions for linked status and retirement previews
 - `44571d9` — guard status and retirement-preview reads
+- `8861d41` — contract 3 RED regression tests
+- `cd69c1a` — implement per-field conditions contract 3
+- `2c283d1` — sign-off compatibility for contracts 2 and 3
+- `c98a9c5` — bind new report builds to contract 3
+- `d776b17` — update invalid-marker test for recognised 3
+- `cb04536` — verify build evidence records contract 3
+- `b61c3f0` — end-to-end synthetic sign-off/sent contract 3 regression
 
 The first three commits were separately checked through Windows CI before subsequent changes. Follow-up CI must be judged by the most recent head, **not** a previously green commit.
 
@@ -130,7 +137,7 @@ Node tests must run against actual `desktop/renderer/interview.js` imported via 
 | Async pathology source patient isolation | IMPLEMENTED, CI open | Guard and 3 tests; native UI still open |
 | Signed-to-sent interaction evidence freshness | IMPLEMENTED, CI open | Guard and 2 tests; historical marker absence remains |
 | Real-source private structural inventory | PASS | 51 case folders, 493 immediate children measured |
-| Clinical snapshot per-field confirmation semantics | FAIL/OPEN | Current contract 2 conflates global source-review status with per-field conditions review; needs versioned contract 3 |
+| Clinical snapshot per-field confirmation semantics | IMPLEMENTED / CI OPEN | New builds bind conditions confirmation to per-field source evidence in contract 3; historical contracts 1/2 preserved |
 | Real field-by-field intake-to-report truth | FAIL/OPEN | One 7-row text presence comparison is not accepted E2E |
 | Private >=12 development and >=8 sealed holdouts | OPEN | Not completed |
 | Pathology clinical source pixel truth | OPEN / PR #39 | 36 original-file prior pilot was coverage only, not clinical correctness |
