@@ -144,7 +144,20 @@ def ready(name, conn, p, repeat=False):
         if p['state'] not in POST: return (False, 'visit not recorded')
         if not medicines_current(conn, p): return (False, 'confirm the medicine list first')
     elif name == 'report_build':
-        if p['state'] not in ('visited', 'report_drafted'): return (False, 'patient is not awaiting report')
+        if p['state'] == 'signed_off':
+            # A report may need an auditable replacement after new evidence
+            # invalidates its former sign-off. Never mark the old report sent
+            # and never allow an unchanged signed version to be rebuilt just
+            # through the queued readiness path.
+            import report_auth
+            try:
+                report_auth.check_sent(conn, p)
+            except ValueError:
+                pass  # stale authorisation: allow a fresh build and re-review
+            else:
+                return (False, 'existing signed report is still current')
+        elif p['state'] not in ('visited', 'report_drafted'):
+            return (False, 'patient is not awaiting report')
         if not exists(conn, p, 'report_spec.json'): return (False, 'report spec missing')
         try:
             if not json.loads(records.get(conn, p['id'], 'report_spec.json').decode('utf-8')).get('issues'): return (False, 'add at least one finding')
