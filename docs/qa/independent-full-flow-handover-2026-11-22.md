@@ -72,6 +72,12 @@ All 51 folder list operations succeeded. These figures are deliberately **not** 
 
 **Scope warning:** preserving legacy compatibility is not the same as proving older signed events had contemporaneous interaction evidence; cannot infer data absent from a legacy proof.
 
+### S1 clinical provenance boundary: global reviewed flag overstates conditions review — open contract fix
+
+`clinical_snapshot.canonical` currently computes `reviewed = clinical_review.is_reviewed(review)` for the *whole* referral, then sets `conditions.review = source_state(interview.conditions, reviewed)`. A referral review that verifies only allergies therefore makes an absent conditions field look `confirmed_empty`, or may label later interview-entered conditions as source-confirmed. `clinical_review.populated(review, 'conditions')` and `source_pages` already provide finer field-specific evidence; the canonical projection does not use them for this status. This is a concrete source-provenance correctness defect, not evidence that the underlying condition text is altered.
+
+**Do not fix by silently changing existing `clinical_snapshot` digests.** Signed reports and old build evidence depend on historical canonical contract 1 and current contract 2. Fix on a reviewed **contract 3** with tests showing: legacy contract 1/2 fingerprints preserved; unknown condition vs explicit evidence state correctly separate; no invented confirmed absence; version marker required for all new signed proof; sign-off/sent/new-vs-old compatibility. This can be addressed in this full-flow PR after new contract review and CI, but remains a current known blocker. No actual patient diagnosis text used in this finding.
+
 ## 4. Exact commits in this incremental PR
 
 - `957bb6a` — fictional legacy-link RED regression tests
@@ -124,6 +130,7 @@ Node tests must run against actual `desktop/renderer/interview.js` imported via 
 | Async pathology source patient isolation | IMPLEMENTED, CI open | Guard and 3 tests; native UI still open |
 | Signed-to-sent interaction evidence freshness | IMPLEMENTED, CI open | Guard and 2 tests; historical marker absence remains |
 | Real-source private structural inventory | PASS | 51 case folders, 493 immediate children measured |
+| Clinical snapshot per-field confirmation semantics | FAIL/OPEN | Current contract 2 conflates global source-review status with per-field conditions review; needs versioned contract 3 |
 | Real field-by-field intake-to-report truth | FAIL/OPEN | One 7-row text presence comparison is not accepted E2E |
 | Private >=12 development and >=8 sealed holdouts | OPEN | Not completed |
 | Pathology clinical source pixel truth | OPEN / PR #39 | 36 original-file prior pilot was coverage only, not clinical correctness |
