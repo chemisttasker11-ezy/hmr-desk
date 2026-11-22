@@ -183,12 +183,14 @@ def _inspect(data, suffix, intake, referral, page_audit, secret_key):
         'layout_class': referral.layout(raw), 'page_count': len(pages),
         'pages': layouts, 'scan_pages': sum(p['native_characters'] < 25 for p in layouts),
         'mixed_pages': sum(p['needs_image_review'] for p in layouts),
+        'possible_annotated_pages': sum(p['possible_interview_markup'] for p in layouts),
+        'raster_handwriting_unassessed_pages': sum(p['raster_handwriting_unassessed'] for p in layouts),
         'fields_proposed_unverified': fields,
         'field_presence': sorted(key for key, value in fields.items() if value),
         'parser_flag_count': len(flags) + len(more),
         'patient_cluster_hint_unverified': patient_hint,
         'manual_review': document_class != 'referral' or any(
-            p['needs_image_review'] or p['native_characters'] < 25 for p in layouts),
+            p['needs_image_review'] or p['possible_interview_markup'] or p['native_characters'] < 25 for p in layouts),
     }
 
 
@@ -207,6 +209,8 @@ def _aggregate(records):
         'pages_processed': sum(item.get('page_count', 0) for item in records.values()),
         'native_text_insufficient_pages': sum(item.get('scan_pages', 0) for item in records.values()),
         'mixed_text_image_review_pages': sum(item.get('mixed_pages', 0) for item in records.values()),
+        'possible_interview_annotation_pages': sum(item.get('possible_annotated_pages', 0) for item in records.values()),
+        'raster_handwriting_not_characterised_pages': sum(item.get('raster_handwriting_unassessed_pages', 0) for item in records.values()),
         'manual_review_files': sum(bool(item.get('manual_review')) for item in records.values()),
         'exact_duplicate_extra_files': sum(max(count - 1, 0) for count in digests.values()),
         'patient_groups': 'NOT VERIFIED - parser identity is only a proposal',
