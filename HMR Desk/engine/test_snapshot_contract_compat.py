@@ -128,7 +128,7 @@ def test_unknown_marker_and_malformed_evidence_fail_closed(tmp_path, monkeypatch
         pid = _patient(conn)
         patient = _fresh(conn, pid)
         good = _evidence(conn, patient, 2)
-        for marker in (1, 3, 0, '2', True, False, None, 2.5, [2]):
+        for marker in (1, 4, 0, '2', '3', True, False, None, 2.5, [2]):
             assert not report_auth.clinical_snapshot_matches(
                 conn, patient, dict(good, clinical_snapshot_contract=marker)), repr(marker)
         # A current-contract digest presented without a marker is read as legacy and does not match.
