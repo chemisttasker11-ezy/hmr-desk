@@ -26,6 +26,6 @@ jobs:
       - name: Run strict pathology parser, provenance, records and source-image tests
         working-directory: HMR Desk/engine
         run: |
-          python -m pytest -q test_pathology_proposals.py test_pathology_realistic_layouts.py test_pathology_records.py test_pathology_import.py
+          python -m pytest -q test_pathology_proposals.py test_pathology_realistic_layouts.py test_pathology_proposal_api_safety.py test_pathology_records.py test_pathology_import.py
       - name: Check pharmacist review renderer syntax
         run: node --check desktop/renderer/interview.js
