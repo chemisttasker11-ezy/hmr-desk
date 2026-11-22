@@ -80,7 +80,10 @@ def review(conn, paths):
                 flags.append('PDF contains typed FreeText annotations that may be GP-authored or added later; all source text is retained and requires pharmacist attribution review.')
             for page_index, audit in enumerate(page_audits):
                 if audit['needs_image_review']:
-                    flags.append('Page ' + str(page_index + 1) + ': substantial image content may contain unread clinical information. Inspect the original page; native text is incomplete evidence.')
+                    if audit['text_layer_over_image_regions']:
+                        flags.append('Page ' + str(page_index + 1) + ': large scanned-image region with a searchable text overlay. OCR/text may disagree with original pixels; check all clinical fields and medicine directions visually.')
+                    else:
+                        flags.append('Page ' + str(page_index + 1) + ': substantial image content may contain unread clinical information. Inspect the original page; native text is incomplete evidence.')
             # Intake never fills the clinical box: the pharmacist enters it from the original. Later, the interview can
             # read medicines, conditions and allergies only from recognised referral layouts, so say plainly when
             # this PDF is not one. A flag only; nothing is inferred or changed.
