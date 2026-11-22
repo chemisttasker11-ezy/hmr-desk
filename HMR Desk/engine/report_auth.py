@@ -66,7 +66,7 @@ def clinical_snapshot_matches(conn, patient, stored):
     A truly absent marker means evidence written before the GP/clinic detail keys
     existed: compared with the legacy contract (see clinical_snapshot). A present
     marker must be exactly the integer 2 (the only value any build writes); null,
-    0, 1, true, strings and anything else fail. Nothing is rewritten.
+    0, 1, 4, true, strings and anything else fail. Nothing is rewritten.
     """
     import clinical_snapshot
     if not isinstance(stored, dict) or not isinstance(stored.get('clinical_snapshot_sha256'), str):
@@ -75,7 +75,7 @@ def clinical_snapshot_matches(conn, patient, stored):
         contract = clinical_snapshot.CONTRACT_LEGACY
     else:
         contract = stored['clinical_snapshot_contract']
-        if isinstance(contract, bool) or not isinstance(contract, int) or contract != clinical_snapshot.CONTRACT_CURRENT:
+        if isinstance(contract, bool) or not isinstance(contract, int) or contract not in (clinical_snapshot.CONTRACT_CURRENT, clinical_snapshot.CONTRACT_FIELD_REVIEW):
             return False
     return stored['clinical_snapshot_sha256'] == clinical_snapshot_hash(conn, patient, contract)
 
@@ -236,6 +236,11 @@ def check_approval(conn, patient, body):
         'template_version': detail['template_version'],
         'source_files_sha256': detail['source_files_sha256'],
         'clinical_snapshot_sha256': detail['clinical_snapshot_sha256'],
+        # Preserve interaction evidence that was approved at the report build.
+        # Without it the later "report sent" transition cannot detect a
+        # changed interaction result after signing.
+        **({'interactions_evidence_sha256': detail['interactions_evidence_sha256']}
+           if detail.get('interactions_evidence_sha256') else {}),
         **({'clinical_snapshot_contract': detail['clinical_snapshot_contract']}
            if 'clinical_snapshot_contract' in detail else {}),
         'reviewer': reviewer.strip(),
@@ -270,6 +275,10 @@ def check_sent(conn, patient):
         raise ValueError('Original source files changed after sign-off')
     if not clinical_snapshot_matches(conn, patient, evidence):
         raise ValueError('Clinical source contract was changed after signing')
+    if evidence.get('interactions_evidence_sha256'):
+        import interaction_scope
+        if interaction_scope.evidence_digest(conn, patient) != evidence['interactions_evidence_sha256']:
+            raise ValueError('Interaction evidence changed after sign-off; review and sign a new report')
     if legacy_gp_block_changed(conn, patient, evidence):
         raise ValueError('GP details changed after signing')
     import reconciliation

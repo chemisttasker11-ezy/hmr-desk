@@ -294,8 +294,10 @@ def report_build(patient_id, pdf=False):
             'interview_revision': interview.revision(conn, p),
             'pathology_revision': pathology_records.revision(conn, p),
             'source_files_sha256': report_auth.source_snapshot(conn, p),
-            'clinical_snapshot_sha256': report_auth.clinical_snapshot_hash(conn, p),
-            'clinical_snapshot_contract': 2,
+            # New builds use field-specific referral evidence. Older contract 1/2
+            # digests remain supported exactly for already generated reports.
+            'clinical_snapshot_sha256': report_auth.clinical_snapshot_hash(conn, p, 3),
+            'clinical_snapshot_contract': 3,
             'demographics': report.demographic_status(conn, p, data),  # block name -> matches/kept/unresolved, no text
         }
         import interaction_scope

@@ -20,6 +20,7 @@ SCHEMA_VERSION = 1
 # removed after the build is detected for new reports as well.
 CONTRACT_LEGACY = 1
 CONTRACT_CURRENT = 2
+CONTRACT_FIELD_REVIEW = 3  # new builds only; preserve contract 1/2 digests
 GP_DETAIL_KEYS = ('clinic', 'gp_provider', 'clinic_address', 'clinic_phone')
 LEGACY_NEW_KEYS = ('gp_provider', 'clinic_address', 'clinic_phone')
 MAX_ITEMS = 120
@@ -83,7 +84,7 @@ def _medicine_rows(record, section):
 
 def canonical(identity, interview_record, pathology, report_spec, referral_source=None,
               source_hashes=None, contract=CONTRACT_CURRENT):
-    if contract not in (CONTRACT_LEGACY, CONTRACT_CURRENT):
+    if contract not in (CONTRACT_LEGACY, CONTRACT_CURRENT, CONTRACT_FIELD_REVIEW):
         raise ValueError('Unknown clinical snapshot contract')
     if not isinstance(interview_record, dict) or not isinstance(pathology, dict):
         raise ValueError('Invalid clinical snapshot records')
@@ -141,7 +142,7 @@ def canonical(identity, interview_record, pathology, report_spec, referral_sourc
     }
     for key in GP_DETAIL_KEYS:
         value = _text(identity.get(key, ''))
-        if contract == CONTRACT_CURRENT or (key in LEGACY_NEW_KEYS and value):
+        if contract in (CONTRACT_CURRENT, CONTRACT_FIELD_REVIEW) or (key in LEGACY_NEW_KEYS and value):
             person[key] = value
     if not person['name'].strip():
         raise ValueError('Patient identity is incomplete')
@@ -156,7 +157,11 @@ def canonical(identity, interview_record, pathology, report_spec, referral_sourc
             'state': reported_allergy_state if reviewed else source_state(allergies),
         },
         'conditions': {'narrative': _text(interview_record.get('conditions','')),
-                       'review': source_state(interview_record.get('conditions',''), reviewed)},
+                       'review': source_state(interview_record.get('conditions',''),
+                                              (reviewed and clinical_review.field_page(review, 'conditions') >= 1
+                                               and _text(interview_record.get('conditions','')).strip() ==
+                                               _text(review.get('conditions','')).strip())
+                                              if contract == CONTRACT_FIELD_REVIEW else reviewed)},
         'medication_use': medication_use,
         'pathology': tests,
         'findings': findings,

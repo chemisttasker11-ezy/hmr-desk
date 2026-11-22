@@ -133,16 +133,41 @@ def names(conn, patient_id):
     return [r[0] for r in conn.execute('SELECT name FROM records WHERE patient_id=? ORDER BY name', (patient_id,))]
 
 
+class LinkedPathBlocked(ValueError):
+    """A legacy input was refused for patient-isolation reasons."""
+
+
+def _linked_component(path):
+    """Refuse linked leaves, linked ancestors and Windows directory junctions.
+
+    A pre-open check does not fully defend against hostile check/use races.
+    Native Windows reparse/opened-handle acceptance remains mandatory.
+    """
+    path = Path(path)
+    return any(part.is_symlink() or
+               (getattr(part, 'is_junction', lambda: False)())
+               for part in (path, *path.parents))
+
+
 def import_folder(conn, patient_id, folder):
     """Copy record files from a patient folder into the database, verified by read-back.
 
-    Returns {name: 'imported' | 'already' | 'conflict'} for files that exist. Repeating it is safe: an existing
-    database record is never replaced by a file. Files are not changed or removed."""
+    Returns {name: 'imported' | 'already' | 'conflict' | 'blocked'} for entries. A
+    linked folder raises LinkedPathBlocked: never mistake refusal for empty.
+    Repeating is safe: existing database records are not overwritten; plain
+    originals are never removed."""
     ensure(conn)
     folder = Path(folder)
     result = {}
+    # A legacy workspace directory may itself be a link to someone else's
+    # records. Never enumerate or admit such records into this patient's ID.
+    if _linked_component(folder):
+        raise LinkedPathBlocked('Legacy patient folder is linked; no records imported')
     for name in sorted(n for n in os.listdir(folder) if is_record_name(n)):
         path = folder / name
+        if _linked_component(path):
+            result[name] = 'blocked'
+            continue
         if not path.is_file():
             continue
         body = path.read_bytes()
@@ -205,8 +230,11 @@ def export_folder(conn, patient_id, destination):
 def removable_files(conn, patient_id, folder):
     """Record files whose bytes match the database exactly (safe to retire in a later stage)."""
     folder = Path(folder)
+    if _linked_component(folder):
+        return []
     return [folder / n for n in sorted(os.listdir(folder))
-            if is_record_name(n) and (folder / n).is_file() and get(conn, patient_id, n) == (folder / n).read_bytes()]
+            if is_record_name(n) and not _linked_component(folder / n)
+            and (folder / n).is_file() and get(conn, patient_id, n) == (folder / n).read_bytes()]
 
 
 def stamp(conn, patient_id, name):
@@ -239,6 +267,8 @@ def import_file(conn, patient_id, name, path):
     """Copy one plain file into the store, verified by read-back. Same rules as import_folder."""
     ensure(conn)
     path = Path(path)
+    if _linked_component(path):
+        raise LinkedPathBlocked('Legacy record path is linked; no records imported')
     if not path.is_file():
         return None
     body = path.read_bytes()
@@ -259,7 +289,8 @@ def migrate_all(conn, folder_for, extra=None):
     never overwritten, and a differing plain file is reported as a conflict and left alone. Plain files are not
     deleted here. Returns a summary with no patient details."""
     ensure(conn)
-    summary = {'patients': 0, 'imported': 0, 'already': 0, 'conflict': 0, 'no_folder': 0, 'errors': 0}
+    summary = {'patients': 0, 'imported': 0, 'already': 0,
+               'conflict': 0, 'blocked': 0, 'no_folder': 0, 'errors': 0}
     for patient in conn.execute('SELECT * FROM patients').fetchall():
         summary['patients'] += 1
         try:
@@ -272,12 +303,17 @@ def migrate_all(conn, folder_for, extra=None):
         try:
             for outcome in import_folder(conn, patient['id'], folder).values():
                 summary[outcome] += 1
+        except LinkedPathBlocked:
+            summary['blocked'] += 1
         except Exception:
             summary['errors'] += 1
     # Files that live outside patient folders (shared plans, interview specs).
     for patient_id, name, path in (extra(conn) if extra else ()):
         try:
             outcome = import_file(conn, patient_id, name, path)
+        except LinkedPathBlocked:
+            summary['blocked'] += 1
+            continue
         except Exception:
             summary['errors'] += 1
             continue
@@ -298,16 +334,31 @@ def status(conn, folder_for, extra=None):
             continue
         if not folder or not Path(folder).is_dir():
             continue
+        # A linked patient directory must not be traversed during a read-only
+        # protection-status check. Record the uncertainty as unprotected.
+        if _linked_component(folder):
+            plain_other += 1
+            continue
         for name in os.listdir(folder):
-            if not is_record_name(name) or not (Path(folder) / name).is_file():
+            if not is_record_name(name):
                 continue
-            if get(conn, patient['id'], name) == (Path(folder) / name).read_bytes():
+            path = Path(folder) / name
+            if _linked_component(path):
+                plain_other += 1
+                continue
+            if not path.is_file():
+                continue
+            if get(conn, patient['id'], name) == path.read_bytes():
                 plain_same += 1
             else:
                 plain_other += 1
     for patient_id, name, path in (extra(conn) if extra else ()):
-        if Path(path).is_file():
-            if get(conn, patient_id, name) == Path(path).read_bytes():
+        path = Path(path)
+        if _linked_component(path):
+            plain_other += 1
+            continue
+        if path.is_file():
+            if get(conn, patient_id, name) == path.read_bytes():
                 plain_same += 1
             else:
                 plain_other += 1
@@ -355,7 +406,7 @@ def retire_matching(conn, folder_for, extra=None):
                 try:
                     if not path.exists() and not path.is_symlink(): continue
                     # Refuse link components as well as the leaf. No deletion outside the real location.
-                    if any(part.is_symlink() for part in [path, *path.parents]):
+                    if _linked_component(path):
                         result['skipped'] += 1; continue
                     before = path.stat()
                     if not stat.S_ISREG(before.st_mode):

@@ -239,31 +239,102 @@ def test_synthetic_pdf_referral_to_signed_sent_report(tmp_path, monkeypatch):
              report_sha256=detail['sha256'], reviewer='Synthetic Pharmacist',
              clinical_reviewed=True)
         assert _patient(conn, pid)['state'] == 'signed_off'
-        # LATER ONLINE: the pharmacist asks for a pathology re-check and saves a new interaction note after sign-off.
-        # The signed Word and PDF bytes, the pharmacist's saved report text and the signed state must not change.
+        import steps
+        assert steps.ready('report_build', conn, _patient(conn, pid), repeat=True) == (
+            False, 'existing signed report is still current'
+        )
+        # LATER ONLINE: new clinical interaction evidence must STALE the signed
+        # authorisation, not alter the archived Word/PDF or the saved SAMP.
         import routes_pathology
-        before = {'word': hashlib.sha256(word.read_bytes()).hexdigest(), 'pdf': hashlib.sha256(word.with_suffix('.pdf').read_bytes()).hexdigest(),
-                  'spec': hashlib.sha256(records.get(conn, pid, 'report_spec.json') or b'').hexdigest()}
-        assert before['spec'] != hashlib.sha256(b'').hexdigest()
+        first_signature = conn.execute(
+            "SELECT id,detail FROM events WHERE patient_id=? AND type='signed_off' ORDER BY id DESC LIMIT 1",
+            (pid,),
+        ).fetchone()
+        assert first_signature
+        first_signed = json.loads(first_signature['detail'])
+        before = {
+            'word': hashlib.sha256(word.read_bytes()).hexdigest(),
+            'pdf': hashlib.sha256(pdf.read_bytes()).hexdigest(),
+            'spec': hashlib.sha256(records.get(conn, pid, 'report_spec.json') or b'').hexdigest(),
+        }
+        assert report_auth.check_sent(conn, _patient(conn, pid))
         _act(conn, pid, 'pathology_recheck')
-        records.put(conn, pid, 'MIMS interactions (manual) 2026-11-27.txt', b'Checked later by hand'); conn.commit()
-        status_code, _ = routes_pathology.handle(conn, 'POST', '/api/pathology/result', {}, {'id': pid, 'saved': ['later.pdf'], 'status': 'saved'})
+        # Recheck REQUEST alone is not a new clinical result.
+        assert report_auth.check_sent(conn, _patient(conn, pid))
+        records.put(conn, pid, 'MIMS interactions (manual) 2026-11-27.txt',
+                    b'New fictional pharmacist interaction review'); conn.commit()
+        with pytest.raises(ValueError, match='Interaction evidence changed after sign-off'):
+            report_auth.check_sent(conn, _patient(conn, pid))
+        status_code, _ = routes_pathology.handle(
+            conn, 'POST', '/api/pathology/result', {},
+            {'id': pid, 'saved': ['later.pdf'], 'status': 'saved'}
+        )
         assert status_code == 200
-        after = {'word': hashlib.sha256(word.read_bytes()).hexdigest(), 'pdf': hashlib.sha256(word.with_suffix('.pdf').read_bytes()).hexdigest(),
-                 'spec': hashlib.sha256(records.get(conn, pid, 'report_spec.json') or b'').hexdigest()}
-        assert after == before
+        after = {
+            'word': hashlib.sha256(word.read_bytes()).hexdigest(),
+            'pdf': hashlib.sha256(pdf.read_bytes()).hexdigest(),
+            'spec': hashlib.sha256(records.get(conn, pid, 'report_spec.json') or b'').hexdigest(),
+        }
+        assert after == before, 'Signed files or pharmacist text changed'
         assert _patient(conn, pid)['state'] == 'signed_off'
-        assert report_status.report_status(conn, _patient(conn, pid))['signed_version_intact'] is True
-        _act(conn, pid, 'report_sent', date='2026-11-26')
+        assert report_status.report_status(conn, _patient(conn, pid))['signed_version_intact'] is False
+        with pytest.raises(ValueError, match='Interaction evidence changed after sign-off'):
+            _act(conn, pid, 'report_sent', date='2026-11-27')
+        assert _patient(conn, pid)['state'] == 'signed_off'
+        assert not conn.execute(
+            "SELECT 1 FROM events WHERE patient_id=? AND type='report_sent'", (pid,)
+        ).fetchone()
+
+        # The normal queued worker route must permit a replacement version once
+        # the previously signed authorisation becomes stale.
+        import steps
+        assert steps.ready('report_build', conn, _patient(conn, pid), repeat=True) == (True, '')
+
+        # A separate, explicitly reviewed NEW report must replace the stale
+        # authorisation; the old version and signature stay in audit history.
+        output2 = jobs.report_build(pid, pdf=True)
+        assert output2.startswith('Built approved-layout Word draft'), output2
+        latest = conn.execute(
+            "SELECT detail FROM events WHERE patient_id=? AND type='report_build' ORDER BY id DESC LIMIT 1",
+            (pid,),
+        ).fetchone()
+        second_build = json.loads(latest['detail'])
+        assert second_build['file'] != detail['file']
+        second_word = folder / second_build['file']
+        second_pdf = second_word.with_suffix('.pdf')
+        assert second_word.is_file() and second_pdf.is_file()
+        assert hashlib.sha256(second_word.read_bytes()).hexdigest() == second_build['sha256']
+        assert hashlib.sha256(second_pdf.read_bytes()).hexdigest() == second_build['pdf_sha256']
+        assert report_status.report_status(conn, _patient(conn, pid))['signed_version_intact'] is False
+        _act(conn, pid, 'signed_off', report_file=second_word.name,
+             report_sha256=second_build['sha256'], reviewer='Synthetic Pharmacist',
+             clinical_reviewed=True)
+        assert report_auth.check_sent(conn, _patient(conn, pid))
+        _act(conn, pid, 'report_sent', date='2026-11-27')
         assert _patient(conn, pid)['state'] == 'sent'
+        assert hashlib.sha256(word.read_bytes()).hexdigest() == before['word']
+        assert hashlib.sha256(pdf.read_bytes()).hexdigest() == before['pdf']
+        signatures = conn.execute(
+            "SELECT id,detail FROM events WHERE patient_id=? AND type='signed_off' ORDER BY id",
+            (pid,),
+        ).fetchall()
+        assert len(signatures) == 2
+        assert signatures[0]['id'] == first_signature['id']
+        assert json.loads(signatures[0]['detail']) == first_signed
+        assert json.loads(signatures[1]['detail'])['report_file'] == second_word.name
+        assert len(report_auth.generated_versions(conn, _patient(conn, pid))) == 2
 
     finally:
         conn.close()
 
-    # REOPEN: report, state, consent, files and signed evidence survive a new
-    # database connection after the synthetic application session ends.
+    # REOPEN: report, state, consent, files and BOTH signatures survive a
+    # new database connection after the synthetic application session ends.
     with db.connect() as reopened:
         p = _patient(reopened, pid)
         assert p['state'] == 'sent'
         assert interview.load(reopened, p)['consent']['signed'] is True
         assert report_status.report_status(reopened, p)['signed_version_intact'] is True
+        assert report_auth.check_sent(reopened, p)
+        assert len(report_auth.generated_versions(reopened, p)) == 2
+        assert hashlib.sha256(word.read_bytes()).hexdigest() == before['word']
+        assert hashlib.sha256(pdf.read_bytes()).hexdigest() == before['pdf']
