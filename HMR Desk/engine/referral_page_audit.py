@@ -11,6 +11,34 @@ MIN_IMAGE_FRACTION = 0.20
 MAX_OVERLAPPING_WORDS = 5
 
 
+
+def _coloured_ink(colour):
+    """Conservative hint for blue/red vector annotations, not ink recognition."""
+    if not colour or len(colour) < 3:
+        return False
+    r, g, b = colour[:3]
+    return (r > 0.45 and r > g * 1.45 and r > b * 1.30) or (
+        b > 0.35 and b > r * 1.35 and b > g * 1.15)
+
+
+def _review_markers(page):
+    """Annot and visible coloured stroke signals; raster handwriting remains unknown.
+
+    A stroke colour is not proof that its content is handwritten or clinical.
+    Do not infer a patient dose or overwrite printed referral values.
+    """
+    annotations = list(page.annots() or [])
+    stroke_count = 0
+    try:
+        drawings = page.get_drawings()
+    except (ValueError, RuntimeError):
+        drawings = []
+    for drawing in drawings:
+        if _coloured_ink(drawing.get('color')):
+            stroke_count += 1
+    return len(annotations), stroke_count
+
+
 def inspect_page(page):
     """Return non-clinical page layout metrics and an explicit mixed-page risk.
 
@@ -43,6 +71,7 @@ def inspect_page(page):
             unknown_image_regions += 1
     image_fraction = min(image_area / page_area, 1.0)
     native_present = len(native.strip()) >= MIN_NATIVE_TEXT
+    annotation_count, coloured_strokes = _review_markers(page)
     return {
         "native_characters": len(native.strip()),
         "native_word_count": len(words),
@@ -52,4 +81,8 @@ def inspect_page(page):
         "native_present": native_present,
         "needs_image_review": native_present and unknown_image_regions > 0,
         "unread_image_regions": unknown_image_regions,
+        "annotation_count": annotation_count,
+        "coloured_vector_strokes": coloured_strokes,
+        "possible_interview_markup": annotation_count > 0 or coloured_strokes > 0,
+        "raster_handwriting_unassessed": image_count > 0,
     }
