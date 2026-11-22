@@ -116,3 +116,83 @@ def test_lipid_conditional_high_risk_targets_not_silent_lab_ranges():
     assert len(rows)==2
     assert rows[0]['fields']['reference_interval']=='(< 5.6)'
     assert rows[1]['fields']['reference_interval']=='(< 3.1)'
+
+
+def test_repeated_calendar_day_abstains_without_unique_accession_mapping():
+    doc = fitz.open()
+    page = doc.new_page(width=900, height=500)
+    _text(page, 50, 35, 'CUMULATIVE SERUM BIOCHEMISTRY')
+    for x, v in [(50, 'Date'), (220, '02/11/26'), (350, '02/11/26')]:
+        _text(page, x, 65, v)
+    for x, v in [(50, 'Sodium'), (220, '139'), (350, '141'),
+                 (680, 'mmol/L'), (780, '(135-145)')]:
+        _text(page, x, 130, v)
+    try:
+        rows, issues = _extract(doc)
+    finally:
+        doc.close()
+    assert rows == []
+    assert any('accession/time' in reason for reason in issues)
+
+
+def test_rotated_table_abstains_instead_of_misplacing_cells():
+    doc = fitz.open()
+    page = doc.new_page()
+    _text(page, 45, 35, 'Collected: 10/11/2026')
+    for x, v in [(45, 'Test'), (200, 'Result'), (350, 'Units'),
+                 (470, 'Reference')]:
+        _text(page, x, 100, v)
+    for x, v in [(45, 'Sodium'), (200, '139'), (350, 'mmol/L'),
+                 (470, '135-145')]:
+        _text(page, x, 130, v)
+    page.set_rotation(90)
+    try:
+        rows, issues = _extract(doc)
+    finally:
+        doc.close()
+    assert rows == []
+    assert any('Rotated' in reason for reason in issues)
+
+
+def test_searchable_text_overlay_on_page_sized_raster_is_unverified():
+    original = fitz.open()
+    original.new_page(width=595, height=842).insert_text(
+        (30, 100), 'SYNTHETIC IMAGE BASE')
+    with fitz.open(stream=original.tobytes(), filetype='pdf') as source:
+        pixels = source[0].get_pixmap().tobytes('png')
+    original.close()
+    doc = fitz.open()
+    page = doc.new_page(width=595, height=842)
+    page.insert_image(page.rect, stream=pixels)
+    for x, value in [(45, 'Test'), (200, 'Result'), (350, 'Units'),
+                     (470, 'Reference')]:
+        _text(page, x, 150, value)
+    for x, value in [(45, 'Sodium'), (200, '139'), (350, 'mmol/L'),
+                     (470, '135-145')]:
+        _text(page, x, 180, value)
+    try:
+        rows, issues = _extract(doc)
+    finally:
+        doc.close()
+    assert rows == []
+    assert any('raster' in reason for reason in issues)
+
+
+def test_cumulative_si_units_description_has_no_invented_test_name():
+    doc = fitz.open()
+    page = doc.new_page(width=900, height=500)
+    _text(page, 50, 35, 'CUMULATIVE SERUM BIOCHEMISTRY')
+    for x, v in [(50, 'Date'), (220, '02/11/26')]:
+        _text(page, x, 65, v)
+    for x, v in [(50, 'in SI units'), (220, '46'), (680, 'mmol/mol'),
+                 (770, '(20-41)')]:
+        _text(page, x, 130, v)
+    try:
+        rows, issues = _extract(doc)
+    finally:
+        doc.close()
+    assert not issues
+    assert len(rows) == 1
+    assert rows[0]['raw_text']['test'] == 'in SI units'
+    assert rows[0]['fields']['test'] == ''
+    assert 'test' in rows[0]['field_uncertainty']
