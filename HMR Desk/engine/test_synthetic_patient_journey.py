@@ -239,6 +239,10 @@ def test_synthetic_pdf_referral_to_signed_sent_report(tmp_path, monkeypatch):
              report_sha256=detail['sha256'], reviewer='Synthetic Pharmacist',
              clinical_reviewed=True)
         assert _patient(conn, pid)['state'] == 'signed_off'
+        import steps
+        assert steps.ready('report_build', conn, _patient(conn, pid), repeat=True) == (
+            False, 'existing signed report is still current'
+        )
         # LATER ONLINE: new clinical interaction evidence must STALE the signed
         # authorisation, not alter the archived Word/PDF or the saved SAMP.
         import routes_pathology
