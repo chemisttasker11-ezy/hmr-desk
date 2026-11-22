@@ -12,10 +12,13 @@ import clinical_review
 import db
 import app_paths
 import fitz
+import referral_page_audit
+import referral_source_text
 
 MAX_PDF = 25 * 1024 * 1024
 MAX_PAGES = 150
 MAX_TEXT_PER_PAGE = 150000
+MAX_MIXED_OCR_PAGES = 10  # bounded automatic local comparison, never auto-accepts values
 FIELDS = ('name', 'phone', 'address', 'suburb', 'gp', 'clinic', 'gp_provider', 'clinic_address', 'clinic_phone', 'referral_date', 'dob', 'sex', 'medicare', 'irn', 'ihi')
 
 
@@ -57,22 +60,45 @@ def review(conn, paths):
                 if doc.needs_pass: raise ValueError('PDF is password protected')
                 if not 1 <= doc.page_count <= MAX_PAGES:
                     raise ValueError('PDF page count exceeds the 150-page intake limit')
-                pages = [p.get_text()[:MAX_TEXT_PER_PAGE] for p in doc]
+                pages, annotation_pages = referral_source_text.extract_original_pages(doc, max_chars=MAX_TEXT_PER_PAGE)
+                page_audits = [referral_page_audit.inspect_page(p) for p in doc]
             if not pages: raise ValueError('PDF has no pages')
             methods = ['text' if len(page.strip()) >= 25 else 'ocr' for page in pages]
+            mixed = [i for i, audit in enumerate(page_audits) if audit['needs_image_review']]
             ocr_flags = []
-            if 'ocr' in methods:
+            ocr_comparison = {}
+            has_sparse_pages = 'ocr' in methods
+            run_ocr = has_sparse_pages or (bool(mixed) and len(pages) <= MAX_MIXED_OCR_PAGES)
+            if mixed and not run_ocr:
+                ocr_flags.append('Mixed image/text pages require visual source review; automatic OCR comparison is limited to PDFs of 10 pages or fewer.')
+            if run_ocr:
                 try:
-                    ocr = module.ocr_pdfs([Path(source)]).get(str(Path(source)), [])
+                    extracted = module.ocr_pdfs([Path(source)]).get(str(Path(source)), [])
                 except Exception:
-                    ocr = []
-                if len(ocr) == len(pages):
-                    pages = [page if len(page.strip()) >= 25 else (ocr[i] or '') for i, page in enumerate(pages)]
-                else:
+                    extracted = []
+                if len(extracted) == len(pages):
+                    # OCR on a searchable image is a comparison only: never merge
+                    # OCR strings or their unverified directions into source facts.
+                    ocr_comparison = {i: (extracted[i] or '')[:1200] for i in mixed}
+                    for i, native_page in enumerate(pages):
+                        if len(native_page.strip()) < 25 and not (extracted[i] or '').strip():
+                            ocr_flags.append('Page ' + str(i + 1) + ': local OCR returned no readable text. Inspect the original image; do not assume the clinical fields are absent.')
+                    pages = [page if len(page.strip()) >= 25 else (extracted[i] or '') for i, page in enumerate(pages)]
+                elif has_sparse_pages:
                     ocr_flags.append('OCR unavailable or incomplete: inspect the original PDF and enter referral details manually')
+                if mixed and not ocr_comparison:
+                    ocr_flags.append('Mixed-page OCR comparison unavailable: compare original pixels against the searchable text layer.')
                 if hashlib.sha256(read_pdf(source)).hexdigest() != digest: raise ValueError('Source changed during review; try again')
             kind, _, flags = module.classify('\n'.join(pages))
             flags.extend(ocr_flags)
+            if any(p['count'] for p in annotation_pages):
+                flags.append('PDF contains typed FreeText annotations that may be GP-authored or added later; all source text is retained and requires pharmacist attribution review.')
+            for page_index, audit in enumerate(page_audits):
+                if audit['needs_image_review']:
+                    if audit['text_layer_over_image_regions']:
+                        flags.append('Page ' + str(page_index + 1) + ': large scanned-image region with a searchable text overlay. OCR/text may disagree with original pixels; check all clinical fields and medicine directions visually.')
+                    else:
+                        flags.append('Page ' + str(page_index + 1) + ': substantial image content may contain unread clinical information. Inspect the original page; native text is incomplete evidence.')
             # Intake never fills the clinical box: the pharmacist enters it from the original. Later, the interview can
             # read medicines, conditions and allergies only from recognised referral layouts, so say plainly when
             # this PDF is not one. A flag only; nothing is inferred or changed.
@@ -90,13 +116,15 @@ def review(conn, paths):
             seen_hashes.add(digest)
             if key: seen_keys.add(key)
             token = uuid.uuid4().hex
-            excerpts = [{'page': i + 1, 'method': methods[i], 'text': text[:1200]}
+            excerpts = [{'page': i + 1, 'method': ('text+unread_image' if page_audits[i]['needs_image_review'] else methods[i]),
+                         'text': text[:1200], 'ocr_comparison_unverified': ocr_comparison.get(i, '')}
                         for i, text in enumerate(pages[:20])]
             item = {'source': source, 'sha256': digest, 'fields': fields, 'kind': kind,
-                    'page_previews': excerpts, 'page_count': len(pages), 'flags': flags}
+                    'page_previews': excerpts, 'annotation_evidence': annotation_pages[:20],
+                    'page_count': len(pages), 'flags': flags}
             conn.execute('INSERT INTO meta(key,value) VALUES (?,?)', ('referral_review_' + token, json.dumps(item)))
             row.update(token=token, kind=kind, fields=fields, flags=flags,
-                       page_previews=excerpts,
+                       page_previews=excerpts, annotation_evidence=annotation_pages[:20],
                        status='duplicate' if duplicate or content_dup or batch_dup else ('review' if kind == 'referral' else 'manual'),
                        duplicate_kind='content' if content_dup or digest in {x.get('sha256') for x in result} else ('identity' if duplicate or batch_dup else None),
                        sha256=digest,
@@ -236,6 +264,7 @@ def commit(conn, token, fields, distinct_person=False, manual_referral=False, cl
         source_record = {
             'schema_version': 1, 'sha256': item['sha256'], 'original_filename': Path(item['source']).name,
             'page_excerpts_unconfirmed': item.get('page_previews', []),
+            'annotation_evidence_unconfirmed': item.get('annotation_evidence', []),
             'extraction_flags': item.get('flags', []),
             'confirmed_identity_fields': {k: v.strip() for k, v in fields.items()},
             'manual_source_classification': bool(manual_referral),

@@ -1,0 +1,50 @@
+name: Referral FreeText/source fidelity — fictional fixtures
+on:
+  pull_request:
+    paths:
+      - 'HMR Desk/engine/referral_source_text.py'
+      - 'HMR Desk/engine/referral_entry.py'
+      - 'HMR Desk/engine/interview.py'
+      - 'HMR Desk/engine/test_referral_typed_overlay_*.py'
+      - 'HMR Desk/engine/test_referral_corpus_eval.py'
+      - 'scripts/intake/intake.py'
+      - 'scripts/qa/referral_corpus_eval.py'
+      - 'desktop/renderer/intake.js'
+      - '.github/workflows/referral-source-fidelity.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  source-fidelity:
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install pinned backend and test dependencies
+        run: |
+          python -m pip install -r requirements.txt
+          python -m pip install pytest==8.4.2
+      - name: Verify fictional source retention, CLI and private census
+        working-directory: HMR Desk/engine
+        run: python -m pytest -q test_referral_typed_overlay_exclusion.py test_referral_typed_overlay_intake.py test_referral_corpus_eval.py test_referral_mixed_image_page.py test_referral_entry.py test_referral_geometry.py
+      - name: Verify renderer syntax
+        run: node --check desktop/renderer/intake.js
+
+      - name: Archive source checkout snapshot for local QA (code only, no patient data)
+        uses: actions/upload-artifact@v4
+        with:
+          name: hmr-referral-qa-source-only
+          path: |
+            HMR Desk/engine/referral.py
+            HMR Desk/engine/referral_geometry.py
+            HMR Desk/engine/referral_source_text.py
+            HMR Desk/engine/referral_page_audit.py
+            HMR Desk/engine/referral_entry.py
+            HMR Desk/engine/clinical_review.py
+            scripts/intake/intake.py
+            scripts/qa/referral_corpus_eval.py
+          if-no-files-found: error
+          retention-days: 1
