@@ -45,8 +45,8 @@ def test_cumulative_biochemistry_five_distinct_dates_with_missing_values():
         rows,issues=_extract(doc)
     finally: doc.close()
     assert not issues, issues
-    # Six analytes and five dated columns, with three present direct bilirubin values.
-    assert len(rows)==28, [r['fields'] for r in rows]
+    # Six analytes and five dated columns, with two present direct bilirubin values.
+    assert len(rows)==27, [r['fields'] for r in rows]
     assert [(r['fields']['sample_date'],r['fields']['value']) for r in rows if r['fields']['test']=='Creat'] == [
       ('2026-03-25','67'),('2026-04-01','71'),('2026-06-24','58'),
       ('2026-07-16','48'),('2026-08-26','52')]
