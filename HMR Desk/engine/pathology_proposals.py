@@ -16,7 +16,7 @@ import pathology_import
 import pathology_records
 
 SCHEMA = 'pathology-proposals-v1'
-EXTRACTOR = 'digital-geometry-v1'
+EXTRACTOR = 'digital-geometry-v2'
 MAX_PROPOSALS = 300
 NUMBER = re.compile(r'^(?:[<>]=?|=)?\s*-?\d+(?:\.\d+)?$')
 VALUE_MARK = re.compile(r'^((?:[<>]=?|=)?\s*-?\d+(?:\.\d+)?)(?:\s+|\s*\()([HL])\)?$', re.I)
@@ -211,6 +211,8 @@ def _cumulative_proposals(page, lines, source_id, digest):
     xs = [(float(w[0]) + float(w[2])) / 2 for w, _ in columns]
     if xs != sorted(xs) or min(xs) < 80:
         return [], ['Cumulative result date-column geometry is ambiguous']
+    if len({date for _, date in columns}) != len(columns):
+        return [], ['Repeated specimen date without validated accession/time mapping; review manually']
     result = []
     target_only = any('target if' in l['text'].casefold() and
                       'risk' in ' '.join(a['text'] for a in lines[max(0,i-1):i+3]).casefold()
@@ -255,6 +257,9 @@ def _cumulative_proposals(page, lines, source_id, digest):
             clinical_reference = '' if target_only else printed_reference
             fields = dict(test=name, value=value, unit=unit,
                           reference_interval=clinical_reference, sample_date=date)
+            if name.casefold().strip() in ('in si units', 'si units', 'in conventional units'):
+                fields['test'] = ''
+                field_issues['test'] = ['Unit-system label is not analyte identity; confirm original test']
             if target_only:
                 field_issues['reference_interval'] = [
                     'Printed range is conditional high-risk target, not a general lab reference']
@@ -359,6 +364,12 @@ def _single_panel_proposals(page, lines, source_id, digest):
 
 
 def _page_proposals(page, source_id, digest):
+    if page.rotation:
+        return [], ['Rotated page: source-cell geometry has not been validated']
+    page_area = max(page.rect.get_area(), 1)
+    if any((fitz.Rect(im['bbox']) & page.rect).get_area() > .7 * page_area
+           for im in page.get_image_info(xrefs=False)):
+        return [], ['Page-sized raster with text layer: unvalidated OCR; inspect original']
     lines = _lines(page)
     candidates = [(i, _header(line)) for i, line in enumerate(lines)]
     candidates = [(i, h) for i, h in candidates if h]
