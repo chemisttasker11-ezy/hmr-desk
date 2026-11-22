@@ -281,6 +281,11 @@ def test_synthetic_pdf_referral_to_signed_sent_report(tmp_path, monkeypatch):
             "SELECT 1 FROM events WHERE patient_id=? AND type='report_sent'", (pid,)
         ).fetchone()
 
+        # The normal queued worker route must permit a replacement version once
+        # the previously signed authorisation becomes stale.
+        import steps
+        assert steps.ready('report_build', conn, _patient(conn, pid), repeat=True) == (True, '')
+
         # A separate, explicitly reviewed NEW report must replace the stale
         # authorisation; the old version and signature stay in audit history.
         output2 = jobs.report_build(pid, pdf=True)
