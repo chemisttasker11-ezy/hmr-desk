@@ -383,7 +383,13 @@ def main():
         try:
             if path.suffix.lower() == '.pdf':
                 with fitz.open(path) as doc:
-                    pages[path] = [page.get_text() for page in doc]
+                    from pathlib import Path as _Path
+                    import importlib.util as _importlib_util
+                    _source_path = _Path(__file__).resolve().parents[2] / 'HMR Desk' / 'engine' / 'referral_source_text.py'
+                    _source_spec = _importlib_util.spec_from_file_location('referral_source_text', _source_path)
+                    _source_module = _importlib_util.module_from_spec(_source_spec)
+                    _source_spec.loader.exec_module(_source_module)
+                    pages[path], _ignored_typed_overlays = _source_module.extract_original_pages(doc)
                 if any(len(page.strip()) < 200 for page in pages[path]):
                     needs_ocr.append(path)
             elif path.suffix.lower() == '.doc':  # old Word format: let Word export it to PDF, read-only
