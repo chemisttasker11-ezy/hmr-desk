@@ -104,3 +104,44 @@ def test_searchable_scan_with_many_overlapping_words_still_warns(tmp_path):
             conn.close()
     finally:
         db.BASE = original_base
+
+
+def test_mixed_page_local_ocr_is_comparison_only_not_new_prescribed_directions(tmp_path):
+    """A fictional contradictory OCR result must not be promoted into referral fields."""
+    source = tmp_path / 'fictional-mixed.pdf'
+    raster = fitz.open()
+    p = raster.new_page(width=300, height=200)
+    p.insert_text((10, 35), 'Original image medicine directions must be checked')
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_text((25, 60), 'HMR Referral with current medications from a text layer')
+    page.insert_image(fitz.Rect(20, 100, 570, 720), pixmap=p.get_pixmap())
+    doc.save(source)
+    doc.close()
+    raster.close()
+
+    class ConflictingOCR:
+        def ocr_pdfs(self, paths):
+            return {str(paths[0]): ['OCR claims Fictionaldrug 50mg four times a day']}
+        def classify(self, text):
+            assert 'OCR claims' not in text
+            return 'referral', [], []
+        def extract_fields(self, text):
+            assert 'OCR claims' not in text
+            return {'name': 'Fictional Example'}, []
+
+    saved_base = db.BASE
+    try:
+        db.BASE = str(tmp_path)
+        conn = db.connect(str(tmp_path / 'mixed.db'))
+        try:
+            with patch.object(referral_entry, 'parser', return_value=ConflictingOCR()):
+                row = referral_entry.review(conn, [str(source)])['rows'][0]
+            assert row['status'] == 'review'
+            assert row['page_previews'][0]['ocr_comparison_unverified'].startswith('OCR claims')
+            assert 'OCR claims' not in row['page_previews'][0]['text']
+            assert all('OCR claims' not in str(value) for value in row['fields'].values())
+        finally:
+            conn.close()
+    finally:
+        db.BASE = saved_base
