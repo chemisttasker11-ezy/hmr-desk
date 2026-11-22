@@ -80,6 +80,9 @@ def review(conn, paths):
                     # OCR on a searchable image is a comparison only: never merge
                     # OCR strings or their unverified directions into source facts.
                     ocr_comparison = {i: (extracted[i] or '')[:1200] for i in mixed}
+                    for i, native_page in enumerate(pages):
+                        if len(native_page.strip()) < 25 and not (extracted[i] or '').strip():
+                            ocr_flags.append('Page ' + str(i + 1) + ': local OCR returned no readable text. Inspect the original image; do not assume the clinical fields are absent.')
                     pages = [page if len(page.strip()) >= 25 else (extracted[i] or '') for i, page in enumerate(pages)]
                 elif has_sparse_pages:
                     ocr_flags.append('OCR unavailable or incomplete: inspect the original PDF and enter referral details manually')
