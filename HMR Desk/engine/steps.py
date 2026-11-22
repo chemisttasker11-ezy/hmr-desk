@@ -145,10 +145,18 @@ def ready(name, conn, p, repeat=False):
         if not medicines_current(conn, p): return (False, 'confirm the medicine list first')
     elif name == 'report_build':
         if p['state'] == 'signed_off':
-            # A report may need an auditable replacement after new evidence
-            # invalidates its former sign-off. Never mark the old report sent
-            # and never allow an unchanged signed version to be rebuilt just
-            # through the queued readiness path.
+            # Only a real prior signature may be replaced. A state label alone
+            # (e.g. a migrated or corrupted record with no signed audit event)
+            # is not a clinical authorisation and cannot unlock this route.
+            signed = conn.execute(
+                "SELECT 1 FROM events WHERE patient_id=? AND type='signed_off' LIMIT 1",
+                (p['id'],),
+            ).fetchone()
+            if not signed:
+                return (False, 'patient is not awaiting report')
+            # New clinical evidence can require an auditable replacement.
+            # Never bypass the send gate or permit rebuilding a current
+            # signed version merely by retrying the queued worker.
             import report_auth
             try:
                 report_auth.check_sent(conn, p)
