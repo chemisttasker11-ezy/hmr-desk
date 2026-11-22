@@ -809,6 +809,22 @@ const H = (() => {
       },
       dirty,
       hasConflict: () => conflicts.length > 0,
+      // Read-only freshness check against the saved record (for example after an API or MCP save). It never writes and never replaces a
+      // dirty form on its own. Results: 'skipped' (save or check in flight, open conflict, no loader), 'unreachable', 'current',
+      // 'stale-clean' (saved data changed, the form has no unsaved edits: the caller may reload it) and 'conflict' (saved data changed
+      // while the form has unsaved edits: the existing conflict path keeps the draft for an explicit Restore or Keep choice).
+      async checkRemote() {
+        if (!getRecord() || !loadCurrent || conflicts.length || saving || verifying) return 'skipped';
+        const currentGeneration = generation, id = getId(), before = JSON.stringify(getRecord());
+        let current;
+        try { current = await loadCurrent(id); } catch (_) { return 'unreachable'; }
+        if (generation !== currentGeneration || id !== getId() || !getRecord() || saving || verifying || conflicts.length || !current || typeof current !== 'object') return 'skipped';
+        const currentSnapshot = JSON.stringify(current);
+        if (currentSnapshot === saved || equivalent?.(currentSnapshot, saved)) return 'current';
+        if (!dirty() && JSON.stringify(getRecord()) === before) return 'stale-clean';
+        await verifyCurrent();
+        return 'conflict';
+      },
       save,
       changed() {
         clearTimeout(timer);
