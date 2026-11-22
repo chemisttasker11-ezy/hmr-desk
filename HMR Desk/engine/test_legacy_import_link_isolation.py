@@ -15,6 +15,7 @@ import records
 @pytest.fixture
 def conn():
     db = sqlite3.connect(':memory:')
+    db.row_factory = sqlite3.Row
     try:
         yield db
     finally:
@@ -71,3 +72,41 @@ def test_linked_parent_directory_is_not_imported(conn, tmp_path):
         pytest.skip('real directory symlink needs privileges on this host')
     assert records.import_folder(conn, 11, linked_folder) == {}
     assert records.get(conn, 11, 'report_spec.json') is None
+
+
+def test_plain_copy_listing_does_not_follow_linked_record(conn, tmp_path, monkeypatch):
+    folder = tmp_path / 'fictional-patient'
+    folder.mkdir()
+    leaf = folder / 'interview.json'
+    leaf.write_bytes(b'{"notes":"invented"}')
+    records.put(conn, 11, 'interview.json', leaf.read_bytes())
+    real_link = Path.is_symlink
+    real_read = Path.read_bytes
+    monkeypatch.setattr(Path, 'is_symlink',
+                        lambda self: True if self == leaf else real_link(self))
+    def reject_read(self):
+        if self == leaf:
+            raise AssertionError('must not open linked leaf')
+        return real_read(self)
+    monkeypatch.setattr(Path, 'read_bytes', reject_read)
+    assert records.removable_files(conn, 11, folder) == []
+    conn.execute('CREATE TABLE patients(id INTEGER PRIMARY KEY)')
+    conn.execute('INSERT INTO patients(id) VALUES (11)')
+    state = records.status(conn, lambda p: folder)
+    assert state['plain_copies_matching_store'] == 0
+    assert state['plain_files_differing_or_not_stored'] == 1
+    assert state['saved_records_protected'] is False
+
+
+def test_status_does_not_traverse_linked_patient_directory(conn, tmp_path, monkeypatch):
+    folder = tmp_path / 'fictional-linked-folder'
+    folder.mkdir()
+    (folder / 'interview.json').write_bytes(b'{"notes":"invented"}')
+    conn.execute('CREATE TABLE patients(id INTEGER PRIMARY KEY)')
+    conn.execute('INSERT INTO patients(id) VALUES (11)')
+    original = Path.is_symlink
+    monkeypatch.setattr(Path, 'is_symlink',
+                        lambda self: True if self == folder else original(self))
+    state = records.status(conn, lambda p: folder)
+    assert state['plain_files_differing_or_not_stored'] >= 1
+    assert not state['saved_records_protected']
