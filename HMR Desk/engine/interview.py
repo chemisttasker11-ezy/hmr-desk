@@ -251,7 +251,6 @@ def geometry_table(folder):
         module = importlib.util.module_from_spec(specmod); specmod.loader.exec_module(module)
         with module.fitz.open(files[0]) as doc:
             import referral_source_text
-            for page in doc: referral_source_text.exclude_typed_annotations(page)
             pages = [([(w[0], w[1], w[2], w[3], w[4]) for w in page.get_text('words')], page.rect.height) for page in doc]
             scanned = [n + 1 for n, page in enumerate(doc) if referral_geometry.image_coverage(page) >= 0.5]
         result = referral_geometry.pair_document(pages)
@@ -270,9 +269,9 @@ def referral_text(folder):
         module = importlib.util.module_from_spec(specmod); specmod.loader.exec_module(module)
         with module.fitz.open(files[0]) as doc:
             import referral_source_text
-            pages, excluded_overlays = referral_source_text.extract_original_pages(doc)
-        if any(excluded_overlays):
-            clarify.append('Identifiable typed interview overlays excluded from original referral extraction; check any flattened overlays against original source')
+            pages, annotation_pages = referral_source_text.extract_original_pages(doc)
+        if any(item['count'] for item in annotation_pages):
+            clarify.append('Referral PDF contains typed FreeText annotations; text retained, original author and source attribution require pharmacist confirmation')
         if any(len(t.strip()) < 200 for t in pages):
             try:
                 ocr = module.ocr_pdfs([files[0]]).get(str(files[0]), [])
