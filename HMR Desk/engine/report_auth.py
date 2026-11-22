@@ -66,7 +66,7 @@ def clinical_snapshot_matches(conn, patient, stored):
     A truly absent marker means evidence written before the GP/clinic detail keys
     existed: compared with the legacy contract (see clinical_snapshot). A present
     marker must be exactly the integer 2 (the only value any build writes); null,
-    0, 1, true, strings and anything else fail. Nothing is rewritten.
+    0, 1, 4, true, strings and anything else fail. Nothing is rewritten.
     """
     import clinical_snapshot
     if not isinstance(stored, dict) or not isinstance(stored.get('clinical_snapshot_sha256'), str):
@@ -75,7 +75,7 @@ def clinical_snapshot_matches(conn, patient, stored):
         contract = clinical_snapshot.CONTRACT_LEGACY
     else:
         contract = stored['clinical_snapshot_contract']
-        if isinstance(contract, bool) or not isinstance(contract, int) or contract != clinical_snapshot.CONTRACT_CURRENT:
+        if isinstance(contract, bool) or not isinstance(contract, int) or contract not in (clinical_snapshot.CONTRACT_CURRENT, clinical_snapshot.CONTRACT_FIELD_REVIEW):
             return False
     return stored['clinical_snapshot_sha256'] == clinical_snapshot_hash(conn, patient, contract)
 
