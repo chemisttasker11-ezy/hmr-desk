@@ -1,9 +1,9 @@
-"""PHI-free page risk signals for local HMR referral source review.
+"""Read-only page layout signals for source-fidelity review of referrals.
 
-A PDF text layer is not evidence that image-only content on that page was read.
-This module deliberately does not OCR, infer field values, or invent coordinates.
+A large raster with searchable text over it is NOT proof that its OCR layer
+matches the underlying pixels. Never mark it as safely read merely because
+many native PDF words overlap the raster.
 """
-
 import fitz
 
 MIN_NATIVE_TEXT = 25
@@ -11,46 +11,52 @@ MIN_IMAGE_FRACTION = 0.20
 MAX_OVERLAPPING_WORDS = 5
 
 
-
 def inspect_page(page):
-    """Return non-clinical page layout metrics and an explicit mixed-page risk.
+    """Describe image regions, separate searchable overlay from unread regions.
 
-    Counts are observational signals, NOT an accuracy score. Some native words
-    may overlie an image (a searchable scan); other native words may sit outside
-    an image containing important unrecognised clinical facts.
+    This produces layout signals only. No diagnosis, directions, or source
+    association can be inferred or confirmed from these counts.
     """
     native = page.get_text("text")
     words = page.get_text("words")
-    page_rect = page.rect
-    page_area = max(float(page_rect.width * page_rect.height), 1.0)
+    bounds = page.rect
+    total_area = max(float(bounds.width * bounds.height), 1.0)
     image_area = 0.0
-    unknown_image_regions = 0
-    image_count = 0
-    for item in page.get_image_info():
-        if not item.get("bbox"):
+    images = 0
+    large_regions = 0
+    text_layer_regions = 0
+    unread_regions = 0
+    for entry in page.get_image_info():
+        if not entry.get("bbox"):
             continue
-        image_rect = fitz.Rect(item["bbox"]) & page_rect
-        if image_rect.is_empty:
+        region = fitz.Rect(entry["bbox"]) & bounds
+        if region.is_empty:
             continue
-        image_count += 1
-        area = max(float(image_rect.width * image_rect.height), 0.0)
+        images += 1
+        area = max(float(region.width * region.height), 0.0)
         image_area += area
-        overlap = 0
-        for word in words:
-            centre = fitz.Point((word[0] + word[2]) / 2, (word[1] + word[3]) / 2)
-            if image_rect.contains(centre):
-                overlap += 1
-        if area / page_area >= MIN_IMAGE_FRACTION and overlap <= MAX_OVERLAPPING_WORDS:
-            unknown_image_regions += 1
-    image_fraction = min(image_area / page_area, 1.0)
+        if area / total_area < MIN_IMAGE_FRACTION:
+            continue
+        large_regions += 1
+        overlapping_words = sum(
+            1 for word in words if region.contains(
+                fitz.Point((word[0] + word[2]) / 2, (word[1] + word[3]) / 2)
+            )
+        )
+        if overlapping_words > MAX_OVERLAPPING_WORDS:
+            text_layer_regions += 1
+        else:
+            unread_regions += 1
     native_present = len(native.strip()) >= MIN_NATIVE_TEXT
     return {
         "native_characters": len(native.strip()),
         "native_word_count": len(words),
-        "image_count": image_count,
-        "image_fraction": round(image_fraction, 4),
+        "image_count": images,
+        "image_fraction": round(min(image_area / total_area, 1.0), 4),
         "rotation": int(page.rotation),
         "native_present": native_present,
-        "needs_image_review": native_present and unknown_image_regions > 0,
-        "unread_image_regions": unknown_image_regions,
+        "needs_image_review": native_present and large_regions > 0,
+        "large_image_regions": large_regions,
+        "text_layer_over_image_regions": text_layer_regions,
+        "unread_image_regions": unread_regions,
     }
