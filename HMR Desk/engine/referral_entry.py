@@ -59,7 +59,7 @@ def review(conn, paths):
                 if doc.needs_pass: raise ValueError('PDF is password protected')
                 if not 1 <= doc.page_count <= MAX_PAGES:
                     raise ValueError('PDF page count exceeds the 150-page intake limit')
-                pages, excluded_overlays = referral_source_text.extract_original_pages(doc, max_chars=MAX_TEXT_PER_PAGE)
+                pages, annotation_pages = referral_source_text.extract_original_pages(doc, max_chars=MAX_TEXT_PER_PAGE)
                 page_audits = [referral_page_audit.inspect_page(p) for p in doc]
             if not pages: raise ValueError('PDF has no pages')
             methods = ['text' if len(page.strip()) >= 25 else 'ocr' for page in pages]
@@ -76,8 +76,8 @@ def review(conn, paths):
                 if hashlib.sha256(read_pdf(source)).hexdigest() != digest: raise ValueError('Source changed during review; try again')
             kind, _, flags = module.classify('\n'.join(pages))
             flags.extend(ocr_flags)
-            if any(excluded_overlays):
-                flags.append('Identifiable typed PDF interview overlays excluded from the original-referral proposal. Verify ambiguous or flattened overlays against the original source.')
+            if any(p['count'] for p in annotation_pages):
+                flags.append('PDF contains typed FreeText annotations that may be GP-authored or added later; all source text is retained and requires pharmacist attribution review.')
             for page_index, audit in enumerate(page_audits):
                 if audit['needs_image_review']:
                     flags.append('Page ' + str(page_index + 1) + ': substantial image content may contain unread clinical information. Inspect the original page; native text is incomplete evidence.')
@@ -101,10 +101,11 @@ def review(conn, paths):
             excerpts = [{'page': i + 1, 'method': ('text+unread_image' if page_audits[i]['needs_image_review'] else methods[i]), 'text': text[:1200]}
                         for i, text in enumerate(pages[:20])]
             item = {'source': source, 'sha256': digest, 'fields': fields, 'kind': kind,
-                    'page_previews': excerpts, 'page_count': len(pages), 'flags': flags}
+                    'page_previews': excerpts, 'annotation_evidence': annotation_pages[:20],
+                    'page_count': len(pages), 'flags': flags}
             conn.execute('INSERT INTO meta(key,value) VALUES (?,?)', ('referral_review_' + token, json.dumps(item)))
             row.update(token=token, kind=kind, fields=fields, flags=flags,
-                       page_previews=excerpts,
+                       page_previews=excerpts, annotation_evidence=annotation_pages[:20],
                        status='duplicate' if duplicate or content_dup or batch_dup else ('review' if kind == 'referral' else 'manual'),
                        duplicate_kind='content' if content_dup or digest in {x.get('sha256') for x in result} else ('identity' if duplicate or batch_dup else None),
                        sha256=digest,
@@ -244,6 +245,7 @@ def commit(conn, token, fields, distinct_person=False, manual_referral=False, cl
         source_record = {
             'schema_version': 1, 'sha256': item['sha256'], 'original_filename': Path(item['source']).name,
             'page_excerpts_unconfirmed': item.get('page_previews', []),
+            'annotation_evidence_unconfirmed': item.get('annotation_evidence', []),
             'extraction_flags': item.get('flags', []),
             'confirmed_identity_fields': {k: v.strip() for k, v in fields.items()},
             'manual_source_classification': bool(manual_referral),
