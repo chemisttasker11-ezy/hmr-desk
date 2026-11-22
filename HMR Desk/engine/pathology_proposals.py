@@ -366,10 +366,11 @@ def _single_panel_proposals(page, lines, source_id, digest):
 def _page_proposals(page, source_id, digest):
     if page.rotation:
         return [], ['Rotated page: source-cell geometry has not been validated']
-    page_area = max(page.rect.get_area(), 1)
-    if any((fitz.Rect(im['bbox']) & page.rect).get_area() > .7 * page_area
-           for im in page.get_image_info(xrefs=False)):
-        return [], ['Page-sized raster with text layer: unvalidated OCR; inspect original']
+    page_area = max(page.rect.width * page.rect.height, 1)
+    for image in page.get_image_info(xrefs=False):
+        covering = fitz.Rect(image['bbox']) & page.rect
+        if covering.width * covering.height > .7 * page_area:
+            return [], ['Page-sized raster with text layer: unvalidated OCR; inspect original']
     lines = _lines(page)
     candidates = [(i, _header(line)) for i, line in enumerate(lines)]
     candidates = [(i, h) for i, h in candidates if h]
