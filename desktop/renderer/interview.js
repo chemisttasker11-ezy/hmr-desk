@@ -831,8 +831,19 @@ async function interviewClick(b) {
     renderInterview(); return true;
   }
   if (b.dataset.pathologyReloadSources !== undefined) {
-    try { pathologySourceIndex = await hmr.api('GET', `/api/patients/${encodeURIComponent(interviewId)}/pathology/sources`); }
-    catch (error) { interviewPathologyError = errorText(error); }
+    // Capture the patient and screen generation before the asynchronous read.
+    // A slow reply must not replace another patient's original-source list.
+    const sourcePatient = interviewId, sourceRequest = interviewRequest;
+    const current = () => page === 'interview' && interviewId === sourcePatient && interviewRequest === sourceRequest;
+    try {
+      const sources = await hmr.api('GET', `/api/patients/${encodeURIComponent(sourcePatient)}/pathology/sources`);
+      if (!current()) return true;
+      pathologySourceIndex = sources;
+      interviewPathologyError = '';
+    } catch (error) {
+      if (!current()) return true;
+      interviewPathologyError = errorText(error);
+    }
     renderInterview(); return true;
   }
   if (b.dataset.observationsReload !== undefined) {
