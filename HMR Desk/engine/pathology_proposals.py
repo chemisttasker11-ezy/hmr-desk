@@ -167,6 +167,25 @@ def _proposal(source_id, digest, page, column_label, names, original,
     }
 
 
+# A visible laboratory interval is enclosed in parentheses. Extract only the
+# parenthesised numeric interval, never nearby vertical watermark or note text.
+# Unrecognised intervals remain unpopulated for pharmacist review.
+CUMULATIVE_INTERVAL = re.compile(
+    r'(?i)^\(\s*(?:[<>]=?\s*|over\s+|below\s+|above\s+)?'
+    r'-?\d+(?:\.\d+)?(?:\s*[-–]\s*-?\d+(?:\.\d+)?)?\s*\)$')
+
+
+def _cumulative_reference(words):
+    for i, word in enumerate(words):
+        if not str(word[4]).startswith('('):
+            continue
+        for j in range(i, min(i + 5, len(words))):
+            text = _text(words[i:j + 1])
+            if text.endswith(')'):
+                return (text, words[i:j + 1]) if CUMULATIVE_INTERVAL.fullmatch(text) else ('', [])
+    return '', []
+
+
 def _cumulative_proposals(page, lines, source_id, digest):
     """Cumulative biochemistry: 'Date' plus dated results, printed units/ranges.
 
@@ -213,8 +232,8 @@ def _cumulative_proposals(page, lines, source_id, digest):
         # lab IDs, notes, ranges or numbers outside the result-column area.
         value_area = [w for w in words
                       if xs[0]-20 <= (w[0]+w[2])/2 < unitword[0]-8]
-        reference_words = [w for w in words if w[0] >= unitword[2]+2]
-        printed_reference = _text(reference_words)
+        trailing_words = [w for w in words if w[0] >= unitword[2] + 2]
+        printed_reference, reference_words = _cumulative_reference(trailing_words)
         unit = str(unitword[4])
         for j, (header, date) in enumerate(columns):
             left = xs[j]-min(26.0, (xs[j]-xs[j-1])*0.42) if j else xs[j]-24.0
