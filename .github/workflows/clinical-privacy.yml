@@ -4,6 +4,8 @@ on:
     paths:
       - 'HMR Desk/engine/clinical_privacy.py'
       - 'HMR Desk/engine/test_clinical_privacy.py'
+      - 'HMR Desk/engine/conftest.py'
+      - 'HMR Desk/engine/test_legacy_signoff_fixture.py'
       - 'HMR Desk/engine/jobs.py'
       - 'HMR Desk/engine/api.py'
       - 'HMR Desk/engine/report.py'
@@ -34,4 +36,4 @@ jobs:
         run: python -m py_compile clinical_privacy.py jobs.py steps.py settings.py service.py api.py report.py manual_defaults.py reconciliation.py local_report_builder.py
       - name: Privacy projection and local server regression tests
         working-directory: HMR Desk/engine
-        run: python -m pytest -q test_clinical_privacy.py test_service_static_security.py test_manual_foundation.py
+        run: python -m pytest -q test_clinical_privacy.py test_service_static_security.py test_manual_foundation.py test_legacy_signoff_fixture.py
