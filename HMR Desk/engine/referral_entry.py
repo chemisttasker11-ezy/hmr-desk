@@ -12,6 +12,7 @@ import clinical_review
 import db
 import app_paths
 import fitz
+import referral_page_audit
 
 MAX_PDF = 25 * 1024 * 1024
 MAX_PAGES = 150
@@ -58,6 +59,7 @@ def review(conn, paths):
                 if not 1 <= doc.page_count <= MAX_PAGES:
                     raise ValueError('PDF page count exceeds the 150-page intake limit')
                 pages = [p.get_text()[:MAX_TEXT_PER_PAGE] for p in doc]
+                page_audits = [referral_page_audit.inspect_page(p) for p in doc]
             if not pages: raise ValueError('PDF has no pages')
             methods = ['text' if len(page.strip()) >= 25 else 'ocr' for page in pages]
             ocr_flags = []
@@ -73,6 +75,9 @@ def review(conn, paths):
                 if hashlib.sha256(read_pdf(source)).hexdigest() != digest: raise ValueError('Source changed during review; try again')
             kind, _, flags = module.classify('\n'.join(pages))
             flags.extend(ocr_flags)
+            for page_index, audit in enumerate(page_audits):
+                if audit['needs_image_review']:
+                    flags.append('Page ' + str(page_index + 1) + ': substantial image content may contain unread clinical information. Inspect the original page; native text is incomplete evidence.')
             # Intake never fills the clinical box: the pharmacist enters it from the original. Later, the interview can
             # read medicines, conditions and allergies only from recognised referral layouts, so say plainly when
             # this PDF is not one. A flag only; nothing is inferred or changed.
@@ -90,7 +95,7 @@ def review(conn, paths):
             seen_hashes.add(digest)
             if key: seen_keys.add(key)
             token = uuid.uuid4().hex
-            excerpts = [{'page': i + 1, 'method': methods[i], 'text': text[:1200]}
+            excerpts = [{'page': i + 1, 'method': ('text+unread_image' if page_audits[i]['needs_image_review'] else methods[i]), 'text': text[:1200]}
                         for i, text in enumerate(pages[:20])]
             item = {'source': source, 'sha256': digest, 'fields': fields, 'kind': kind,
                     'page_previews': excerpts, 'page_count': len(pages), 'flags': flags}
