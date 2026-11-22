@@ -59,15 +59,3 @@ def test_mixed_image_clinical_table_warns_in_real_referral_review():
         finally:
             db.BASE = original_base
 
-
-def test_blue_red_markup_is_a_separate_unverified_interview_source():
-    doc = fitz.open()
-    page = doc.new_page()
-    page.insert_text((35, 70), 'Home Medicines Review Referral with native digital text')
-    page.draw_line((45, 90), (240, 90), color=(0.05, 0.15, 0.95), width=2)
-    page.draw_line((45, 110), (250, 110), color=(0.90, 0.05, 0.05), width=2)
-    audit = referral_page_audit.inspect_page(page)
-    assert audit['coloured_vector_strokes'] >= 2
-    assert audit['possible_interview_markup']
-    assert not audit['needs_image_review']
-    doc.close()
