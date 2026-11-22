@@ -4,6 +4,11 @@ from pathlib import Path
 import tempfile
 from unittest.mock import patch
 import api, db, importer, jobs, steps
+import legacy_ppa_double
+import legacy_signoff_support
+import report_auth
+
+api.claims_helper, api.record = legacy_ppa_double.claims_helper, legacy_ppa_double.record  # wiring doubles; the real PPA helper is not in the repository
 
 with tempfile.TemporaryDirectory() as tmp:
     base = Path(tmp); db.BASE = tmp
@@ -79,7 +84,7 @@ with tempfile.TemporaryDirectory() as tmp:
     try:
         act(p7, 'expired')
         raise AssertionError('expected database failure')
-    except __import__('sqlite3').IntegrityError:
+    except (__import__('sqlite3').IntegrityError, __import__('sqlcipher3.dbapi2', fromlist=['x']).IntegrityError):  # the engine database is SQLCipher
         pass
     assert source.exists() and row(p7)['state'] == 'new' and row(p7)['folder'] == str(source.relative_to(base))
     conn.execute('DROP TRIGGER fail_folder')
@@ -101,7 +106,13 @@ with tempfile.TemporaryDirectory() as tmp:
     act(archived, 'unarchive'); assert row(archived)['archived_at'] is None
     for state, action, field in [('confirmed','visited','visit_date'), ('signed_off','report_sent','report_sent'), ('sent','claimed','claimed')]:
         pid = patient('Undo '+action, state)
-        act(pid, action, date='2020-01-01')
+        if action == 'report_sent':  # sending needs real, hash-bound sign-off evidence; the gate itself runs unchanged
+            (base / 'Scheduled' / ('Undo ' + action)).mkdir(parents=True); conn.execute('UPDATE patients SET folder=? WHERE id=?', ('Scheduled/Undo ' + action, pid)); conn.commit()
+            request = legacy_signoff_support.approve(conn, pid)
+            with legacy_signoff_support.reviewed_interview():
+                db.log(conn, pid, 'signed_off', report_auth.check_approval(conn, row(pid), request), 'app'); conn.commit()
+                act(pid, action, date='2020-01-01')
+        else: act(pid, action, date='2020-01-01')
         detail = api.handle(conn, 'GET', f'/api/patients/{pid}', {}, None)[1]
         assert detail['can_undo'] and detail['undo_label'].startswith('Undo: ')
         act(pid, 'undo_stage')
@@ -110,7 +121,13 @@ with tempfile.TemporaryDirectory() as tmp:
         assert visit and visit[field] is None
         assert conn.execute("SELECT 1 FROM events WHERE patient_id=? AND type='undo_stage'", (pid,)).fetchone()
     for state, action in [('visited','report_drafted'), ('report_drafted','signed_off')]:
-        pid = patient('Undo '+action, state); act(pid, action); act(pid, 'undo_stage'); assert row(pid)['state'] == state
+        pid = patient('Undo '+action, state)
+        if action == 'signed_off':
+            (base / 'Scheduled' / ('Undo ' + action)).mkdir(parents=True); conn.execute('UPDATE patients SET folder=? WHERE id=?', ('Scheduled/Undo ' + action, pid)); conn.commit()
+            request = legacy_signoff_support.approve(conn, pid)
+            with legacy_signoff_support.reviewed_interview(): act(pid, action, **{k: v for k, v in request.items() if k != 'action'})
+        else: act(pid, action)
+        act(pid, 'undo_stage'); assert row(pid)['state'] == state
     pid = patient('Invalid Undo', 'visited'); reject(pid, 'undo_stage')
     db.log(conn, pid, 'state', {'from':'confirmed','to':'visited'}, 'engine'); reject(pid, 'undo_stage')
     db.log(conn, pid, 'state', {'from':'confirmed','to':'visited'}, 'app')

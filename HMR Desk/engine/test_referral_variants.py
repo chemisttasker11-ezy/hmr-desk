@@ -91,3 +91,28 @@ def test_pdf_batch_limit_rejects_more_than_100_sources(case):
     conn,tmp,_=case
     with pytest.raises(ValueError,match='up to 100'):
         referral_entry.review(conn,[str(tmp/'missing.pdf')]*101)
+
+
+
+def test_review_preview_keeps_columns_first_pdf_text_and_original_bytes(case):
+    """The intake review must not pretend that column-first text is paired."""
+    conn, tmp, _ = case
+    pdf = tmp / 'synthetic-two-columns.pdf'
+    doc = fitz.open(); page = doc.new_page()
+    page.insert_text((40, 50), 'Synthetic HMR referral', fontsize=11)
+    page.insert_text((40, 75), 'Current Medications', fontsize=11)
+    for i, name in enumerate(('Lunovex 5mg Tablet', 'Fictamol 10mg Capsule')):
+        page.insert_text((40, 110 + 24 * i), name, fontsize=10)
+    for i, directions in enumerate(('1 Taplet Daily', '2 Capsules At night')):
+        page.insert_text((300, 110 + 24 * i), directions, fontsize=10)
+    page.insert_text((40, 190), 'Allergies', fontsize=11)
+    page.insert_text((40, 210), 'Synthetic source page: all details require review.', fontsize=9)
+    doc.save(pdf); doc.close()
+    original = pdf.read_bytes()
+    reviewed = referral_entry.review(conn, [str(pdf)])['rows'][0]
+    assert reviewed['status'] == 'review'
+    assert reviewed['page_previews'][0]['method'] == 'text'
+    preview = reviewed['page_previews'][0]['text']
+    assert preview.index('Fictamol 10mg') < preview.index('1 Taplet Daily')
+    assert 'Taplet' in preview and pdf.read_bytes() == original
+    assert reviewed['sha256']

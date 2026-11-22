@@ -21,6 +21,7 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.table import Table
 from docx.text.paragraph import Paragraph
+from docx.shared import Emu
 
 TEXT_FIELDS = {
     'ASSESS_DATE': 'assess_date', 'REPORT_DATE': 'report_date',
@@ -263,6 +264,44 @@ def _paginate_rows(table):
                 properties.append(OxmlElement('w:' + name))
 
 
+def _adapt_gp_plan_prototype(table, include_gp_plan):
+    """Adjust only the optional trailing GP Plan column; preserve the template and other report fields.
+
+    When adding the column, take its width from the existing table rather than expanding
+    beyond the page. The source DOCX is never modified; the pharmacist reviews the
+    resulting Word/PDF before clinical sign-off.
+    """
+    count = len(table.columns)
+    if count == 5 and (not table.rows or ''.join(table.rows[0].cells[-1].text.casefold().split()) not in ('gpplan', 'gpplan/feedback')):
+        raise ValueError('Five-column owner template must label its last column GP Plan')
+    if include_gp_plan and count == 4:
+        original = [int(col.width or Emu(800000)) for col in table.columns]
+        total = sum(original)
+        extra = max(1, total // 6)
+        table.autofit = False
+        for col, width in zip(table.columns, original):
+            col.width = Emu(max(1, round(width * (total - extra) / total)))
+        table.add_column(Emu(extra))
+        for row in table.rows:
+            new_cell, source_cell = row.cells[-1], row.cells[-2]
+            if source_cell._tc.tcPr is not None:
+                old_props = new_cell._tc.tcPr
+                if old_props is not None:
+                    new_cell._tc.remove(old_props)
+                new_cell._tc.insert(0, deepcopy(source_cell._tc.tcPr))
+            for cell, col in zip(row.cells, table.columns):
+                cell.width = col.width
+        _set_cell_text(table.rows[0].cells[-1], 'GP Plan')
+    elif not include_gp_plan and count == 5:
+        # Remove only a clearly labelled GP Plan column. Never discard an unrelated
+        # fifth column from an approved template.
+        for row in table.rows:
+            row._tr.remove(row.cells[-1]._tc)
+        table._tbl.tblGrid.remove(table._tbl.tblGrid[-1])
+    elif count not in (4, 5):
+        raise ValueError('Owner medication table needs four columns or a fifth GP Plan column')
+
+
 def _fill_prototype_table(prototype, rows, labels):
     """Clone the template's own header and sample row; keep its shading, borders, fonts."""
     if len(prototype.rows) < 2:
@@ -301,7 +340,7 @@ def has_marker(template, name):
     return any(marker in p.text for p in _paragraphs(Document(Path(template))))
 
 
-def render(data, target, template):
+def render(data, target, template, include_gp_plan=False):
     """Fill approved layout in place, preserving letterhead, margins and footer."""
     target, template = Path(target), Path(template)
     if target.exists():
@@ -359,12 +398,17 @@ def render(data, target, template):
         if anchor.text.strip() != marker or anchor._p.getparent().tag.endswith('}tc'):
             raise ValueError('Table placeholder must occupy its own body paragraph: ' + marker)
         rows = data[key]
+        if name == 'MEDS_TABLE' and include_gp_plan:
+            labels = (*labels, 'GP Plan')
+            rows = [list(row) + [''] for row in rows]
         if not isinstance(rows, list):
             raise ValueError('Invalid table rows')
         following = anchor._p.getnext()
         if following is not None and following.tag.endswith('}tbl'):
             # The approved layout carries its own prototype table right after the marker.
             prototype = Table(following, anchor._parent)
+            if name == 'MEDS_TABLE':
+                _adapt_gp_plan_prototype(prototype, include_gp_plan)
             if rows:
                 _fill_prototype_table(prototype, rows, labels)
             else:

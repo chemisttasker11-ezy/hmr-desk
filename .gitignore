@@ -54,3 +54,13 @@ app-config.json
 
 # Native Windows distributables are downloaded and checksum-verified on build hosts
 /vendor/
+
+# Generated from the tracked Brainstorm extraction by the shared packaging tool
+/HMR Desk/engine/assets/brainstorm-mmr-v2.0-tables.json
+/HMR Desk/engine/assets/brainstorm-tables-manifest.json
+
+# Private owner case library (patient-level text). Never tracked, never packaged. Loaded at runtime from the data folder.
+/HMR Desk/engine/assets/references/
+/HMR Desk/engine/assets/private-references/
+case-index.jsonl
+brainstorm-v2.pdf

@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS patients (
   key TEXT UNIQUE NOT NULL,          -- patient_key(name): stable match across files
   name TEXT NOT NULL,
   phone TEXT, address TEXT, suburb TEXT, postcode TEXT,
-  gp TEXT, clinic TEXT, referral_date TEXT,
+  gp TEXT, clinic TEXT, gp_provider TEXT, clinic_address TEXT, clinic_phone TEXT, referral_date TEXT,
   dob TEXT, sex TEXT, medicare TEXT, irn TEXT, ihi TEXT,
   state TEXT NOT NULL DEFAULT 'new',  -- state machine, see STATES
   status_text TEXT,                   -- wording shown on the dashboard (plan JSON "Status")
@@ -93,7 +93,7 @@ STATES = {
 }
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 # Migration 1 preserves historical table contents and upgrades only missing columns.
 # Future migrations must be appended as new numbered steps; never edit an applied step.
@@ -110,6 +110,13 @@ _ADDITIVE_COLUMNS = (
     ('messages', 'ai_confidence', 'REAL'),
     ('messages', 'ai_reply', 'TEXT'),
     ('messages', 'ai_draft_id', 'TEXT'),
+)
+
+
+_GP_PRACTICE_COLUMNS = (
+    ('patients', 'gp_provider', 'TEXT'),
+    ('patients', 'clinic_address', 'TEXT'),
+    ('patients', 'clinic_phone', 'TEXT'),
 )
 
 
@@ -133,6 +140,12 @@ def migrate_schema(conn):
                 if column not in names:
                     conn.execute(f'ALTER TABLE {table} ADD COLUMN {column} {definition}')
             conn.execute('PRAGMA user_version = 1')
+        if version < 2:
+            for table, column, definition in _GP_PRACTICE_COLUMNS:
+                names = {row[1] for row in conn.execute(f'PRAGMA table_info({table})')}
+                if column not in names:
+                    conn.execute(f'ALTER TABLE {table} ADD COLUMN {column} {definition}')
+            conn.execute('PRAGMA user_version = 2')
         conn.commit()
     except Exception:
         conn.rollback()

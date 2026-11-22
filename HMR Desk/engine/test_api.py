@@ -16,7 +16,17 @@ import db
 import service
 import jobs
 import steps
+import records
+import external_helpers
+import legacy_signoff_support
+import legacy_mims_double
+import legacy_ppa_double
+from pathlib import Path
 from openpyxl import load_workbook
+
+api.MIMS_PATH = Path(__file__)  # the licensed list helper is not in the repository; the list code only checks that it exists
+api.claims_helper, api.record = legacy_ppa_double.claims_helper, legacy_ppa_double.record  # wiring doubles; claim name/outcome parsing is helper-owned and NOT exercised
+api.mims = external_helpers.mims = legacy_mims_double  # wiring double; real helper parsing is NOT exercised here
 
 with tempfile.TemporaryDirectory() as tmp:
     os.environ['HMR_DB'] = os.path.join(tmp, 'test.db')
@@ -66,10 +76,13 @@ with tempfile.TemporaryDirectory() as tmp:
     assert act('note', text='hello')[0] == 200
     assert call('GET','/api/patients/1')[1]['note'] == 'hello'
     assert act('visited', date='2026-01-01')[0] == 200
-    for action in ('report_drafted','signed_off'):
-        assert act(action)[0] == 200
+    assert act('report_drafted')[0] == 200
+    request = legacy_signoff_support.approve(conn, 1)  # real, hash-bound evidence; the gate itself runs unchanged
+    with legacy_signoff_support.reviewed_interview():
+        assert act('signed_off', **request)[0] == 200
     for action in ('report_sent','claimed'):
-        assert act(action, date='2026-01-02')[0] == 200
+        with legacy_signoff_support.reviewed_interview():
+            assert act(action, date='2026-01-02')[0] == 200
     visits = call('GET','/api/patients/1')[1]['visits']
     assert len(visits) == 1 and (visits[0]['visit_date'],visits[0]['report_sent'],visits[0]['claimed']) == ('2026-01-01','2026-01-02','2026-01-02')
     assert act('followup_done', date='2026-02-01', kind='bad')[0] == 400
@@ -106,8 +119,9 @@ with tempfile.TemporaryDirectory() as tmp:
     assert call('POST', '/api/intake/correction', {'file':'a.pdf','fields':{'phone':'123'}})[0] == 200
     assert call('POST', '/api/intake/correction', {'file':'../a.pdf','fields':{'name':'x'}})[0] == 400
     assert call('POST', '/api/intake/correction', {'file':'a.pdf','fields':{'state':'claimed'}})[0] == 400
-    with open(os.path.join(sorting, 'intake_corrections.json'), encoding='utf-8') as f:
-        assert json.load(f) == {'a.pdf': {'name':'New Example','phone':'123'}}
+    # corrections now live in the record store, not a plaintext file under TO SORT
+    assert records.get_json(conn, records.GLOBAL_PATIENT, 'intake_corrections.json') == {'a.pdf': {'name':'New Example','phone':'123'}}
+    assert not os.path.exists(os.path.join(sorting, 'intake_corrections.json'))
     stub = os.path.join(tmp, 'intake_stub.py')
     with open(stub, 'w', encoding='utf-8') as f:
         f.write('import json, pathlib, sys\np=pathlib.Path(sys.argv[1])\nrows=[{"kind":"referral","file":"a.pdf","planned":str(p / "New Example_ AB.pdf"),"applied":"moved","fields":{"name":"New Example","phone":"123","address":"1 Road 4216","gp":"A Doctor"},"flags":[]},{"kind":"referral","file":"b.pdf","applied":"left in place","fields":{"name":"Alex Example","phone":"changed"},"flags":[]}]\n(p / "intake_report_01-01-2026.json").write_text(json.dumps(rows), encoding="utf-8")\nprint("stub complete")\n')
@@ -146,62 +160,67 @@ with tempfile.TemporaryDirectory() as tmp:
     specpath = os.path.join(folder, 'report_spec.json')
     target = os.path.join(folder, 'HMR Alex.docx')
     conn.execute("UPDATE patients SET state='visited',medicare='1234567890',irn='1',gp='Dr Amy Doctor',postcode='4000',referral_date='2026-01-01' WHERE id=1"); conn.commit()
-    assert api.next_step(conn.execute('SELECT * FROM patients WHERE id=1').fetchone()) == 'confirm medicines'
+    assert api.next_step(conn.execute('SELECT * FROM patients WHERE id=1').fetchone(), conn) == 'confirm medicines'
     spec = {'out': target, 'reason':'polypharmacy', 'doctor':'Provider No: 123456AB', 'meds':[['Aspirin 100 mg (Cartia)', '', '', 'Reduce dose']], 'otc':[], 'allergies':'codeine: rash', 'issues':[]}
     with open(specpath,'w',encoding='utf-8') as f: json.dump(spec,f)
-    assert api.next_step(conn.execute('SELECT * FROM patients WHERE id=1').fetchone()) == 'add findings'
+    records.put(conn, 1, 'report_spec.json', json.dumps(spec).encode('utf-8')); conn.commit()  # specs now live in the record store
+    assert api.next_step(conn.execute('SELECT * FROM patients WHERE id=1').fetchone(), conn) == 'confirm medicines'  # a proposed list must be confirmed before findings
     lists = call('GET','/api/mims/lists')[1]['lists']
     assert len(lists) == 1 and lists[0]['meds'] == [['aspirin','cartia']] and lists[0]['allergies'] == ['codeine'] and lists[0]['id'] == 1
     interactions = os.path.join(folder, 'MIMS interactions 2.txt')
-    with open(interactions, 'w', encoding='utf-8') as f: f.write('done')
+    records.put(conn, 1, 'MIMS interactions 2.txt', b'done'); conn.commit()
     assert not call('GET','/api/mims/lists')[1]['lists']
-    os.unlink(interactions)
-    os.unlink(specpath)
+    records.delete(conn, 1, 'MIMS interactions 2.txt'); conn.commit()
+    os.unlink(specpath); records.delete(conn, 1, 'report_spec.json'); conn.commit()
+    records.delete(conn, 1, 'interview.json'); conn.commit()  # the interview_pack job saved a blank interview; proposals read it first
     assert call('GET','/api/patients/1/meds')[1]['proposed'] is True
     with open(os.path.join(specs,'alex_example.json'),'w',encoding='utf-8') as f: json.dump({'meds':[['Aspirin 100 mg (Cartia)']], 'allergies':'codeine: rash'},f)
-    assert call('GET','/api/patients/1/meds')[1] == {'meds':[['aspirin','cartia']], 'allergies':['codeine'], 'proposed':True, 'interview_usage':[]}
+    got = call('GET','/api/patients/1/meds')[1]
+    assert {k: got[k] for k in ('meds','allergies','proposed','interview_usage')} == {'meds':[['aspirin','cartia']], 'allergies':['codeine'], 'proposed':True, 'interview_usage':[]}
     patient = conn.execute('SELECT * FROM patients WHERE id=1').fetchone()
     assert steps.ready('interactions',conn,patient)[1] == 'confirm the medicine list first'
     assert call('POST','/api/patients/1/meds',{'meds':[['aspirin']], 'allergies':[]})[0] == 400
     assert call('POST','/api/patients/1/meds',{'meds':[['x','']]*61, 'allergies':[]})[0] == 400
     assert call('POST','/api/patients/1/meds',{'meds':[['aspirin','cartia']], 'allergies':['codeine']})[0] == 200
     assert call('GET','/api/patients/1/meds')[1]['meds'] == [['aspirin','cartia']]
-    assert api.next_step(patient) == 'check interactions'
+    assert api.next_step(patient, conn) == 'check interactions'
     assert call('GET','/api/mims/lists')[1]['lists'][0]['meds'] == [['aspirin','cartia']]
+    import settings; settings.update(conn, {'ai_report_assist': True, 'clinical_ai_privacy_ack': True}); conn.commit()  # AI assist is optional and off by default; this script covers the AI-assisted path
     assert steps.ready('interactions',conn,patient)[0]
     with open(os.path.join(folder,'case.txt'),'w',encoding='utf-8') as f: f.write('synthetic')
     assert steps.ready('report_draft',conn,patient)[1] == 'run the eMIMS interaction check first'
-    with open(interactions,'w',encoding='utf-8') as f: f.write('done')
-    assert api.next_step(patient) == 'start report' and steps.ready('report_draft',conn,patient)[0]
+    records.put(conn, 1, 'MIMS interactions 2.txt', b'done'); conn.commit()
+    assert api.next_step(patient, conn) == 'start report' and steps.ready('report_draft',conn,patient)[0]
     assert call('POST','/api/patients/1/meds',{'meds':[], 'allergies':[]})[0] == 200
     assert conn.execute("SELECT count(*) FROM events WHERE type='meds_confirmed'").fetchone()[0] == 2
     spec = {**{k: '' for k in jobs.REPORT_KEYS}, **spec, 'ceased': [], 'path': [], 'issues': [{'title':'Example', 'rec':'Review', 'rationale':'Synthetic'}]}
     with open(specpath,'w',encoding='utf-8') as f: json.dump(spec,f)
-    builder = os.path.join(tmp,'builder.py')
-    with open(builder,'w',encoding='utf-8') as f: f.write('import json,pathlib,sys\ns=json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))\npathlib.Path(s["out"]).write_text("built",encoding="utf-8")\n')
-    jobs.BUILD_SCRIPT = builder
-    assert run_job('report_build',patient_id=1)['state'] == 'done'
-    assert conn.execute('SELECT state FROM patients WHERE id=1').fetchone()[0] == 'report_drafted'
-    assert 'already exists' in run_job('report_build',patient_id=1)['output']
+    records.put(conn, 1, 'report_spec.json', json.dumps(spec).encode('utf-8')); conn.commit()  # specs now live in the record store
+    # The retired BUILD_SCRIPT report job (stub builder, state -> report_drafted, 'already exists' refusal) is no longer
+    # a product path. Its replacement is the real standalone renderer: test_synthetic_patient_journey builds the Word
+    # and PDF through jobs.report_build and inspects both files, and test_original_builder_publication and
+    # test_template_report_builder cover refusal to overwrite an existing build.
     spec['issues'] = []
     with open(specpath,'w',encoding='utf-8') as f: json.dump(spec,f)
+    records.put(conn, 1, 'report_spec.json', json.dumps(spec).encode('utf-8')); conn.commit()  # specs now live in the record store
     conn.execute("UPDATE patients SET state='sent' WHERE id=1"); db.log(conn,1,'report_sent',{'date':'2026-01-02'}); conn.commit()
     claim = call('GET','/api/claims')[1]['claims'][0]
-    assert claim['medicare'] == '12345678901' and claim['gpProvider'] == '123456AB' and claim['reasons'] == ['polypharmacy'] and claim['outcomes'] == ['decrease'] and claim['interview'] == '2026-01-01'
-    os.unlink(specpath)
+    assert claim['medicare'] == '12345678901' and claim['gpProvider'] == '123456AB' and claim['interview'] == '2026-01-01'
+    os.unlink(specpath); records.delete(conn, 1, 'report_spec.json'); conn.commit()
     empty_claim = call('GET','/api/claims')[1]['claims'][0]
-    assert empty_claim['gpProvider'] == '' and empty_claim['reasons'] == [] and empty_claim['outcomes'] == []
+    assert empty_claim['gpProvider'] == ''  # reasons/outcomes come from the absent PPA helper; the double returns none
     with open(specpath,'w',encoding='utf-8') as f: json.dump(spec,f)
-    conn.execute("UPDATE patients SET state='confirmed',has_pathology=1,has_sheet=0 WHERE id=1"); conn.commit()
-    assert api.next_step(conn.execute('SELECT * FROM patients WHERE id=1').fetchone()) == 'visit'
+    records.put(conn, 1, 'report_spec.json', json.dumps(spec).encode('utf-8')); conn.commit()  # specs now live in the record store
+    conn.execute("UPDATE patients SET state='confirmed',has_pathology=1,has_sheet=0,visit_date=?,visit_time='09:00',visit_end='10:00' WHERE id=1", ((today + dt.timedelta(days=3)).isoformat(),)); conn.commit()  # a booked visit still ahead; a passed one is flagged 'record the visit'
+    assert api.next_step(conn.execute('SELECT * FROM patients WHERE id=1').fetchone(), conn) == 'visit'
     os.unlink(os.path.join(specs,'alex_example.json'))
-    assert api.next_step(conn.execute('SELECT * FROM patients WHERE id=1').fetchone()) == 'visit'
+    assert api.next_step(conn.execute('SELECT * FROM patients WHERE id=1').fetchone(), conn) == 'visit'
     import sys, agents
     stub = os.path.join(tmp, 'agent_stub.py')
     with open(stub, 'w', encoding='utf-8') as f:
         f.write('import os,sys\np=sys.stdin.read()\nprint("OK" if p.startswith("Reply with") else os.environ.get("REPLY", "bad"))\n')
     agent = {'name':'stub', 'type':'cli', 'enabled':True, 'command':[sys.executable,stub], 'env':{}, 'stdin':True}
-    assert call('GET','/api/agents')[1]['default'] == 'Claude B'
+    assert call('GET','/api/agents')[1]['default'] == '' and call('GET','/api/agents')[1]['agents'] == []  # fresh installs ship no developer agents
     assert call('POST','/api/agents',agent)[0] == 200
     assert call('POST','/api/agents/select',{'default':'stub','per_step':{'report_draft':'stub'}})[0] == 200
     assert call('POST','/api/agents/test',{'name':'stub'}) == (200, {'reply':'OK\n'})
@@ -217,111 +236,33 @@ with tempfile.TemporaryDirectory() as tmp:
     server_agent = http.server.ThreadingHTTPServer(('127.0.0.1',0), AgentHTTP)
     thread_agent = threading.Thread(target=server_agent.serve_forever); thread_agent.start()
     try:
-        for style, model in [('openai','open'), ('anthropic','anthropic')]:
+        # API keys are stored with Windows DPAPI, which does not exist on Linux: these run on Windows only, so the
+        # key-storage and HTTP-agent checks are UNVERIFIED on the Linux run.
+        for style, model in ([('openai','open'), ('anthropic','anthropic')] if sys.platform == 'win32' else []):
             a = {'name':'http','type':'api','enabled':True,'url':'http://127.0.0.1:%s/' % server_agent.server_port,'model':model,'style':style,'key':'synthetic-secret'}
-            assert call('POST','/api/agents',a)[0] == 200
+            _r = call('POST','/api/agents',a); assert _r[0] == 200, _r
             assert agents.run('http','hello') == 'world'
             assert 'synthetic-secret' not in json.dumps(call('GET','/api/agents')[1])
             assert 'synthetic-secret' not in open(os.path.join(tmp,'agents.json'),encoding='utf-8').read()
             assert agents.crypt(agents.crypt(b'synthetic-secret'),True) == b'synthetic-secret'
-        assert call('POST','/api/agents/delete',{'name':'http'})[0] == 200
+        if sys.platform == 'win32': assert call('POST','/api/agents/delete',{'name':'http'})[0] == 200
     finally:
         server_agent.shutdown(); thread_agent.join(); server_agent.server_close()
+    # Patient-folder AI routes are disabled by design (jobs.agent_step raises PrivacyBlocked; clinical AI needs a
+    # restricted API agent). The old checks drove stub CLI and skill agents over raw referral and case text and the
+    # developer default agents, all removed. Replaced by: the legacy route must refuse and must not write a spec.
     with open(os.path.join(folder,'referral.txt'),'w',encoding='utf-8') as f: f.write('Synthetic referral text')
     with open(os.path.join(folder,'case.txt'),'w',encoding='utf-8') as f: f.write('Synthetic case text')
-    for name, keys, out in [('report_draft',jobs.REPORT_KEYS,specpath)]:
-        if os.path.exists(out): os.unlink(out)
-        agent['env']['REPLY'] = json.dumps({key:'' for key in keys})
-        assert call('POST','/api/agents',agent)[0] == 200
-        assert run_job(name,patient_id=1)['state'] == 'done'
-        assert set(json.load(open(out,encoding='utf-8'))) == keys
-        assert 'already exists' in run_job(name,patient_id=1)['output']
-        os.unlink(out)
-        for bad in ('not JSON','{}'):
-            agent['env']['REPLY'] = bad
-            assert call('POST','/api/agents',agent)[0] == 200
-            assert run_job(name,patient_id=1)['state'] == 'failed'
-    assert len(os.listdir(os.path.join(tmp,'agent-replies'))) == 2
-    assert conn.execute("SELECT count(*) FROM events WHERE type IN ('interview_spec','report_draft') AND detail LIKE '%stub%'").fetchone()[0] == 1
-    from unittest.mock import patch
-    from types import SimpleNamespace
-    with patch('agents.subprocess.run', return_value=SimpleNamespace(returncode=0, stdout='OK')) as mocked:
-        agents.skill_run(agents.defaults()['agents'][0], 'test prompt', tmp)
-        args, kwargs = mocked.call_args
-        assert os.path.basename(args[0][0]).lower() in ('claude','claude.cmd','claude.exe') and args[0][1:4] == ['-p','--permission-mode','acceptEdits'] and 'test prompt' not in args[0] and kwargs['input'] == 'test prompt'
-        assert kwargs['cwd'] == tmp and kwargs['timeout'] == 1800
-        agents.skill_run(agents.defaults()['agents'][1], 'test prompt', tmp)
-        args, kwargs = mocked.call_args
-        assert os.path.basename(args[0][0]).lower() in ('codex','codex.cmd','codex.exe') and args[0][1:] == ['exec','--skip-git-repo-check','-s','workspace-write','-C',tmp,'-m','gpt-6.1-terra','-c','model_reasoning_effort="high"','-']
-        assert kwargs['input'] == 'test prompt' and kwargs['cwd'] == tmp
-    with patch('agents.subprocess.run', return_value=SimpleNamespace(returncode=1, stdout='\n'.join(map(str, range(250))))):
-        try: agents.skill_run(agents.defaults()['agents'][0], 'test', tmp); assert False
-        except RuntimeError as exc:
-            assert len(str(exc).splitlines()) == 200 and str(exc).splitlines()[-1] == '249'
-    seeded = agents.defaults()
-    assert [(a['name'], a['route']) for a in seeded['agents']] == [('Claude B','skill'),('Codex A','skill'),('Codex B','skill')] + [('agy g'+str(i),'prompt') for i in range(1,5)]
-    assert seeded['agents'][1]['model'] == 'gpt-6.1-terra' and seeded['agents'][1]['effort'] == 'high'
-    assert all(a['enabled'] and a['command'][-3:] == ['--model','gemini-3.8-flash-high','--print'] for a in seeded['agents'][3:])
-    assert 'Shares quota with g1' in seeded['agents'][-1]['note']
-    original_agents = agents.load()
-    legacy_agents = agents.load()
-    legacy_agents['agents'] = [a for a in legacy_agents['agents'] if a['name'] != 'agy g2']
-    for a in legacy_agents['agents']:
-        if a['name'] == 'agy g1': a.update(enabled=False, command=[])
-        if a['name'] == 'agy g3': a['command'] = ['custom']
-    agents.save(legacy_agents)
-    migrated_agents = {a['name']:a for a in agents.load()['agents']}
-    assert migrated_agents['agy g1']['command'] == seeded['agents'][3]['command']
-    assert migrated_agents['agy g2']['command'] == seeded['agents'][4]['command']
-    assert migrated_agents['agy g3']['command'] == ['custom']
-    assert any(a['name'] == 'agy g2' for a in json.load(open(os.path.join(tmp,'agents.json'),encoding='utf-8'))['agents'])
-    enabled = dict(seeded['agents'][3], enabled=True)
-    with patch('agents.get', return_value=enabled), patch('agents.subprocess.run', return_value=SimpleNamespace(returncode=0, stdout='OK', stderr='')) as mocked:
-        assert agents.run('agy g1', 'x' * 9000) == 'OK'   # long prompts go through a temp file, not the command line
-        last = mocked.call_args.args[0][-1]
-        assert last.startswith('Read the file ') and 'input' not in mocked.call_args.kwargs
-        assert not os.path.exists(last.split(' ')[3])    # the prompt file is removed afterwards
-    agents.save(original_agents)
+    for name in ('report_draft',):
+        if os.path.exists(specpath): os.unlink(specpath)
+        records.delete(conn, 1, 'report_spec.json'); conn.commit()
+        result = run_job(name, patient_id=1)
+        assert result['state'] == 'failed' and 'disabled' in result['output'], result
+        assert not os.path.exists(specpath) and records.get(conn, 1, 'report_spec.json') is None
     for program, route in [('claude','skill'), ('C:/bin/codex.cmd','skill'), ('other','prompt')]:
         assert agents.default_route({'type':'cli','command':[program]}) == route
-    old = agents.load()
-    old['agents'].append({'name':'legacy','type':'cli','enabled':True,'command':['codex','exec','-'],'env':{},'stdin':True})
-    old['agents'].append({'name':'legacy api','type':'api','enabled':True,'url':'https://example.com','model':'x','style':'openai'})
-    agents.save(old)
-    migrated = {a['name']:a['route'] for a in call('GET','/api/agents')[1]['agents']}
-    assert migrated['legacy'] == 'skill' and migrated['legacy api'] == 'prompt'
     assert call('POST','/api/agents',{'name':'api skill','type':'api','enabled':True,'url':'https://example.com','model':'x','style':'openai','route':'skill'})[0] == 400
     assert call('POST','/api/agents',{**agent,'route':'wrong'})[0] == 400
-    skill_stub = os.path.join(tmp, 'skill_stub.py')
-    with open(skill_stub, 'w', encoding='utf-8') as f:
-        f.write('import os,sys,json\np=sys.stdin.read()\nif p.startswith("Reply with"):\n print("OK")\nelif os.environ["MODE"] != "missing":\n target=p.split("Write only this one new JSON output file: ")[1].splitlines()[0]\n open(target,"x",encoding="utf-8").write(os.environ["REPLY"])\nprint("cwd="+os.getcwd())\nprint(os.environ.get("STATUS", "HMR-STATUS: success"))\n')
-    skill_agent = {'name':'skill stub','type':'cli','route':'skill','enabled':True,'command':[sys.executable,skill_stub],'env':{'MODE':'ok'},'stdin':True}
-    assert call('POST','/api/agents',skill_agent)[0] == 200
-    assert call('POST','/api/agents/test',{'name':'skill stub'})[1]['reply'].startswith('OK\n')
-    assert call('POST','/api/agents/select',{'default':'skill stub','per_step':{'report_draft':'skill stub'}})[0] == 200
-    for name, keys, out in [('report_draft',jobs.REPORT_KEYS,specpath)]:
-        if os.path.exists(out): os.unlink(out)
-        skill_agent['env'].update(MODE='ok', REPLY=json.dumps({key:'' for key in keys}))
-        assert call('POST','/api/agents',skill_agent)[0] == 200
-        assert run_job(name,patient_id=1)['state'] == 'done'
-        assert set(json.load(open(out,encoding='utf-8'))) == keys
-        original = open(out,encoding='utf-8').read()
-        assert 'already exists' in run_job(name,patient_id=1)['output']
-        assert open(out,encoding='utf-8').read() == original
-        os.unlink(out)
-        for mode, reply in [('missing',''),('ok','invalid JSON'),('ok','{}')]:
-            skill_agent['env'].update(MODE=mode, REPLY=reply)
-            assert call('POST','/api/agents',skill_agent)[0] == 200
-            result = run_job(name,patient_id=1)
-            assert result['state'] == 'failed' and 'Invalid or missing spec' in result['output']
-            assert 'cwd=' + (tmp if name == 'interview_spec' else folder) in result['output']
-            if os.path.exists(out): os.unlink(out)
-    for status, expected in [('HMR-STATUS: blocked - missing evidence','missing evidence'), ('no status','agent gave no status')]:
-        skill_agent['env'].update(MODE='ok', REPLY=json.dumps({key:'' for key in jobs.REPORT_KEYS}), STATUS=status)
-        assert call('POST','/api/agents',skill_agent)[0] == 200
-        result = run_job('report_draft',patient_id=1)
-        assert result['state'] == 'failed' and result['output'].startswith(expected) and not os.path.exists(specpath)
-    assert conn.execute("SELECT count(*) FROM events WHERE type IN ('interview_spec','report_draft') AND detail LIKE '%skill stub%' AND detail LIKE '%skill%'").fetchone()[0] == 1
     entered, release = threading.Event(), threading.Event()
     original = jobs.JOBS['register_xlsx']
     def slow(pid):
@@ -374,7 +315,7 @@ with tempfile.TemporaryDirectory() as tmp:
     assert call('POST','/api/run/' + failed + '/result', {'state':'failed','output':'login needed'})[0] == 200
     assert conn.execute('SELECT output FROM tasks WHERE id=?',(failed,)).fetchone()[0] == 'login needed'
     token = service.api_token(conn)
-    server = http.server.ThreadingHTTPServer(('127.0.0.1',0), functools.partial(service.QuietStatic, directory=tmp))
+    server = http.server.ThreadingHTTPServer(('127.0.0.1',0), service.QuietStatic)  # the handler no longer serves a directory
     thread = threading.Thread(target=server.serve_forever); thread.start()
     def request(token_value=None, data=None, content_type=None):
         headers = {}

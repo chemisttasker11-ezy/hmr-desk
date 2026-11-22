@@ -5,6 +5,7 @@ from pathlib import Path
 from docx import Document
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
+from docx.text.paragraph import Paragraph
 from docx.shared import Cm, Pt, RGBColor, Twips
 
 
@@ -92,6 +93,7 @@ TITLE_GRID = (6487, 1985, 1701)
 DETAILS_GRID = (2965, 4299, 2909)
 PROFILE_GRID = (2660, 7478)
 MEDS_GRID = (2520, 1800, 2700, 3145)  # 4 columns, host map table 5 of the newest reference
+MEDS_GRID_GP_PLAN = (2300, 1600, 2400, 2100, 1765)  # same total width; blank GP Plan at right
 OTC_GRID = (4140, 2070, 3870)  # 3 columns, host map tables 6 and 7
 CEASED_GRID = (4140, 2070, 3870)
 RESULTS_GRID = (1885, 1105, 1870, 1620, 3820)
@@ -268,7 +270,29 @@ def _page_field(paragraph):
 PROVISIONAL_LABEL = "PROVISIONAL LOCAL LAYOUT - not the owner-approved report template"
 
 
-def render(data, target):
+def _keep_closing_with_content(doc, closing, signoff):
+    """The closing and the pharmacist line must never sit alone on a page: keep them with the content just above them (the empty
+    spacer paragraphs and the last row of the last table), so a page break falls before that content rather than between it and the
+    closing. Pagination only; no text or order changes."""
+    closing.paragraph_format.keep_with_next = True
+    signoff.paragraph_format.keep_together = True
+    body = doc.element.body
+    children = [el for el in body if el.tag in (qn('w:p'), qn('w:tbl'))]
+    index = children.index(closing._p)
+    for el in reversed(children[:index]):
+        if el.tag == qn('w:tbl'):
+            last_row = el.findall(qn('w:tr'))[-1]
+            for paragraph in last_row.iter(qn('w:p')): _keep_next(paragraph)
+            return
+        _keep_next(el)
+        if ''.join(el.itertext()).strip(): return
+
+
+def _keep_next(paragraph_element):
+    Paragraph(paragraph_element, None).paragraph_format.keep_with_next = True
+
+
+def render(data, target, include_gp_plan=False):
     """Build from validated report spec. Does not invent findings or overwrite files."""
     target = Path(target)
     if target.exists():
@@ -326,13 +350,17 @@ def render(data, target):
     ):
         if not data[key]:
             continue
+        if key == 'meds' and include_gp_plan:
+            labels = (*labels, 'GP Plan')
+            grid = MEDS_GRID_GP_PLAN
         _heading(doc, heading, color)
         table = doc.add_table(rows=1, cols=len(labels))
         _borders(table)
         for cell, label in zip(table.rows[0].cells, labels):
             _cell_text(cell, label, 9, True)
         for values in data[key]:
-            for cell, value in zip(table.add_row().cells, values):
+            display_values = [*values, ''] if key == 'meds' and include_gp_plan else values
+            for cell, value in zip(table.add_row().cells, display_values):
                 _cell_text(cell, value, 9)
         _header_row(table, fill)
         _fixed_layout(table, grid)
@@ -360,8 +388,10 @@ def render(data, target):
     if data["followup"].strip():
         _heading(doc, "Follow-up", BLACK)
         _plan_block(doc, (("Follow-up: ", data["followup"]),))
-    _run(doc.add_paragraph(), "Yours Sincerely,", PLAN_PT, True)
+    closing = doc.add_paragraph()
+    _run(closing, "Yours Sincerely,", PLAN_PT, True)
     signoff = doc.add_paragraph()
+    _keep_closing_with_content(doc, closing, signoff)
     pharmacist = str(data.get("pharmacist_details", "") or "").strip()
     signoff_text = (pharmacist.replace("\n", ", ") + " (provisional).") if pharmacist else "Pharmacist name, credentials, phone and email: not supplied in the report data (provisional)."
     _run(signoff, signoff_text, PLAN_PT, True)

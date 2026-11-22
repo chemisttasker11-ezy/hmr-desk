@@ -26,7 +26,8 @@ test('dashboard groups, confirmation and retry follow the engine actions', async
     enqueue: async (...args) => { calls.push(args); }, runMessage: 'Queued' });
   vm.runInContext(fs.readFileSync(require.resolve('../renderer/dashboard.js'), 'utf8'), context);
   await context.dashboard();
-  assert.ok(nodes.screen.innerHTML.indexOf('Stuck') < nodes.screen.innerHTML.indexOf('All clear'));
+  assert.ok(nodes.screen.innerHTML.indexOf('Stuck') < nodes.screen.innerHTML.indexOf('Nothing due in these areas'));
+  assert.doesNotMatch(nodes.screen.innerHTML, /All clear/);
   assert.match(nodes.screen.innerHTML, /No reports waiting/);
   await context.dashboardClick({ dataset: { attentionGroup: 'today_visits', attentionIndex: '0' } });
   assert.equal(context.formOpen, true);
@@ -38,4 +39,17 @@ test('dashboard groups, confirmation and retry follow the engine actions', async
   await context.dashboardClick({ dataset: { attentionGroup: 'stuck', attentionIndex: '0' } });
   assert.equal(calls.at(-1)[0][0], 'pathology');
   assert.equal(calls.at(-1)[1].length, 0);
+});
+test('dashboard keeps the all-clear heading only when no group needs attention', async () => {
+  const vm = require('node:vm'), fs = require('node:fs');
+  const groups = [{ key: 'reports', title: 'Reports', items: [] }, { key: 'stuck', title: 'Stuck', items: [] }];
+  const nodes = { screen: {} };
+  const context = vm.createContext({ H, esc: H.esc, page: 'today', formOpen: false, selected: null,
+    $: (id) => nodes[id], hmr: { api: async () => ({ groups }) }, enqueue: async () => {}, runMessage: '' });
+  vm.runInContext(fs.readFileSync(require.resolve('../renderer/dashboard.js'), 'utf8'), context);
+  await context.dashboard();
+  assert.match(nodes.screen.innerHTML, /<h2>All clear<\/h2>/);
+  assert.doesNotMatch(nodes.screen.innerHTML, /Nothing due in these areas/);
+  assert.match(nodes.screen.innerHTML, /No reports waiting/);
+  assert.match(nodes.screen.innerHTML, /Nothing is stuck/);
 });

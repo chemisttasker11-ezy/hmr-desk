@@ -195,7 +195,7 @@ defs.push(
   ['hmr_followup_save','Save a follow-up form.',{id,number,form:record(followFields)},['id','number','form'],'POST','/api/patients/:id/followup/:number'],
   ['hmr_followup_export','Export a follow-up form.',{id,number},['id','number'],'POST','/api/patients/:id/followup/:number/export'],
   ['hmr_task_result','Complete or fail a waiting task; provide the verified MIMS result filename for interaction completion.',{id:string,state:choice('done','failed'),output:{type:'string'},mims_result:string},['id','state'],'POST','/api/run/:id/result'],
-  ['hmr_job_start','Start a known engine job; PPA never submits claims.',{job:choice('interview_pack','interview_sheet','report_start','report_build','report_assist','report_draft','interview_assist','report_extract'),patient_id:id,format:choice('docx','pdf','both')},['job','patient_id'],'POST','/api/jobs'],
+  ['hmr_job_start','Start a known engine job; PPA never submits claims. format: docx, pdf or both applies to interview_pack and interview_sheet only. For report_build use docx (Word only) or pdf (Word plus PDF); both is refused. Other jobs take no format.',{job:choice('interview_pack','interview_sheet','report_start','report_build','report_assist','report_draft','interview_assist','report_extract'),patient_id:id,format:choice('docx','pdf','both')},['job','patient_id'],'POST','/api/jobs'],
   ['hmr_job_get','Get a job status.',{id:string},['id'],'GET','/api/jobs/:id'],
   ['hmr_days','List calendar days.',{from:date,to:date},['from','to'],'GET','/api/days'],
   ['hmr_summary','Get period summary.',{from:date,to:date},['from','to'],'GET','/api/summary'],

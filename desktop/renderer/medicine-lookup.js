@@ -21,7 +21,7 @@ function interviewLookupControls(key, meta, i) {
   const ref = meta && meta.reference, esc = H.esc;
   const linked = ref ? `<span class="med-ref">Linked: ${esc(ref.display)} (${ref.source === 'pbs' ? 'PBS' : esc(ref.source.toUpperCase()) + ' ' + esc(ref.code)}, release ${esc(ref.release)}) <button type="button" data-med-unlink="${esc(key)}" data-row="${i}">Unlink</button></span>` : '';
   const evidence = meta?.source_evidence;
-  const original = evidence ? `<details class="med-source"><summary>Extracted referral text (not current use)</summary>${evidence.lines.map((line,n)=>`<p>${esc(line)} <small>${evidence.page_candidates[n].length === 1 ? `Text located on page ${evidence.page_candidates[n][0]}` : evidence.page_candidates[n].length ? `Page candidates: ${evidence.page_candidates[n].join(', ')}` : 'Page not established'}</small></p>`).join('')}</details>` : '';
+  const original = evidence ? `<details class="med-source"><summary>Extracted referral text (not current use)</summary>${evidence.lines.map((line,n)=>`<p>${esc(line)} <small>${evidence.page_candidates[n].length === 1 ? `Text located on page ${evidence.page_candidates[n][0]}` : evidence.page_candidates[n].length ? `Page candidates: ${evidence.page_candidates[n].join(', ')}` : 'Page not established'}</small></p>`).join('')}<button type="button" data-med-page-image="${esc(key)}" data-row="${i}">Show page image for this row</button><div class="med-page-image" role="status"></div></details>` : '';
   const proposal = medicineSuggestions.get(meta);
   const suggestions = !ref && proposal ? `<div class="medicine-proposals"><p>${esc(({exact_candidate:'Exact displayed-text candidate, not confirmed. Check strength, form and release type.',ambiguous:'More than one exact text candidate. Choose only after reviewing the original.',review_candidates:'Possible matches only. OCR or product details differ; do not guess.',unmatched:'No catalogue candidate. Keep the source/free text and review it.',unavailable:'Medicine reference unavailable. Free text still works.'})[proposal.state] || 'Review medicine candidates.')}${proposal.prepared==='intake' ? ' Prepared at intake from the referral text; the catalogue entry was re-checked when this interview opened.' : ''}${proposal.truncated ? ' More candidates exist; use manual lookup to narrow.' : ''}</p>${medicineProposalLines(proposal).map(g=>`<div class="med-lookup-result"><span>${esc(g.label)}${g.generic_name ? ` | Modelled generic: ${esc(g.generic_name)}` : ''}${g.count>1 ? ` (${g.count} matching entries combined)` : ''} | release ${esc(g.release)}</span><button type="button" data-med-suggestion="${esc(key)}" data-row="${i}" data-candidate="${g.index}">Use this</button></div>`).join('')}</div>` : '';
   return `<div class="med-lookup">${original}${suggestions}<button type="button" data-med-lookup="${esc(key)}" data-row="${i}">Look up medicine</button>${linked}<div class="med-lookup-results" data-med-results="${esc(key)}-${i}" role="status"></div></div>`;
@@ -45,7 +45,29 @@ function medicineNameEdited(key, i, element) {
 // The main-process API guard only allows [A-Za-z0-9_/?=&%.-]; encodeURIComponent also leaves ! ~ * ' ( ) raw,
 // so a name such as "Suvorexant 20 mg tablet (Belsomra)" was rejected before it reached the engine.
 const medicineQuery = (text) => encodeURIComponent(text).replace(/[!~*'()]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase());
+const medicineLookupSeq = new WeakMap();
 async function medicineLookupClick(b) {
+  if (b.dataset.medPageImage !== undefined) {
+    const meta = interviewRecord.details[b.dataset.medPageImage]?.[Number(b.dataset.row)], box = b.parentElement.querySelector('.med-page-image');
+    if (!meta?.source_evidence || !box) return true;
+    const patient = interviewId, record = interviewRecord;
+    box.replaceChildren(Object.assign(document.createElement('p'), {textContent: 'Loading page image...'}));
+    let result;
+    try { result = await hmr.api('POST', `/api/patients/${patient}/interview/medicine-row-image`, {source_evidence: meta.source_evidence}); }
+    catch { result = {kind: 'none', note: 'The page image could not be produced. Open the original PDF and compare by eye.'}; }
+    if (page !== 'interview' || interviewId !== patient || interviewRecord !== record || !box.isConnected) return true;
+    const nodes = [];
+    if (result.kind === 'row' || result.kind === 'page') {
+      const img = document.createElement('img');
+      img.src = `data:image/png;base64,${result.png}`;
+      img.alt = result.kind === 'row' ? `Referral page ${result.page}, region this row was read from` : `Referral page ${result.page}`;
+      img.className = result.kind === 'row' ? 'med-row-image' : 'med-whole-page-image';
+      nodes.push(img);
+    }
+    nodes.push(Object.assign(document.createElement('p'), {textContent: String(result.note || '')}));
+    box.replaceChildren(...nodes);
+    return true;
+  }
   if (b.dataset.medSuggestion !== undefined) {
     const key=b.dataset.medSuggestion, i=Number(b.dataset.row), meta=interviewRecord.details[key]?.[i];
     const proposal=medicineSuggestions.get(meta), candidate=proposal?.candidates[Number(b.dataset.candidate)];
@@ -66,32 +88,47 @@ async function medicineLookupClick(b) {
   const out = document.querySelector(`[data-med-results="${key}-${i}"]`);
   const box = document.querySelector(`textarea[data-field="${key}"][data-row="${i}"][data-col="0"]`);
   const text = (box ? box.value : '').trim();
+  const token = (medicineLookupSeq.get(out) || 0) + 1; medicineLookupSeq.set(out, token);
   out.replaceChildren();
   const say = (t) => { const p = document.createElement('p'); p.textContent = t; out.append(p); };
   if (text.length < 2) { say('Type at least two letters of the medicine name, then look up.'); return true; }
   try {
     const found = await hmr.api('GET', '/api/medicines/search?grouped=1&q=' + medicineQuery(text));
-    if (page !== 'interview' || interviewId !== patientId || interviewRecord !== record || record[key][i] !== medicine || medicine[0].trim() !== text || !out.isConnected) return true;
+    if (page !== 'interview' || interviewId !== patientId || interviewRecord !== record || record[key][i] !== medicine || medicine[0].trim() !== text || !out.isConnected || medicineLookupSeq.get(out) !== token) return true;
     if (!found.installed) { say('No medicine reference data is installed on this PC. Keep typing the name by hand; nothing is lost.'); return true; }
-    if (!found.results.length) { say('No match in the reference data. Keep your typed name, or try another spelling.'); return true; }
-    say('Pick the medicine you mean. Reference release ' + found.results[0].release + '. Check strength and form yourself.');
+    if (!found.results.length) { say('No match in the reference data. Your typed name stays as written, unlinked and not matched to reference data. Try another spelling if you want a match.'); return true; }
+    say('Pick the medicine you mean (reference release ' + found.results[0].release + '). Check strength and form.');
+    { const h = document.createElement('p'); h.className = 'med-hint'; h.textContent = 'Keyboard: Down arrow moves through matches, Enter chooses, Escape returns to the name.'; out.append(h); }
     const choose = (r) => {
       if (page !== 'interview' || interviewId !== patientId || interviewRecord !== record || record[key][i] !== medicine || medicine[0].trim() !== text || !out.isConnected) return;
       interviewRecord[key][i][0] = r.display;
       interviewRecord.details[key][i].reference = { source: r.source, code: r.code, display: r.display, release: r.release, ...catalogueIdentity(r.listings || [r]) };
       interviewChanged(key); renderInterview();
+      document.querySelector(`textarea[data-field="${key}"][data-row="${i}"][data-col="0"]`)?.focus?.();
     };
     // Identical PBS listings arrive as one group; each listing stays individually pickable. Older replies are flat.
     const groups = Array.isArray(found.groups) ? found.groups : found.results.map((r) => ({ grouped: false, label: '', listings: [r], count: 1 }));
     for (const g of groups) {
       const row = document.createElement('div'); row.className = 'med-lookup-result';
-      const label = document.createElement('span');
       const first = g.listings[0];
       // A group is one medicine as the source states it. The pharmacist sees no listing codes; the stored
       // reference is one real catalogue listing of that group (the first by code) so provenance stays intact.
       const pick = g.label ? Object.assign({}, first, { display: g.label }) : first;
-      label.textContent = (g.label || first.display) + (g.listings.length > 1 ? ' (' + g.listings.length + ' matching entries combined)' : '');
-      const use = document.createElement('button'); use.type = 'button'; use.textContent = 'Use this';
+      const fullLabel = (g.label || first.display) + (g.listings.length > 1 ? ' (' + g.listings.length + ' matching entries combined)' : '');
+      const label = document.createElement('span'); label.className = 'med-result-text'; label.title = fullLabel;
+      // Scannable parts come only from catalogue fields the whole group agrees on. If a part is missing or mixed,
+      // the source label is shown whole instead. Nothing is parsed out of the label.
+      const idn = catalogueIdentity(g.listings);
+      const forms = g.listings.map(r => r && r.dose_form);
+      const form = forms.length && forms.every(v => typeof v === 'string' && v.trim() && v === forms[0]) ? forms[0] : '';
+      if ((idn.brand_name || idn.generic_name) && form) {
+        const name = document.createElement('strong'); name.className = 'med-result-name'; name.textContent = idn.brand_name || idn.generic_name;
+        label.append(name);
+        if (idn.brand_name && idn.generic_name && idn.generic_name !== idn.brand_name) { const gen = document.createElement('span'); gen.className = 'med-result-generic'; gen.textContent = idn.generic_name; label.append(gen); }
+        const fm = document.createElement('span'); fm.className = 'med-result-form'; fm.textContent = form; label.append(fm);
+        if (g.listings.length > 1) { const n = document.createElement('span'); n.className = 'med-result-count'; n.textContent = g.listings.length + ' matching entries combined'; label.append(n); }
+      } else label.textContent = fullLabel;
+      const use = document.createElement('button'); use.type = 'button'; use.textContent = 'Use this'; use.setAttribute('aria-label', 'Use ' + fullLabel);
       use.addEventListener('click', () => choose(Object.assign({}, pick, { listings: g.listings })));
       row.append(label, use); out.append(row);
     }
@@ -99,7 +136,42 @@ async function medicineLookupClick(b) {
   } catch (error) { say('Lookup failed: ' + errorText(error) + '. Type the name by hand.'); }
   return true;
 }
-document.addEventListener('click', (e) => { const b = e.target.closest && e.target.closest('[data-med-lookup], [data-med-unlink], [data-med-suggestion]'); if (b) medicineLookupClick(b); });
+// Search as you type: after a short pause, run the same lookup the button runs. It only lists matches; nothing is
+// chosen or linked until the pharmacist picks one, and the typed name is never changed.
+let medicineTypeTimer;
+document.addEventListener('input', (e) => {
+  const el = e.target;
+  if (!el || !el.dataset || el.tagName !== 'TEXTAREA' || el.dataset.col !== '0' || el.dataset.row === undefined) return;
+  const key = el.dataset.field;
+  if ((key !== 'meds' && key !== 'other_meds') || typeof setTimeout !== 'function') return;
+  clearTimeout(medicineTypeTimer);
+  if (el.value.trim().length < 3) return;
+  medicineTypeTimer = setTimeout(() => {
+    if (!el.isConnected) return;
+    const b = document.querySelector(`[data-med-lookup="${key}"][data-row="${el.dataset.row}"]`);
+    if (b) medicineLookupClick(b);
+  }, 350);
+});
+// Keyboard: Down from the name box enters the matches, Up/Down moves, Escape returns to the box. Enter or Space on a
+// match presses its normal Use this button.
+document.addEventListener('keydown', (e) => {
+  const t = e.target;
+  if (!t || !t.closest || !['ArrowDown', 'ArrowUp', 'Escape'].includes(e.key)) return;
+  const name = t.tagName === 'TEXTAREA' && t.dataset.col === '0' && t.dataset.row !== undefined && (t.dataset.field === 'meds' || t.dataset.field === 'other_meds') ? t : null;
+  const inResults = t.closest('.med-lookup-results');
+  if (!name && !inResults) return;
+  const scope = name ? name.closest('tr') : inResults.closest('tr');
+  const buttons = [...(scope?.querySelectorAll('.med-lookup-result button') || [])];
+  if (!buttons.length) return;
+  if (name) { if (e.key === 'ArrowDown') { e.preventDefault(); buttons[0].focus(); } return; }
+  e.preventDefault();
+  const at = buttons.indexOf(t);
+  if (e.key === 'Escape') scope.querySelector('textarea[data-col="0"]')?.focus();
+  else if (e.key === 'ArrowDown') buttons[Math.min(buttons.length - 1, at + 1)].focus();
+  else if (at <= 0) scope.querySelector('textarea[data-col="0"]')?.focus();
+  else buttons[at - 1].focus();
+});
+document.addEventListener('click', (e) => { const b = e.target.closest && e.target.closest('[data-med-lookup], [data-med-unlink], [data-med-suggestion], [data-med-page-image]'); if (b) medicineLookupClick(b); });
 
 
 async function medicinePrefillSuggestions() {

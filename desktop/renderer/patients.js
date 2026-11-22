@@ -162,7 +162,7 @@ function selectPatientTab(tab) {
   const detail = $('detail');
   if (!detail) return;
   detail.querySelectorAll('[data-tab]').forEach(b => { b.classList.toggle('active', b.dataset.tab === tab); b.setAttribute('aria-selected', String(b.dataset.tab === tab)); });
-  for (const name of ['Overview', 'Conversation', 'Activity', 'Files']) {
+  for (const name of ['Overview', 'Conversation', 'Activity', 'Files', 'Results']) {
     const section = detail.querySelector(`.${name.toLowerCase()}-view`);
     if (section) section.hidden = name !== tab;
   }
@@ -194,7 +194,7 @@ async function openPatientWorkspace(id, tab = 'Overview', layout = 'patient') {
     selectPatientTab(tab); setPatientLayout(layout);
     return { ok: true };
   }
-  if (formOpen && !confirm('Switch patient and discard unsaved changes?')) return { cancelled: true };
+  if (formOpen && !(await H.confirmDialog('Switch patient and discard unsaved changes?', { title: 'Unsaved changes', okLabel: 'Switch patient', fallback: confirm }))) return { cancelled: true };
   formOpen = false;
   detailTab = tab;
   const shown = await showPatient(id);
@@ -203,7 +203,7 @@ async function openPatientWorkspace(id, tab = 'Overview', layout = 'patient') {
   return { ok: true };
 }
 async function showPatient(id, action, background = false) {
-  if (formOpen && selected !== String(id)) { if (!confirm('Switch patient and discard unsaved changes?')) return false; formOpen = false; }
+  if (formOpen && selected !== String(id)) { if (!(await H.confirmDialog('Switch patient and discard unsaved changes?', { title: 'Unsaved changes', okLabel: 'Switch patient', fallback: confirm }))) return false; formOpen = false; }
   if (action && action !== 'offer_new') detailTab = 'Overview';
   const request = ++patientRequest, startedPage = typeof page === 'undefined' ? null : page;
   const startedNav = typeof navToken === 'undefined' ? null : navToken;
@@ -216,12 +216,13 @@ async function showPatient(id, action, background = false) {
   const timeline = await hmr.api('GET', `/api/patients/${encodeURIComponent(id)}/timeline`);
   if (!$('detail') || selected !== String(id) || request !== patientRequest || (typeof page !== 'undefined' && page !== startedPage) || (typeof navToken !== 'undefined' && navToken !== startedNav)) return false;
   if (offerPatient !== String(id)) { offerPatient = String(id); offerDraft = null; offerStatus = ''; }
-  const [board, agents, reportCurrency] = await Promise.all([
+  const [board, agents, reportCurrency, patientResults] = await Promise.all([
     hmr.api('GET', '/api/messages/board').catch(() => ({})),
     hmr.api('GET', '/api/agents').catch(() => ({})),
     ['visited', 'report_drafted', 'signed_off', 'sent', 'claimed'].includes(p.state)
       ? hmr.api('GET', `/api/patients/${encodeURIComponent(id)}/report-status`).catch(() => null)
       : Promise.resolve(null),
+    hmr.api('GET', `/api/patients/${encodeURIComponent(id)}/results`).catch(() => null),
   ]);
   if (!$('detail') || selected !== String(id) || request !== patientRequest || (typeof page !== 'undefined' && page !== startedPage) || (typeof navToken !== 'undefined' && navToken !== startedNav) || formOpen || (background && $('detail').querySelector?.('details[open]'))) return false;
   const milestones = timeline.milestones || {};
@@ -230,7 +231,7 @@ async function showPatient(id, action, background = false) {
   const reportWorkflow = H.reportWorkflowStatus(p.state, (p.steps || []).find((step) => step.name === 'report_build'), reportCurrency);
   const visibleSteps = (p.steps || []).map((step) => step.name === 'report_build' ? { ...step, ...reportWorkflow.build } : step);
   const pathway = H.patientPathway ? H.patientPathway(p, milestones, visibleSteps) : [];
-  const files = (list) => (list?.length ? list.map((x) => `<li>${esc(x)}</li>`).join('') : '<li>None</li>');
+  const files = (list, section) => (list?.length ? list.map((x) => `<li>${esc(x)}${H.fileOpenable(x) ? ` <button type="button" class="link-button" data-open-file="${esc(x)}" data-open-section="${section}" aria-label="Open ${esc(x)}">Open</button>` : ''}</li>`).join('') : '<li>None</li>');
 
   const actions = availableActions(p, milestones);
   const more = ['note', 'update', ...(p.can_undo ? ['undo_stage'] : [])];
@@ -326,7 +327,8 @@ async function showPatient(id, action, background = false) {
   const isConversationTab = ['Conversation', 'Messages'].includes(detailTab);
   const isActivityTab = ['Activity', 'Timeline'].includes(detailTab);
   const isFilesTab = detailTab === 'Files';
-  const isOverviewTab = !isConversationTab && !isActivityTab && !isFilesTab;
+  const isResultsTab = detailTab === 'Results';
+  const isOverviewTab = !isConversationTab && !isActivityTab && !isFilesTab && !isResultsTab;
 
   const convCount = (p.messages || []).length;
   const actCount = (timeline.entries || []).length;
@@ -374,7 +376,7 @@ async function showPatient(id, action, background = false) {
   }
 
   $('detail').innerHTML =
-    `<div class="detail-head"><div>${fullPatientView ? `<button data-back-to-patients class="btn-back">&larr; Back to patients</button>` : ''}<h2>${esc(p.name)}</h2><span class="status-chip stage-${H.stageClass(p.stage)}">${status}</span><div class="chips">${H.flagWords(p).map(word => `<span class="status-chip">${esc(word)}</span>`).join('')}</div></div><div class="head-actions"><button data-patient-layout="patient">Maximise patient</button><button data-patient-layout="list">Maximise list</button><button data-patient-layout="split">Restore split</button><button class="detail-close" data-close-patient>Close</button></div></div>
+    `<div class="detail-head"><div>${fullPatientView ? `<button data-back-to-patients class="btn-back">&larr; Back to patients</button>` : ''}<h2>${esc(p.name)}</h2><span class="status-chip stage-${H.stageClass(p.stage)}">${status}</span><div class="chips">${H.flagWords(p).map(word => `<span class="status-chip">${esc(word)}</span>`).join('')}</div></div><div class="head-actions"><button data-open-interview="${esc(p.id)}" title="Open this patient's interview editor (pathology, medicines, notes). Does not change the stage or start a task.">Interview</button><button data-patient-layout="patient">Maximise patient</button><button data-patient-layout="list">Maximise list</button><button data-patient-layout="split">Restore split</button><button class="detail-close" data-close-patient>Close</button></div></div>
     <dl class="detail-facts"><dt>Visit</dt><dd>${p.visit_date ? `${esc(date(p.visit_date))} ${esc(p.visit_time || '')}` : 'Not booked'}</dd>
     <dt>Address</dt><dd>${esc(H.displayAddress(p.address, p.suburb)) || '&ndash;'}</dd><dt>Phone</dt><dd>${phone ? `<a href="tel:${esc(phone)}">${esc(p.phone)}</a>` : '&ndash;'}</dd></dl>
     <section id="patient-next-action" class="panel-section" ${isOverviewTab ? '' : 'hidden'}><h3>Next action</h3>${next ? `<p>${esc(next)}</p>` : ''}<div class="actions">${primaryAction ? stageButton(primaryAction).replace('<button ', '<button class="primary" ') : `<span class="muted">${esc(H.nextActionHint(primaryAction, shownActions.length).text)}</span>`}${shownActions.filter(a => a !== primaryAction).length ? `<details${H.nextActionHint(primaryAction, shownActions.length).openOthers ? ' open' : ''}><summary>Other actions</summary><div class="actions">${shownActions.filter(a => a !== primaryAction).map(stageButton).join('')}</div></details>` : ''}</div>
@@ -385,6 +387,7 @@ async function showPatient(id, action, background = false) {
       <button data-tab="Conversation" class="${isConversationTab ? 'active' : ''}">Conversation${convCount ? ` (${convCount})` : ''}</button>
       <button data-tab="Activity" class="${isActivityTab ? 'active' : ''}">Activity${actCount ? ` (${actCount})` : ''}</button>
       <button data-tab="Files" class="${isFilesTab ? 'active' : ''}">Files (${filesCount})</button>
+      <button data-tab="Results" class="${isResultsTab ? 'active' : ''}">Results</button>
     </div>
     <div class="overview-view" ${isOverviewTab ? '' : 'hidden'}>
       ${pathway.length ? `<div class="patient-pathway card"><h4>HMR Pathway</h4><div class="pathway-steps">${pathway.map((s) => `<div class="pathway-step ${s.completed ? 'is-completed' : s.current ? 'is-current' : ''}"><strong>${esc(s.title)}</strong><br><small>${s.completed ? '&#10003; Done' : esc(s.detail)}</small></div>`).join('')}</div></div>` : ''}
@@ -469,9 +472,10 @@ async function showPatient(id, action, background = false) {
       </section>
       ${['followup', 'done'].includes(p.stage) ? `<section class="panel-section"><h4>Follow-ups</h4>${followupRows(p, milestones, actions)}</section>` : ''}
     </div>
+    <div class="results-view" ${isResultsTab ? '' : 'hidden'}>${H.resultsHtml(patientResults, p.id)}</div>
     <div class="files-view" ${isFilesTab ? '' : 'hidden'}>
-      <h3>Folder</h3><ul>${files(p.files?.folder)}</ul>
-      <h3>Pathology</h3><ul>${files(p.files?.pathology)}</ul>
+      <h3>Folder</h3><ul>${files(p.files?.folder, 'folder')}</ul>
+      <h3>Pathology</h3><ul>${files(p.files?.pathology, 'pathology')}</ul><p id="file-open-message" class="error" role="alert"></p>
     </div>
     <section class="panel-section" id="offer-section" data-available="${['intake', 'booking', 'ready'].includes(p.stage)}" ${!isConversationTab || !['intake', 'booking', 'ready'].includes(p.stage) ? 'hidden' : ''}>
     ${canChange ? `<details class="offer-details" ${action === 'offer_new' ? 'open' : ''}><summary>Appointment: Change the time</summary><p>Ask keeps current time unless patient replies YES. Have to change moves it now.</p>` : `<h3>Offer a new time</h3>`}
@@ -520,6 +524,13 @@ async function showPatient(id, action, background = false) {
   }
   if (action === 'offer_new') { selectPatientTab('Conversation'); $('offer-section')?.scrollIntoView?.(); }
   if (action && (availableActions(p, milestones).includes(action) || action === 'expired' || action.endsWith('_claimed'))) openForm(action, p);
+  else if (action && action !== 'offer_new' && $('action-area')) {
+    // A requested step that the patient's current stage does not offer must say so, not open nothing. The stage rule is unchanged.
+    const label = (typeof actionLabels !== 'undefined' && actionLabels[action]) || action.replace(/_/g, ' ');
+    const where = p.stage ? ` (current stage: ${p.stage})` : '';
+    $('action-area').innerHTML = `<p class="notice" id="action-unavailable" role="alert" tabindex="-1">${esc(label)} is not available for this patient yet${esc(where)}. Complete the earlier step first, for example booking the visit, then try again.</p>`;
+    $('action-area').scrollIntoView?.();
+  }
   return true;
 }
 function openForm(action, patient) {

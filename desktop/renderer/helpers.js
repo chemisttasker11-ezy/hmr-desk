@@ -6,6 +6,35 @@ const H = (() => {
       /[&<>"']/g,
       (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c],
     );
+  // In-page replacement for window.confirm. A native confirm freezes the renderer (and UI automation) until answered.
+  // Cancel is the default focus, Escape cancels, and a click outside does nothing, so there is no default-yes.
+  // With no DOM (unit tests) it uses the caller's fallback, normally the same confirm() the code used before.
+  function confirmDialog(message, options = {}) {
+    const doc = typeof document !== 'undefined' ? document : null;
+    if (!doc || typeof doc.createElement !== 'function' || typeof HTMLDialogElement === 'undefined'
+      || typeof HTMLDialogElement.prototype.showModal !== 'function') {
+      return Promise.resolve(typeof options.fallback === 'function' ? Boolean(options.fallback(message)) : false);
+    }
+    return new Promise((resolve) => {
+      const dialog = doc.createElement('dialog');
+      dialog.className = 'hmr-confirm';
+      dialog.setAttribute('aria-label', options.title || 'Please confirm');
+      dialog.innerHTML = (options.title ? `<h2>${esc(options.title)}</h2>` : '')
+        + `<p class="hmr-confirm-text">${esc(message)}</p>`
+        + `<div class="hmr-confirm-actions"><button type="button" data-confirm-cancel autofocus>${esc(options.cancelLabel || 'Cancel')}</button>`
+        + `<button type="button" class="primary" data-confirm-ok>${esc(options.okLabel || 'Continue')}</button></div>`;
+      let answer = false;
+      dialog.addEventListener('click', (event) => {
+        if (event.target.closest('[data-confirm-ok]')) { answer = true; dialog.close(); }
+        else if (event.target.closest('[data-confirm-cancel]')) dialog.close();
+      });
+      dialog.addEventListener('close', () => { dialog.remove(); resolve(answer); });
+      doc.body.appendChild(dialog);
+      dialog.showModal();
+      const cancel = dialog.querySelector('[data-confirm-cancel]');
+      if (cancel) cancel.focus();
+    });
+  }
   function date(value) {
     if (!value) return '';
     const match = String(value).match(/^(\d{4})-(\d\d)-(\d\d)/);
@@ -268,13 +297,61 @@ const H = (() => {
     const linked = (snapshotItems || []).some((item) => item?.metadata?.reference && String(item.values?.[0] || '').trim() === text);
     return linked ? LINKED_CATALOGUE_NOTE : '';
   }
+  // The acknowledgement is a named pharmacist attestation, so a blank name is never filled in automatically.
+  function reconciliationReviewer(header) {
+    const name = typeof header?.pharmacist === 'string' ? header.pharmacist.trim() : '';
+    if (!name) return { ok: false, reviewer: '', hint: 'Enter the reviewing pharmacist name in the box above the Acknowledge button, then acknowledge again.' };
+    if (name.length > 120) return { ok: false, reviewer: '', hint: 'The pharmacist name is too long. Shorten it in the box above the Acknowledge button.' };
+    return { ok: true, reviewer: name, hint: '' };
+  }
+  // Mirrors the desktop allow-list in src/patient-file-open.js; the desktop side re-checks every open.
+  function fileOpenable(name) { return typeof name === 'string' && !name.startsWith('.') && /\.(pdf|txt|docx)$/i.test(name); }
+  // Per-patient results from GET /api/patients/<id>/results. Display only: it never says a result is approved.
+  function resultsHtml(r, patientId) {
+    if (!r || typeof r !== 'object' || !r.pathology || !r.interactions) return '<p class="muted" role="status">Results could not be loaded.</p>';
+    const stamp = (value) => (value ? esc(String(value).replace('T', ' ').slice(0, 16)) : 'date not recorded');
+    const basis = {
+      used_by_report: 'The latest built report was made from the results now on file.',
+      changed_since_build: 'These results changed after the report was built. Refresh the report, review it, then build and sign off again. A signed version is never changed by this.',
+      no_report: 'No report has been built yet.',
+      not_recorded: 'The report was built before this was tracked, so it cannot say whether it used these results.',
+      unknown: 'Could not check whether the report used these results.',
+    };
+    const evidence = {
+      automated_current: 'An eMIMS result for the current confirmed medicine list is on file.',
+      manual_note: 'Only a manually saved interaction note is on file.',
+      stale: 'The saved result does not match the current confirmed medicine list. There is no current result.',
+      none: 'No interaction result is on file.',
+      no_current_confirmation: 'The medicine list has not been confirmed for the current interview.',
+    };
+    const path = r.pathology, inter = r.interactions, id = esc(patientId);
+    const rows = (path.records || []).map((x) => `<tr><td>${esc(x.test)}</td><td>${esc(x.value)}</td><td>${esc(x.unit)}</td><td>${esc(x.reference_interval)}</td><td>${esc(x.sample_date) || 'no date'}</td><td>${esc(x.source)}</td><td>${x.verified ? 'Verified' : 'Not verified'}</td></tr>`).join('');
+    const collected = path.collection ? `Last collection: ${esc(path.collection.status || 'recorded')} (${stamp(path.collection.at)}).` : 'No pathology collection recorded yet.';
+    const pdfs = (path.source_pdfs || []).map((f) => `<li>${esc(f.name)} <span class="muted">saved ${f.modified ? esc(new Date(f.modified * 1000).toISOString().slice(0, 10)) : 'date not recorded'}</span></li>`).join('');
+    const files = (inter.files || []).map((f) => `<li>${f.kind === 'automated' ? 'eMIMS result' : 'Checked by hand'} <span class="muted">saved ${stamp(f.saved_at)}</span> ${f.current ? '<strong>current</strong>' : '<span class="muted">not current</span>'}</li>`).join('');
+    return `<div class="results-view" data-results>
+      <section class="panel-section" data-results-pathology><h3>Pathology</h3>
+        <p role="status">${collected}${path.recheck_pending ? ' A re-check is requested and waiting for the My Health Record tab.' : ''}</p>
+        ${rows ? `<div class="table-scroll"><table><thead><tr><th scope="col">Test</th><th scope="col">Result</th><th scope="col">Unit</th><th scope="col">Range</th><th scope="col">Sample date</th><th scope="col">Source</th><th scope="col">Check</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<p class="muted">No pathology results are entered in the record yet.</p>'}
+        ${pdfs ? `<h4>Pathology files</h4><ul>${pdfs}</ul>` : ''}
+        <p class="muted" data-results-basis="pathology">${esc(basis[path.report] || basis.unknown)} (This refers to the whole saved pathology record and its files, not single rows.)</p>
+        <div class="actions"><button type="button" data-results-recheck-pathology="${id}">Re-check pathology online</button></div>
+      </section>
+      <section class="panel-section" data-results-interactions><h3>Interactions</h3>
+        <p role="status" data-results-evidence="${esc(inter.evidence_state)}">${esc(evidence[inter.evidence_state] || 'Interaction status unknown.')}</p>
+        ${files ? `<ul>${files}</ul>` : '<p class="muted">No interaction results saved.</p>'}
+        <p class="muted" data-results-basis="interactions">Report record: ${esc((basis[inter.report] || basis.unknown).replace("results now on file", "interaction files now on file"))} This describes the report, not the medicine list. Whether the result matches the current confirmed medicines is the line above. A report built from a result that is not current is not an all-clear.</p>
+        <div class="actions"><button type="button" data-results-run-interactions="${id}">Run interactions again</button></div>
+      </section>
+      <p class="muted">${esc(r.note || '')}</p></div>`;
+  }
   // Freshness and recorded-state checklist from GET /api/patients/<id>/report-status. Display only: it never
   // says approved or ready, and unknown or unverifiable stays visibly uncertain.
   function reportStatusHtml(status) {
     if (!status || typeof status !== 'object') return '';
     const reasonText = {
       document_changed: 'the Word file changed', pdf_changed: 'the PDF changed or is missing', report_content_changed: 'the report content changed since it was built',
-      interview_changed: 'the interview changed', pathology_changed: 'the pathology changed', source_files_changed: 'the original referral or pathology files changed',
+      interview_changed: 'the interview changed', pathology_changed: 'the pathology changed', interactions_changed: 'the interaction results changed', source_files_changed: 'the original referral or pathology files changed',
       clinical_record_changed: 'the clinical record changed', pharmacist_identity_changed: 'the pharmacist details in Settings changed', cannot_verify: 'the report could not be checked',
     };
     const reasons = (Array.isArray(status.reasons) ? status.reasons : []).map((r) => reasonText[r] || 'a change was detected');
@@ -284,6 +361,8 @@ const H = (() => {
     else if (status.status === 'not_generated') line = 'No report has been built yet.';
     else line = 'Report status could not be checked.';
     if (status.reasons && status.reasons.includes('cannot_verify')) line += ' Treat it as unverified.';
+    if (Number(status.held_medicine_actions) > 0) line += ` ${Number(status.held_medicine_actions)} medicine recommendation${Number(status.held_medicine_actions) === 1 ? '' : 's'} held by refresh must be handled before build or sign-off.`;
+    if (status.held_medicine_actions === null) line += ' Held medicine recommendations could not be checked; do not build or sign off until they are.';
     const head = status.status === 'current' ? 'Built report' : 'Report status';
     let sign = status.signed_off ? 'A signed version exists.' : 'Not signed off.';
     if (status.signed_off && status.signed_version_intact === false) sign = 'A signed version exists, but the signed version has changed or is no longer intact.';
@@ -730,6 +809,22 @@ const H = (() => {
       },
       dirty,
       hasConflict: () => conflicts.length > 0,
+      // Read-only freshness check against the saved record (for example after an API or MCP save). It never writes and never replaces a
+      // dirty form on its own. Results: 'skipped' (save or check in flight, open conflict, no loader), 'unreachable', 'current',
+      // 'stale-clean' (saved data changed, the form has no unsaved edits: the caller may reload it) and 'conflict' (saved data changed
+      // while the form has unsaved edits: the existing conflict path keeps the draft for an explicit Restore or Keep choice).
+      async checkRemote() {
+        if (!getRecord() || !loadCurrent || conflicts.length || saving || verifying) return 'skipped';
+        const currentGeneration = generation, id = getId(), before = JSON.stringify(getRecord());
+        let current;
+        try { current = await loadCurrent(id); } catch (_) { return 'unreachable'; }
+        if (generation !== currentGeneration || id !== getId() || !getRecord() || saving || verifying || conflicts.length || !current || typeof current !== 'object') return 'skipped';
+        const currentSnapshot = JSON.stringify(current);
+        if (currentSnapshot === saved || equivalent?.(currentSnapshot, saved)) return 'current';
+        if (!dirty() && JSON.stringify(getRecord()) === before) return 'stale-clean';
+        await verifyCurrent();
+        return 'conflict';
+      },
       save,
       changed() {
         clearTimeout(timer);
@@ -769,7 +864,7 @@ const H = (() => {
           ? 'Not saved and local draft unavailable. Leave and lose these changes?'
           : draftKey ? 'Not saved. Leave and keep the local draft for recovery?'
             : `Not saved - ${error}. Leave and discard these changes?`;
-        if (!ok && !confirm(message)) return false;
+        if (!ok && !(await confirmDialog(message, { title: 'Unsaved changes', okLabel: 'Leave', fallback: typeof confirm === 'function' ? confirm : undefined }))) return false;
         clearTimeout(timer);
         return true;
       },
@@ -867,6 +962,9 @@ const H = (() => {
     linkedCatalogueNote,
     buildDisabledReason,
     reportStatusHtml,
+    resultsHtml,
+    fileOpenable,
+    reconciliationReviewer,
     commonStep,
     suburb,
     displayAddress,
@@ -887,6 +985,7 @@ const H = (() => {
     showInterviewRefresh,
     interviewDrafts,
     autosaver,
+    confirmDialog,
   };
 })();
 if (typeof module !== 'undefined') module.exports = H;

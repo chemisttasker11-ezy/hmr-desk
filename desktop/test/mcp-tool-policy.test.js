@@ -30,3 +30,23 @@ test('read, ui and local save tools are not refused by the policy', () => {
 });
 
 test('an unclassified tool name is refused', () => { assert.equal(policy.refusal('hmr_new_tool', {}), 'unclassified tool'); });
+
+test('hmr_job_start: only local-only jobs reach the engine; AI and unknown jobs are refused before any request', async () => {
+  for (const job of ['report_start', 'report_build']) assert.equal(policy.refusal('hmr_job_start', { job, patient_id: 1 }), null, job);
+  for (const job of ['interview_pack', 'interview_sheet', 'report_assist', 'report_draft', 'interview_assist', 'report_extract', 'import_history', 'intake_apply', '', undefined])
+    assert.equal(policy.refusal('hmr_job_start', { job, patient_id: 1 }), 'job that is not local-only', String(job));
+  assert.equal(policy.refusal('hmr_job_start', undefined), 'job that is not local-only');
+  for (const job of ['report_assist', 'report_draft', 'interview_assist', 'report_extract'])
+    await assert.rejects(call('hmr_job_start', { job, patient_id: 1 }, never, never), /Restricted/, job);
+  let seen;
+  const fetcher = async (url, opt) => { seen = { url, body: opt && opt.body }; return { ok: true, status: 200, json: async () => ({ id: 'j1' }) }; };
+  await call('hmr_job_start', { job: 'report_start', patient_id: 1 }, fetcher, async () => 'token');
+  assert.match(String(seen.url), /\/api\/jobs$/);
+  assert.match(String(seen.body), /report_start/);
+});
+
+test('allowing local jobs does not touch send, sign-off, claim, message or settings restrictions', () => {
+  for (const n of ['hmr_message_approve', 'hmr_messages_check', 'hmr_run', 'hmr_task_result', 'hmr_settings_set', 'hmr_agent_select', 'hmr_report_refresh', 'hmr_referral_commit', 'app_proda_login'])
+    assert.equal(policy.CLASS[n], 'blocked', n);
+  for (const action of ['signed_off', 'report_sent', 'claimed', 'claim_now']) assert.equal(policy.refusal('hmr_patient_action', { action }), 'patient state change', action);
+});

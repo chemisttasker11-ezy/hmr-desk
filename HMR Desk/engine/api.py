@@ -23,7 +23,7 @@ import agents
 import records
 import medicine_reference
 import medicine_snapshot
-import steps
+import helper_status, steps
 import app_paths
 import manual_medicine_names
 import claims_data
@@ -156,9 +156,9 @@ def handle(conn, method, path, query, body):
         routed = routes_work.handle(conn, method, path, query, body)
         if routed is not None: return routed
         if method == 'GET' and path == '/api/mims/lists':
-            return 200, {'lists': mims_lists(conn)}
+            return 200, helper_status.respond('mims', 'lists', mims_lists(conn), MIMS_PATH.is_file())
         if method == 'GET' and path == '/api/claims':
-            return 200, {'claims': claim_list(conn)}
+            return 200, helper_status.respond('ppa', 'claims', claim_list(conn), bool(claims_helper and record))
         routed = routes_patients.handle_list(conn, method, path, query, body)
         if routed is not None: return routed
         routed = routes_reference.handle(conn, method, path, query, body)

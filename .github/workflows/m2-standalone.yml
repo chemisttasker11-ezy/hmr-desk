@@ -32,7 +32,7 @@ jobs:
         run: python -m pip install -r requirements-build.txt
       - name: Isolated synthetic backend regressions
         working-directory: HMR Desk/engine
-        run: python -m pytest -q test_app_paths.py test_db_migrations.py test_template_report_builder.py test_report_auth.py test_clinical_routes.py test_clinical_snapshot.py test_visual_compare.py test_manual_foundation.py test_clinical_privacy.py test_service_static_security.py test_backup_bundle.py test_reconciliation_review.py test_medicine_scenarios.py test_pathology_records.py test_pathology_import.py test_offline_helpers.py test_local_referral_extraction.py test_referral_identity.py test_referral_variants.py test_interview_intake_review.py test_clinical_review_pages.py test_backup_template.py test_db_encryption.py test_dev_seed.py test_template_table_format.py test_template_prototype.py
+        run: python -m pytest -q test_app_paths.py test_db_migrations.py test_template_report_builder.py test_report_auth.py test_clinical_routes.py test_clinical_snapshot.py test_visual_compare.py test_manual_foundation.py test_clinical_privacy.py test_service_static_security.py test_backup_bundle.py test_reconciliation_review.py test_medicine_scenarios.py test_pathology_records.py test_pathology_import.py test_offline_helpers.py test_local_referral_extraction.py test_referral_identity.py test_referral_variants.py test_interview_intake_review.py test_clinical_review_pages.py test_backup_template.py test_db_encryption.py test_dev_seed.py test_template_table_format.py test_template_prototype.py test_optional_gp_plan.py test_gp_practice_details.py test_report_refresh_recommendations.py test_report_held_actions.py test_snapshot_contract_compat.py test_handover_safety.py test_original_builder_adapter.py test_original_builder_jobs.py test_original_builder_publication.py test_suggest_template_mentions.py test_brainstorm_asset_packaging.py test_brainstorm_tables_lookup.py
       - name: Medicine reference data synthetic tests
         run: python -m unittest discover -s "HMR Desk/engine/tests/medicine_data" -v
       - name: Electron unit tests
@@ -58,18 +58,13 @@ jobs:
       - name: Real Windows DPAPI protected synthetic draft crash/restart
         shell: pwsh
         run: ./scripts/smoke-dpapi.ps1
-      - name: Bundle reviewed Brainstorm tables into frozen engine assets
-        shell: pwsh
-        run: |
-          $assets = 'HMR Desk/engine/assets'
-          New-Item -ItemType Directory -Force -Path $assets | Out-Null
-          $dest = Join-Path $assets 'brainstorm-mmr-v2.0-tables.json'
-          Copy-Item 'references/brainstorm-mmr-v2.0-tables.json' $dest
-          $hash = (Get-FileHash $dest -Algorithm SHA256).Hash.ToLowerInvariant()
-          @{ file = 'brainstorm-mmr-v2.0-tables.json'; sha256 = $hash } | ConvertTo-Json | Set-Content -Encoding ascii (Join-Path $assets 'brainstorm-tables-manifest.json')
+      - name: Stage tracked Brainstorm assets with shared local and CI tool
+        run: python scripts/prepare-brainstorm-assets.py stage
       - name: Build Windows x64 frozen Python engine
         working-directory: HMR Desk/engine
         run: python -m PyInstaller --clean --noconfirm hmr-engine.spec
+      - name: Verify frozen engine Brainstorm assets match the tracked source
+        run: python scripts/prepare-brainstorm-assets.py verify "HMR Desk/engine/dist/hmr-engine"
       - name: Smoke actual frozen engine without Python subprocess runtime
         run: python scripts/smoke-packaged-engine.py "HMR Desk/engine/dist/hmr-engine/hmr-engine.exe"
       - name: Restore verified LibreOffice MSI cache
@@ -90,10 +85,14 @@ jobs:
         run: python scripts/smoke-template-pdf.py
       - name: Synthetic referral-to-signed-and-sent HMR journey (real PDF, DOCX and offline PDF)
         working-directory: HMR Desk/engine
-        run: python -m pytest -q test_synthetic_patient_journey.py
+        env:
+          HMR_REQUIRE_PDF_CONVERTER: '1'
+        run: python -m pytest -q -rs test_synthetic_patient_journey.py
       - name: Build NSIS installer with engine resources
         working-directory: desktop
         run: npm run dist
+      - name: Verify packaged Electron engine Brainstorm assets
+        run: python scripts/prepare-brainstorm-assets.py verify "desktop/dist/win-unpacked/resources/engine/hmr-engine"
       - name: Check that standalone engine is packed in installed resources
         shell: pwsh
         run: |
@@ -145,6 +144,9 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - uses: actions/download-artifact@v4
         with:
           name: hmr-m2-windows-unsigned-engineering-build
@@ -161,6 +163,12 @@ jobs:
           if (-not $exe) { throw 'Installed HMR Desk.exe not found under LOCALAPPDATA' }
           Write-Host ('Installed at ' + $exe.FullName)
           "HMR_SMOKE_EXE=$($exe.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Verify reference assets in actual silent-installed app
+        shell: pwsh
+        run: |
+          $engineFolder = Join-Path (Split-Path $env:HMR_SMOKE_EXE -Parent) 'resources\engine\hmr-engine'
+          python scripts/prepare-brainstorm-assets.py verify $engineFolder
+          if ($LASTEXITCODE -ne 0) { throw 'Installed Brainstorm reference assets failed verification' }
       - name: Boot installed app, verify engine, crash recovery and clean exit
         shell: pwsh
         run: ./scripts/smoke-packaged-desktop.ps1

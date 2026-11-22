@@ -44,9 +44,10 @@ def details_text(data):
 
 def medicine_rows(data):
     rows = [r[:] for r in data['meds']]
+    dup_notes = duplicate_notes(data)
     for i, meta in enumerate((data.get('details') or {}).get('meds', [])):
         if i < len(rows):
-            rows[i][4] = '\n'.join(filter(None, (rows[i][4], 'DAA: ' + meta['packed'] if meta['packed'] else '', use_text(meta), reference_text(meta), 'How often used: ' + meta['prn_use'] if meta.get('prn_use') else '')))
+            rows[i][4] = '\n'.join(filter(None, (rows[i][4], 'DAA: ' + meta['packed'] if meta['packed'] else '', use_text(meta), reference_text(meta), dup_notes.get(('meds', i), ''), 'How often used: ' + meta['prn_use'] if meta.get('prn_use') else '')))
     return rows
 
 USE_REASONS = ('', 'finished_course', 'stopped_gp', 'stopped_specialist', 'self_ceased', 'ran_out_of_scripts', 'side_effects', 'other', 'unknown')
@@ -83,6 +84,107 @@ def reference_text(meta):
     ident = 'PBS' if ref['source'] == 'pbs' else ref['source'].upper() + ' ' + ref['code']
     return 'Reference: ' + ref['display'] + ' (' + ident + ', release ' + ref['release'] + ')'
 
+DUP_KEYS = {'item_id', 'own_sig', 'target_sig', 'target_text', 'note'}
+
+def identity_sig(row, meta):
+    """What a duplicate confirmation was made about: the medicine text as entered (strength and form included, compared
+    whole after trimming and case-folding) plus the catalogue entry when one is linked. Any change makes it differ."""
+    ref = (meta or {}).get('reference')
+    ref_id = ref['source'] + ':' + ref['code'] if valid_reference(ref) else ''
+    return ' '.join(str(row[0]).lower().split()) + '|' + ref_id  # plain text so the renderer and engine compare the same way
+
+_STRENGTH = re.compile(r'(\d+(?:\.\d+)?)\s*(mg|mcg|\u00b5g|ug|g|ml|iu|units?|%)')
+_FORMS = {'tablet': 'tablet', 'tablets': 'tablet', 'tab': 'tablet', 'capsule': 'capsule', 'capsules': 'capsule', 'cap': 'capsule',
+          'mr': 'mr', 'sr': 'sr', 'xr': 'xr', 'er': 'er', 'cr': 'cr', 'ec': 'ec', 'patch': 'patch', 'injection': 'injection', 'syrup': 'syrup',
+          'solution': 'solution', 'suspension': 'suspension', 'cream': 'cream', 'ointment': 'ointment', 'drops': 'drops', 'inhaler': 'inhaler',
+          'spray': 'spray', 'sachet': 'sachet', 'suppository': 'suppository', 'wafer': 'wafer', 'lozenge': 'lozenge'}
+for _w in ('modified', 'release', 'extended', 'delayed', 'controlled', 'sustained', 'slow', 'long', 'acting', 'enteric', 'coated', 'film', 'chewable', 'dispersible', 'soluble', 'effervescent', 'orally', 'disintegrating', 'odt', 'liquid', 'elixir', 'gel', 'foam', 'powder', 'granules', 'pessary', 'enema', 'eye', 'ear', 'nasal', 'topical', 'oral', 'iv', 'im', 'subcutaneous', 'pen', 'vial', 'ampoule', 'cartridge', 'lotion', 'paste', 'implant', 'pellet', 'mouthwash', 'gargle', 'lancet', 'infusion', 'concentrate', 'emulsion', 'oil', 'shampoo', 'wash', 'tape', 'applicator', 'device', 'turbuhaler', 'accuhaler', 'nebule', 'respule', 'ml_liquid', 'xl', 'la', 'cd', 'dr', 'di', 'pr', 'sl', 'buccal', 'sublingual', 'transdermal', 'rectal', 'vaginal', 'depot', 'susp'): _FORMS.setdefault(_w, _w)  # qualifier words stay distinct, never merged
+del _w
+
+def _strengths(text):
+    return {(str(float(n)), u) for n, u in _STRENGTH.findall(text)}
+
+def _forms(text):
+    return {_FORMS[w] for w in re.findall(r'[a-z]+', text) if w in _FORMS}
+
+_SYN = {'tablets': 'tablet', 'tabs': 'tablet', 'tab': 'tablet', 'capsules': 'capsule', 'caps': 'capsule', 'cap': 'capsule'}
+
+def _canon(text):
+    """Fail-closed comparison text: only case, whitespace and tablet/capsule plurals are ignored. Every punctuation mark is kept as a token (a leading decimal point, hyphen versus plus, slash, comma). Every other word, number, slash
+    and their order must be identical. No word is recognised as a form, so unknown forms, release types and combination order all must match."""
+    t = text.lower().replace('\u00b5', 'mc')
+    return ' '.join(_SYN.get(w, w) for w in re.findall(r'[a-z]+|[0-9]+|\S', t, re.ASCII))
+
+def duplicate_compatible(row_a, meta_a, row_b, meta_b):
+    """Whether two entries may be confirmed as duplicates. Used only to refuse. Bounded rule: the entered texts must be the same once case,
+    spacing, punctuation and tablet/capsule plurals are ignored, and must contain a real strength (number plus unit). Different catalogue
+    entries never qualify. Reworded entries (brand versus generic wording) are not confirmable; the pharmacist edits the text. Nothing
+    here infers what a medicine is or whether two products are interchangeable."""
+    text_a, _, ref_a = identity_sig(row_a, meta_a).partition('|')
+    text_b, _, ref_b = identity_sig(row_b, meta_b).partition('|')
+    if ref_a and ref_b and ref_a != ref_b: return False
+    return _canon(text_a) == _canon(text_b) and bool(_strengths(text_a))
+
+def valid_duplicate(d):
+    return (isinstance(d, dict) and set(d) in (DUP_KEYS, DUP_KEYS | {'lapsed'}) and d.get('lapsed', True) is True and medicine_snapshot.valid_id(d['item_id'])
+            and all(isinstance(d[k], str) and 0 < len(d[k]) <= 2000 for k in ('own_sig', 'target_sig'))
+            and isinstance(d['target_text'], str) and len(d['target_text']) <= 400 and isinstance(d['note'], str) and len(d['note']) <= 2000)
+
+def _entries(data):
+    d = data.get('details') or {}
+    for key in ('meds', 'other_meds'):
+        for i, (row, meta) in enumerate(zip(data.get(key, []), d.get(key, []))):
+            yield key, i, row, meta
+
+def check_duplicates(data):
+    """Structure rules for pharmacist duplicate confirmations. A target that no longer exists is allowed (it shows as no
+    longer current); a self-link, a link to a row that is itself marked, and so a chain or cycle, is refused."""
+    entries = {m['item_id']: m for _, _, _, m in _entries(data) if isinstance(m, dict) and 'item_id' in m}
+    for _, _, _, m in _entries(data):
+        link = m.get('duplicate_of') if isinstance(m, dict) else None
+        if link is None: continue
+        if 'item_id' not in m: raise ValueError('duplicate confirmation needs a saved medicine row')
+        if link['item_id'] == m['item_id']: raise ValueError('a medicine row cannot be a duplicate of itself')
+        target = next((t for _, _, t_row, t in _entries(data) if isinstance(t, dict) and t.get('item_id') == link['item_id']), None)
+        if target is not None and not link.get('lapsed'):
+            own_row = next(r for _, _, r, x in _entries(data) if x is m); t_row = next(r for _, _, r, x in _entries(data) if x is target)
+            if (link['own_sig'] == identity_sig(own_row, m) and link['target_sig'] == identity_sig(t_row, target)
+                    and not duplicate_compatible(own_row, m, t_row, target)):
+                raise ValueError('a duplicate confirmation needs the same strength and form: identical medicine text with a strength, or the same catalogue entry with equal strength and form')
+        target_link = entries.get(link['item_id'], {}).get('duplicate_of')
+        if target_link is not None and not target_link.get('lapsed') and not link.get('lapsed'): raise ValueError('a duplicate confirmation cannot point at a row that is itself marked as a duplicate')
+
+def duplicate_state(data):
+    """One dict per confirmation: where it is, what it names, and whether it is still current. Current means the target row
+    exists, is not the row itself, and neither entry's identity changed since the pharmacist ticked it. It never implies use."""
+    by_id = {m['item_id']: (key, i, row, m) for key, i, row, m in _entries(data) if 'item_id' in m}
+    out = []
+    for key, i, row, meta in _entries(data):
+        link = meta.get('duplicate_of')
+        if not valid_duplicate(link): continue
+        target = by_id.get(link['item_id'])
+        current = bool(not link.get('lapsed') and target and target[3] is not meta and link['own_sig'] == identity_sig(row, meta) and link['target_sig'] == identity_sig(target[2], target[3]))
+        out.append({'section': key, 'index': i, 'name': str(row[0]), 'target_name': str(target[2][0]) if target else link['target_text'],
+                    'current': current, 'note': link['note']})
+    return out
+
+def lapse_duplicates(data):
+    """Called when a record is saved. A confirmation whose identity check fails is marked lapsed and stays on the record as audit.
+    It is never current again, even if the text is later put back: the pharmacist has to confirm again."""
+    current = {(st['section'], st['index']): st['current'] for st in duplicate_state(data)}
+    for (key, i), ok in current.items():
+        link = data['details'][key][i]['duplicate_of']
+        if not ok and not link.get('lapsed'): link['lapsed'] = True
+
+def duplicate_text(state):
+    if not state['current']:
+        return 'An earlier pharmacist duplicate confirmation is no longer current (an entry changed or was removed). It needs a new confirmation. Check by hand.'
+    text = 'Pharmacist confirmed this entry as a duplicate of "' + state['target_name'] + '". Use is recorded separately on each entry.'
+    return text + (' Pharmacist note: ' + ' '.join(state['note'].split()) if state['note'].strip() else '')
+
+def duplicate_notes(data):
+    return {(st['section'], st['index']): duplicate_text(st) for st in duplicate_state(data)}
+
 PROPOSAL_CANDIDATE_KEYS = {'source', 'code', 'display', 'kind', 'generic_name', 'brand_name', 'dose_form', 'release'}
 
 def valid_prefill_proposal(p):
@@ -98,10 +200,18 @@ def valid_prefill_proposal(p):
         if not isinstance(c[k], str) or len(c[k]) > 400: return False
     return all(c[k] for k in ('source', 'code', 'display', 'release'))
 
+def valid_location(loc):
+    # Where the row sat on the referral page when it was read, in PDF points, plus the hash of that exact PDF.
+    if not isinstance(loc, dict) or set(loc) != {'page', 'box', 'pdf_sha256'}: return False
+    box = loc['box']
+    return (type(loc['page']) is int and 1 <= loc['page'] <= 500 and isinstance(loc['pdf_sha256'], str) and re.fullmatch('[a-f0-9]{64}', loc['pdf_sha256']) is not None
+            and isinstance(box, list) and len(box) == 4 and all(type(v) in (int, float) and -1e5 < v < 1e5 for v in box) and box[0] < box[2] and box[1] < box[3])
+
 def valid_use(m, base, optional):
     if 'source_evidence' in m:
         evidence = m['source_evidence']
-        if not isinstance(evidence, dict) or set(evidence) != {'kind', 'lines', 'page_candidates', 'text_sha256'}: return False
+        if not isinstance(evidence, dict) or set(evidence) - {'location'} != {'kind', 'lines', 'page_candidates', 'text_sha256'}: return False
+        if 'location' in evidence and not valid_location(evidence['location']): return False
         if evidence['kind'] != 'referral_text' or not isinstance(evidence['text_sha256'], str) or not re.fullmatch('[a-f0-9]{64}', evidence['text_sha256']): return False
         lines, pages = evidence['lines'], evidence['page_candidates']
         if not isinstance(lines, list) or not 1 <= len(lines) <= 80 or any(not isinstance(line, str) or len(line) > 20000 for line in lines): return False
@@ -113,6 +223,9 @@ def valid_use(m, base, optional):
     if 'reference' in m:
         if not valid_reference(m['reference']): return False
         m = {k: v for k, v in m.items() if k != 'reference'}
+    if 'duplicate_of' in m:
+        if not valid_duplicate(m['duplicate_of']): return False
+        m = {k: v for k, v in m.items() if k != 'duplicate_of'}
     if 'prefill_proposal' in m:
         if not valid_prefill_proposal(m['prefill_proposal']): return False
         m = {k: v for k, v in m.items() if k != 'prefill_proposal'}
@@ -122,10 +235,34 @@ def valid_use(m, base, optional):
     if set(m) not in (base, base | extra): return False
     return not (extra <= set(m)) or (m['use_status'] in ('', 'taking', 'not_using', 'unknown') and m['use_reason'] in USE_REASONS and isinstance(m['use_details'], str) and len(m['use_details']) <= 20000)
 
+def referral_files(folder):
+    files = sorted(f for f in folder.iterdir() if f.is_file() and f.suffix.lower() == '.pdf' and not f.name.lower().startswith(('ppa consent - ', 'hmr interview - ')))
+    return [f for f in files if re.search(r'_ [A-Z]{2,4}\.pdf$', f.name)] or [f for f in files if 'referral' in f.name.lower()]
+
+
+def geometry_table(folder):
+    """Read the medicines table by page position (referral_geometry). Returns the whole-table result with notes, or None when there
+    is no referral PDF or the read raised. Failure is never an error for the interview: the text-order read stays."""
+    import referral_geometry
+    files = referral_files(folder)
+    if not files: return None
+    try:
+        specmod = importlib.util.spec_from_file_location('hmr_intake', __import__('app_paths').resource_root() / 'scripts' / 'intake' / 'intake.py')
+        module = importlib.util.module_from_spec(specmod); specmod.loader.exec_module(module)
+        with module.fitz.open(files[0]) as doc:
+            pages = [([(w[0], w[1], w[2], w[3], w[4]) for w in page.get_text('words')], page.rect.height) for page in doc]
+            scanned = [n + 1 for n, page in enumerate(doc) if referral_geometry.image_coverage(page) >= 0.5]
+        result = referral_geometry.pair_document(pages)
+        result['scanned_pages'] = scanned
+        result['pdf_sha256'] = hashlib.sha256(files[0].read_bytes()).hexdigest()
+        return result
+    except Exception:
+        return None
+
+
 def referral_text(folder):
     clarify = []
-    files = sorted(f for f in folder.iterdir() if f.is_file() and f.suffix.lower() == '.pdf' and not f.name.lower().startswith(('ppa consent - ', 'hmr interview - ')))
-    files = [f for f in files if re.search(r'_ [A-Z]{2,4}\.pdf$', f.name)] or [f for f in files if 'referral' in f.name.lower()]
+    files = referral_files(folder)
     if files:
         specmod = importlib.util.spec_from_file_location('hmr_intake', __import__('app_paths').resource_root() / 'scripts' / 'intake' / 'intake.py')
         module = importlib.util.module_from_spec(specmod); specmod.loader.exec_module(module)
@@ -140,6 +277,39 @@ def referral_text(folder):
         text = '\f'.join(pages)
         return text, clarify
     return None, clarify
+
+def apply_geometry(found, geo):
+    """Prefer the position-based medicines table only when the whole table was read cleanly. Every difference and every doubt is kept
+    visible in found['geometry_notes'] (later shown in Clarify). Nothing is corrected, guessed or silently dropped."""
+    import referral_geometry
+    notes = found.setdefault('geometry_notes', [])
+    if geo is None: return
+    if geo['scanned_pages']:
+        notes.append('Referral page(s) %s are images with a text layer, probably text recognised from a scan. Letters can be wrong in that layer (for example a medicine name or a direction word). Check every medicine name and direction against the page image.' % ', '.join(map(str, geo['scanned_pages'])))
+    if not geo['ok']:
+        if geo['reason'] != 'no medicines heading found':
+            notes.append('Medicines table was not read by page position (' + geo['reason'] + '); the text-order read is used, with the checks above.')
+        return
+    if geo['flags']:
+        notes.append('Medicines table read by page position was not used because of: ' + '; '.join(geo['flags']))
+        return
+    text_rows = [[str(a), str(b)] for a, b in found['meds']]
+    rows = [[a, b] for a, b in geo['rows']]
+    norm = lambda rs: [' '.join((a + ' ' + b).split()).casefold() for a, b in rs]
+    if norm(text_rows) != norm(rows):
+        notes.append('Medicines table read by page position replaced the text-order read. Text-order read was: ' + '; '.join((a + ' | ' + b).strip(' |') for a, b in text_rows)[:3000])
+    found['meds'] = [(a, b) for a, b in rows]
+    found['medicine_source_lines'] = geo['source_lines']
+    if len(geo.get('row_boxes', [])) == len(rows) and isinstance(geo.get('page'), int) and re.fullmatch('[a-f0-9]{64}', geo.get('pdf_sha256', '')):
+        found['medicine_locations'] = [{'page': geo['page'], 'box': [round(float(v), 1) for v in box], 'pdf_sha256': geo['pdf_sha256']} for box in geo['row_boxes']]
+    found['unattributed_directions'] = []
+    found['unparsed'] = [k for k in found.get('unparsed', []) if k != 'meds']
+    if geo['excluded']:
+        notes.append('Lines set aside as page furniture, not read as medicines (check they are not clinical): ' + ' | '.join(geo['excluded'])[:600])
+    for i, (a, b) in enumerate(rows, 1):
+        odd = referral_geometry.unusual_direction_words(b)
+        if odd: notes.append('Medicine %d: unusual word(s) in the referral directions, compare with the page: %s' % (i, ', '.join(odd)))
+
 
 def blank(conn, patient):
     p = dict(patient); folder = jobs.patient_folder(patient)
@@ -164,6 +334,7 @@ def blank(conn, patient):
     spec = jobs.interview_spec_path(patient)
     text, clarify = referral_text(folder)
     found = referral.parse(text) if text is not None else None
+    if found is not None: apply_geometry(found, geometry_table(folder))
     record['clarify'].extend(clarify)
     stored_spec = records.get_json(conn, patient['id'], 'interview_spec.json')
     if stored_spec is not None or spec.is_file():
@@ -191,6 +362,11 @@ def blank(conn, patient):
             record['alcohol_smoking'] = '\n'.join(k.title() + ': ' + found[k] for k in ('alcohol', 'smoking') if found[k])
             record['social'] = found['social']
             record['clarify'].extend('Referral section not fully read: ' + k for k in found['unparsed'])
+            if found.get('unattributed_directions'):
+                record['clarify'].append('Referral directions not matched to a medicine (the referral text lists names and directions separately, so the pairing is unknown; check the referral PDF and enter each medicine directions yourself): ' + ' | '.join(str(x)[:200] for x in found['unattributed_directions'][:60]))
+            record['clarify'].extend(found.get('geometry_notes', []))
+            if found.get('form_checklist'):
+                record['clarify'].append('Referral form checklist lines (a ticked box cannot be read from the text; check the referral PDF): ' + ' | '.join(str(x)[:120] for x in found['form_checklist'][:30]))
             for k in ('meds', 'conditions', 'allergies', 'obs', 'alcohol_smoking', 'social', 'renal'):
                 value = found['renal'] if k == 'renal' else record[k] if k != 'obs' else any(obs.values())
                 if value: record['sources'].append(k + ' from referral - check')
@@ -208,12 +384,14 @@ def blank(conn, patient):
         # Attach only rows actually derived from this referral, not an older spec.
         if stored_spec is None and not spec.is_file():
             pages = [page.splitlines() for page in text.split('\f')]
-            for meta, lines in zip(record['details']['meds'], found.get('medicine_source_lines', [])):
+            locations = found.get('medicine_locations', [])
+            for n, (meta, lines) in enumerate(zip(record['details']['meds'], found.get('medicine_source_lines', []))):
                 meta['source_evidence'] = {
                     'kind': 'referral_text', 'lines': lines,
                     'page_candidates': [[n + 1 for n, page in enumerate(pages) if any(raw.strip() == line.strip() for raw in page)] for line in lines],
                     'text_sha256': hashlib.sha256(text.encode('utf-8')).hexdigest(),
                 }
+                if n < len(locations): meta['source_evidence']['location'] = locations[n]
 
     # Clinical fields entered at intake are not automatically promoted unless
     # a named pharmacist confirmed them against an exact original PDF page.
@@ -252,6 +430,17 @@ def blank(conn, patient):
                     parsed = [r for i, r in enumerate(record['meds']) if i not in keep]
                     norm = lambda t: ' '.join(str(t).split()).casefold()
                     same = {norm(' '.join(x for x in r[:2] if x)) for r in parsed} == {norm(x) for x in lines}
+                    # A confirmed list may contain an explicit "name - directions" separator.
+                    # Preserve *existing* PDF-geometry pairings only if every confirmed line
+                    # exactly replays the corresponding two-column row in source order.
+                    # Do not split reviewed strings or infer missing/changed text.
+                    if (not same and found is not None
+                            and len(found.get('medicine_locations', [])) == len(parsed) == len(lines)):
+                        same = all(
+                            row[0].strip() and row[1].strip()
+                            and ' '.join(line.split()) == ' '.join((row[0] + ' - ' + row[1]).split())
+                            for row, line in zip(parsed, lines)
+                        )
                     if parsed and not same:
                         kept_rows = [(r, record['details']['meds'][i]) for i, r in enumerate(record['meds']) if i in keep and r[0].strip().casefold() not in {x.casefold() for x in lines}]
                         record['meds'] = [r for r, _ in kept_rows]; record['details']['meds'] = [m for _, m in kept_rows]
@@ -325,7 +514,7 @@ def record_lock(patient):
 
 def validate(record):
     keys = {'header', *TEXT, *TABLES, 'clarify', 'consent', 'sources'}
-    if not isinstance(record, dict) or set(record) - {'saved', 'consent_file', 'details', 'revision', 'consent_signed_draft'} != keys: raise ValueError('invalid interview fields')
+    if not isinstance(record, dict) or set(record) - {'saved', 'consent_file', 'details', 'revision', 'consent_signed_draft', 'fidelity_warnings'} != keys: raise ValueError('invalid interview fields')
     def string(x): return isinstance(x, str) and len(x) <= 20000
     if not isinstance(record['header'], dict) or set(record['header']) != set(HEAD) or not all(string(x) for x in record['header'].values()): raise ValueError('invalid header')
     if not all(string(record[k]) for k in TEXT): raise ValueError('invalid text field')
@@ -347,6 +536,7 @@ def validate(record):
         for key, field in (('meds', 'prn_use'), ('other_meds', 'kind')):
             for m in d.get(key, []): m.setdefault(field, '')
     medicine_snapshot.validate_ids(record)
+    check_duplicates(record)
     if 'consent_signed_draft' in record and (type(record['consent_signed_draft']) is not bool or (record['consent_signed_draft'] and c['signed'])): raise ValueError('invalid consent draft')
     if 'revision' in record and (not isinstance(record['revision'], str) or not re.fullmatch(r'missing|[0-9a-f]{64}', record['revision'])): raise ValueError('invalid revision')
     if 'saved' in record and not isinstance(record['saved'], bool): raise ValueError('invalid saved flag')
@@ -354,6 +544,20 @@ def validate(record):
 
 def signed_file(folder):
     return sorted(f.name for f in folder.iterdir() if f.is_file() and 'signed' in f.name.lower())
+
+def fidelity_warnings(data):
+    """Read-only check of an already stored record for referral text that earlier imports could have mangled. Nothing is changed
+    or removed; the pharmacist is told to compare with the referral PDF."""
+    out = []
+    for i, row in enumerate(data.get('meds') or []):
+        if isinstance(row, list) and len(row) > 1 and isinstance(row[1], str):
+            starts = re.findall(r'(?:^|\.\s+)\d+(?:\s*-\s*\d+)?\s+[A-Za-z]', row[1])
+            if len(starts) >= 3: out.append('Medicine %d (%s): the stored referral directions look like several medicines\' directions joined together. Check the referral PDF and correct the directions; the original text is still in the row.' % (i + 1, str(row[0])[:60]))
+    reason = (data.get('details') or {}).get('reason') if isinstance(data.get('details'), dict) else ''
+    if isinstance(reason, str) and reason:
+        form = referral.form_checklist(reason.splitlines())[1]
+        if form: out.append('Reason for referral contains printed form checklist text (tick boxes cannot be read from the text). Check the referral PDF; the stored text is unchanged but would appear in the report letter.')
+    return out
 
 def load(conn, patient):
     folder = jobs.patient_folder(patient)
@@ -380,6 +584,7 @@ def load(conn, patient):
     if isinstance(data.get('header'), dict):
         for key, setting in [('pharmacist', 'pharmacist_name'), ('pharmacist_phone', 'pharmacist_phone'), ('pharmacist_credential', 'pharmacist_credential')]: data['header'][key] = settings.get(conn, setting)
     validate(data); data['saved'] = content is not None
+    data['fidelity_warnings'] = fidelity_warnings(data)
     signed = signed_file(folder)
     data['consent_file'] = signed[0] if signed else ''
     return data
@@ -412,7 +617,7 @@ def save(conn, patient, record, *, locked=False, signing=False):
                             if os.path.exists(temp): os.unlink(temp)
                 if isinstance(record, dict) and old_revision is not None: record['revision'] = old_revision
                 raise
-    validate(record); data = {k: v for k, v in record.items() if k not in ('saved', 'consent_file', 'revision')}
+    validate(record); lapse_duplicates(record); data = {k: v for k, v in record.items() if k not in ('saved', 'consent_file', 'revision', 'fidelity_warnings')}
     folder = jobs.patient_folder(patient)
     previous_bytes = records.get(conn, patient['id'], 'interview.json')
     if record.get('revision') != records.digest(previous_bytes): raise Conflict('interview conflict')
@@ -490,7 +695,7 @@ def export_with_note(conn, patient, fmt):
     table('Medicines on referral', ['Medicine','Referral directions','Actually taking','Points to check','Notes'], medicine_rows(data), 3)
     other_rows = [r[:] for r in data['other_meds']]
     for i, meta in enumerate(data['details'].get('other_meds', [])):
-        if i < len(other_rows): other_rows[i][3] = '\n'.join(filter(None, (other_rows[i][3], use_text(meta), CHOICE_LABELS['kind'].get(meta.get('kind'), ''), reference_text(meta))))
+        if i < len(other_rows): other_rows[i][3] = '\n'.join(filter(None, (other_rows[i][3], use_text(meta), CHOICE_LABELS['kind'].get(meta.get('kind'), ''), reference_text(meta), duplicate_notes(data).get(('other_meds', i), ''))))
     table('Other medicines found', ['Medicine','Directions','Why / who','Notes'], other_rows, 3)
     table('Pathology on file', ['Test','Result','Date','Comment'], data['pathology'], 2)
     section('To clarify', '\n'.join(data['clarify']))

@@ -21,7 +21,7 @@ def evaluate(train, held, library, brainstorm_text, tuning, sections):
  return total,no_key,covered,missing,index
 
 def main():
- refs=jobs.SKILL/'references'; cases=[json.loads(x) for x in report._read(refs/'case-index.jsonl').splitlines() if x.strip()]
+ refs=jobs.references_dir(); cases=[json.loads(x) for x in report._read(refs/'case-index.jsonl').splitlines() if x.strip()]
  train=[c for i,c in enumerate(cases) if i%5]; held=[c for i,c in enumerate(cases) if i%5==0]
  library=report._read(refs/'finding-library.md'); brainstorm_text=report._read(refs/'brainstorm-index.md')
  sections=brainstorm.sections(refs/'brainstorm-v2.pdf')

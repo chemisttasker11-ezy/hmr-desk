@@ -158,3 +158,24 @@ test('a saved booking redraws the patient even when refresh skips a focused form
   assert.equal(error.textContent, '');
   assert.equal(shown, 1);
 });
+
+test('Record visit for a patient whose stage does not offer it shows a visible reason and keeps the rule', async () => {
+  const nodes = { detail: { querySelector: () => null }, 'action-area': { scrollIntoView() {} }, 'offer-form': { addEventListener() {} } };
+  const patient = { id: 7, name: 'Synthetic', state: 'new', stage: 'intake' };
+  const hmr = { api: async (method, url) => {
+    if (url === '/api/patients') return { patients: [patient] };
+    if (url.endsWith('/timeline')) return { entries: [], milestones: {} };
+    if (url === '/api/patients/7') return patient;
+    return {};
+  } };
+  const H = { ...helpers, stageActions: () => ['offer', 'book_phone'] };
+  const context = vm.createContext({ H, hmr, esc: H.esc, date: H.date, localDate: () => '2026-11-16', page: 'patients', selected: '', detailTab: 'Overview',
+    formOpen: false, patients: [patient], actionFields: { visited: ['date'] }, actionLabels: { visited: 'Record visit' },
+    $: id => nodes[id], renderPatients() {}, messageComposer: () => '', document: { addEventListener() {}, querySelector: () => null },
+    errorText: e => e.message, alert() {}, navigate: async () => {} });
+  vm.runInContext(fs.readFileSync(require.resolve('../renderer/patients.js'), 'utf8'), context);
+  await vm.runInContext("showPatient(7, 'visited')", context);
+  assert.match(nodes['action-area'].innerHTML, /Record visit is not available for this patient yet \(current stage: intake\)/);
+  assert.match(nodes['action-area'].innerHTML, /role="alert"/);
+  assert.equal(vm.runInContext('formOpen', context), false);
+});

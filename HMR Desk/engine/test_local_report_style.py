@@ -7,6 +7,7 @@ from docx import Document
 from docx.oxml.ns import qn
 from docx.shared import Cm, Twips
 
+import pytest
 import local_report_builder as builder
 
 
@@ -177,3 +178,34 @@ def test_signoff_states_missing_pharmacist_data(tmp_path):
 def test_footer_table_has_page_field(tmp_path):
     footer = render(tmp_path).sections[0].footer
     assert footer.tables and 'PAGE' in footer.tables[0]._tbl.xml
+
+
+def _keep(element):
+    return element.find('.//' + qn('w:keepNext')) is not None
+
+
+def test_closing_is_kept_with_the_content_above_it(tmp_path):
+    doc = render(tmp_path)
+    body = [el for el in doc.element.body if el.tag in (qn('w:p'), qn('w:tbl'))]
+    texts = [''.join(el.itertext()) for el in body]
+    at = next(i for i, t in enumerate(texts) if t.startswith('Yours Sincerely'))
+    assert _keep(body[at])                                    # closing travels with the pharmacist line
+    assert body[at + 1].find('.//' + qn('w:keepLines')) is not None
+    spacer, plan = body[at - 1], body[at - 2]
+    assert not texts[at - 1].strip() and _keep(spacer)       # empty spacer after the follow-up block
+    assert plan.tag == qn('w:tbl') and all(_keep(p) for p in plan.findall(qn('w:tr'))[-1].iter(qn('w:p')))
+    assert [t for t in texts if t.strip()][-2:] == [texts[at], texts[at + 1]]   # text and order unchanged
+
+
+def test_signoff_is_not_orphaned_on_a_last_page_of_its_own(tmp_path):
+    import shutil, subprocess
+    fitz = pytest.importorskip('fitz')
+    if not shutil.which('soffice'): pytest.skip('LibreOffice not available')
+    d = data()
+    d.update(pharmacist_details='Simulation Pharmacist\nSynthetic credentials', meds=[["Med %d 10 mg tablet" % i, "1 daily", "c", "r"] for i in range(4)],
+             issues=[{"title": "Finding %d" % i, "rec": "Do this " * 6, "rationale": "Because " * 8} for i in range(9)])
+    target = tmp_path / 'long.docx'
+    builder.render(d, target)
+    subprocess.run(['soffice', '--headless', '--convert-to', 'pdf', '--outdir', str(tmp_path), str(target)], capture_output=True, timeout=90)
+    with fitz.open(tmp_path / 'long.pdf') as pdf: last = pdf[-1].get_text()
+    assert 'Yours Sincerely' in last and 'Follow-up' in last   # the closing shares its page with the follow-up content

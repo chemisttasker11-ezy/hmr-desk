@@ -113,8 +113,11 @@ def test_search_route_grouped_flag_is_opt_in():
         db.DATA_DIR = t
         build(ref.reference_path(), [pbs('1001A'), pbs('1002B')])
         conn = db.connect() if hasattr(db, 'connect') else None
-        s, plain = api.handle(conn, 'GET', '/api/medicines/search', {'q': ['brandex']}, None)
-        s2, grouped = api.handle(conn, 'GET', '/api/medicines/search', {'q': ['brandex'], 'grouped': ['1']}, None)
+        try:  # an open connection keeps hmr.db locked on Windows and breaks the temporary directory cleanup
+            s, plain = api.handle(conn, 'GET', '/api/medicines/search', {'q': ['brandex']}, None)
+            s2, grouped = api.handle(conn, 'GET', '/api/medicines/search', {'q': ['brandex'], 'grouped': ['1']}, None)
+        finally:
+            if conn is not None: conn.close()
         assert s == s2 == 200 and 'groups' not in plain and len(grouped['groups']) == 1 and grouped['groups'][0]['count'] == 2
 
 

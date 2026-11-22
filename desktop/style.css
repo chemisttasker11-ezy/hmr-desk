@@ -773,3 +773,68 @@ main:has(.interview-context) > header { height: 96px; min-height: 96px; }
   .status-chip { border: 1px solid CanvasText; }
   button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid Highlight; outline-offset: 2px; }
 }
+.med-page-image img{display:block;max-width:100%;border:1px solid #888;margin:6px 0;background:#fff}
+.med-page-image img.med-whole-page-image{max-height:70vh;object-fit:contain}
+.med-page-image p{margin:4px 0;font-size:.9em}
+.hmr-confirm { max-width: 560px; width: calc(100vw - 48px); border: 1px solid var(--control-border); border-radius: 8px; padding: 20px 24px; color: #202c2a; background: #fff; }
+.hmr-confirm::backdrop { background: #173c39aa; }
+.hmr-confirm h2 { margin: 0 0 10px; font-size: 18px; }
+.hmr-confirm-text { margin: 0 0 18px; white-space: pre-wrap; line-height: 1.45; }
+.hmr-confirm-actions { display: flex; justify-content: flex-end; gap: 10px; }
+.hmr-confirm-actions button { min-height: 40px; }
+
+.med-lookup-result{align-items:flex-start}
+.med-result-text{display:flex;flex-direction:row;flex-wrap:wrap;align-items:baseline;gap:2px 10px;min-width:0}
+.med-result-name{font-weight:600}
+.med-result-generic{font-size:.9em;color:#3b4a43}
+.med-result-form{font-size:.95em;background:#eef3f0;border-radius:4px;padding:1px 6px;align-self:flex-start}
+.med-result-count{font-size:.85em;color:#5a6a62}
+.med-lookup-result button:focus-visible{outline:3px solid #b45f06;outline-offset:2px}
+
+/* Medicine row layout: intentional rows that wrap, source (referral) and actual use as two labelled columns. */
+.interview-medicine-main { align-items: flex-start; gap: 8px 14px; }
+.interview-medicine-main > .interview-check { align-self: center; }
+.interview-medicine-main > .med-field { flex: 1 1 240px; min-width: 200px; }
+.interview-medicine-main > .med-field:first-of-type { flex: 3 1 320px; }
+.interview-medicine-main .interview-actual { flex: 1 1 240px; min-width: 200px; display: flex; flex-direction: column; gap: 2px; }
+.interview-medicine-main .interview-actual textarea { width: 100%; box-sizing: border-box; }
+.interview-medicine-main .interview-actual > span:not(.med-field-label) { display: block; }
+.interview-medicine-main .interview-actual select { width: 100%; box-sizing: border-box; }
+.interview-medicine-main .med-lookup { flex: 1 1 100%; }
+.interview-medicine-actions { flex: 1 1 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
+.interview-medicine-actions .interview-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.interview-medicine-main .interview-chips legend, .interview-medicine-actions .interview-chips legend { float: none; margin: 0 4px 0 0; align-self: center; }
+.interview-medicine-actions > button { align-self: center; }
+.med-hint { font-size: .85em; color: #5a6a62; margin: 0 0 4px; }
+.interview-medicine-actions > label { display: flex; flex-direction: column; gap: 2px; font-size: 12px; font-weight: 600; color: #3b4a43; }
+.interview-medicine-actions > label select, .interview-medicine-actions > label input { font-size: 14px; font-weight: 400; color: inherit; }
+.link-button { min-height: 0; padding: 0; border: 0; background: none; color: #176451; font: inherit; font-weight: 600; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+.link-button:focus-visible { outline: 3px solid #176451; outline-offset: 2px; }
+
+/* Pathology records table: keep headers on one line and fields usable; scroll sideways instead of squeezing. */
+.pathology-records { overflow-x: auto; max-width: 100%; }
+.pathology-records table { min-width: 880px; }
+.pathology-records th { white-space: nowrap; }
+.pathology-records td input[type=text], .pathology-records td input[type=date] { width: 100%; box-sizing: border-box; }
+.pathology-records [data-pathology-field=test] { min-width: 12em; }
+.pathology-records [data-pathology-field=value], .pathology-records [data-pathology-field=unit] { min-width: 6em; }
+.pathology-records [data-pathology-field=reference_interval] { min-width: 8em; }
+.pathology-records [data-pathology-field=sample_date] { min-width: 10.5em; }
+.pathology-records [data-pathology-field]:not([type=checkbox]) { min-width: 8em; }
+/* Interview sticky bar: wrap instead of overflowing narrow windows. */
+.interview-context { flex-wrap: wrap; }
+#interview-outstanding { flex: 1 1 260px; min-width: 0; }
+
+/* Narrow windows: buttons may wrap their text instead of forcing the page wider, and the Interview status bar
+   scrolls with the page (still shows Save, status and what is left, including Consent) instead of covering content. */
+.interview-section .actions button { white-space: normal; max-width: 100%; }
+@media (max-width: 800px) {
+  .interview-context { position: static; box-shadow: none; border-radius: 8px; margin-bottom: 8px; }
+  .interview-section { scroll-margin-top: 110px; }
+  main:has(.interview-context) > header { height: auto; min-height: 56px; max-height: none; }
+}
+
+.interview-duplicate { border: 1px solid var(--control-border); border-radius: 6px; padding: 8px; margin: 6px 0; display: grid; gap: 6px; }
+.interview-duplicate select, .interview-duplicate textarea { width: 100%; }
+.interview-dup-hint { margin: 0; font-size: 12px; }
+.interview-dup-stale { margin: 0; font-size: 12px; font-weight: 600; }

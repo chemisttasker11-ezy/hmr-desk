@@ -50,7 +50,7 @@ test('interview refresh appears only for stale unsent reports', () => {
 test('report refresh does not post when saving pending edits fails', async () => {
   let posts = 0, saves = 0;
   const screen = { inert: false };
-  const context = vm.createContext({ H: { autosaver: () => ({ save: async () => { saves++; return false; } }) },
+  const context = vm.createContext({ H: { confirmDialog: async (message, options) => options.fallback(message), autosaver: () => ({ save: async () => { saves++; return false; } }) },
     page: 'report_editor', confirm: () => true, $: () => screen,
     hmr: { api: async () => { posts++; } }, document: { addEventListener() {} } });
   vm.runInContext(fs.readFileSync(require.resolve('../renderer/report-editor.js'), 'utf8'), context);
@@ -64,7 +64,7 @@ test('report refresh offers each edited-block conflict and replaces only the one
   const screen = { inert: false };
   const conflicts = [{ key: 'doctor', label: 'GP details block', report: 'Typed GP', record: 'Dr Record' },
     { key: 'patient', label: 'patient details block', report: 'Typed patient', record: 'DOB: 01-Feb-1950' }];
-  const context = vm.createContext({ H: { autosaver: () => ({ save: async () => true, reset() {} }), esc: (x) => x },
+  const context = vm.createContext({ H: { confirmDialog: async (message, options) => options.fallback(message), autosaver: () => ({ save: async () => true, reset() {} }), esc: (x) => x },
     page: 'report_editor', $: () => screen, errorText: String, alert() {},
     confirm: (text) => { prompts.push(text); return !/The patient details block/.test(text); },
     hmr: { api: async (method, url, body) => { calls.push([method, url, body]); return method === 'POST' && !body ? { demographic_conflicts: conflicts } : {}; } },
@@ -75,7 +75,7 @@ test('report refresh offers each edited-block conflict and replaces only the one
   assert.equal(prompts.length, 3);                               // initial confirm, then one per conflict
   assert.match(prompts[1], /GP details block[\s\S]*Typed GP[\s\S]*Dr Record/);
   const replace = calls.find((c) => c[2] && c[2].replace_demographics);
-  assert.deepEqual(replace[2].replace_demographics, ['doctor']); // the declined block is not replaced
+  assert.deepEqual([...replace[2].replace_demographics], ['doctor']); // the declined block is not replaced
 });
 
 test('report editor shows each differing block with both texts and sends only the chosen action', async () => {
@@ -84,7 +84,7 @@ test('report editor shows each differing block with both texts and sends only th
   const mismatch = [{ key: 'doctor', label: 'GP details block', report: 'Typed <GP>', record: 'Dr Record', acknowledged: false },
     { key: 'patient', label: 'patient details block', report: 'Old patient', record: 'New patient', acknowledged: true }];
   const questions = [];
-  const context = vm.createContext({ H: { autosaver: () => ({ save: async () => true, reset() {} }), esc: (x) => String(x).replace(/</g, '&lt;') },
+  const context = vm.createContext({ H: { confirmDialog: async (message, options) => options.fallback(message), autosaver: () => ({ save: async () => true, reset() {} }), esc: (x) => String(x).replace(/</g, '&lt;') },
     esc: (x) => String(x).replace(/</g, '&lt;'), page: 'report_editor', $: () => screen, errorText: String, alert() {},
     confirm: (q) => { questions.push(q); return true; },
     hmr: { api: async (method, url, body) => { calls.push([method, url, body]); return { issues: [], demographic_mismatches: [] }; } },
@@ -103,4 +103,10 @@ test('report editor shows each differing block with both texts and sends only th
   await context.reportEditorClick({ dataset: { demoAction: 'replace', demoKey: 'doctor' } });
   assert.match(questions[1], /Replace the report's GP details block with the patient record's text/);
   assert.equal(calls[1][2].action, 'replace');
+});
+test('confirmDialog without a DOM uses the caller fallback and never defaults to yes', async () => {
+  const H = require('../renderer/helpers');
+  assert.equal(await H.confirmDialog('Go?', { fallback: () => true }), true);
+  assert.equal(await H.confirmDialog('Go?', { fallback: () => false }), false);
+  assert.equal(await H.confirmDialog('Go?', {}), false);
 });

@@ -6,6 +6,7 @@ ValueError and TypeError still propagate to api.handle (same 400 response).
 import re
 
 import db
+import jobs
 import records
 import settings
 
@@ -25,6 +26,12 @@ def handle(conn, method, path, query, body):
                {'sha256': result['sha256'], 'pages': result['page_count'], 'name': result['name']}, 'api')
         conn.commit()
         return 200, result
+    match = re.fullmatch(r'/api/patients/(\d+)/results', path)
+    if match and method == 'GET':
+        import results
+        p = conn.execute('SELECT * FROM patients WHERE id=?', (int(match[1]),)).fetchone()
+        if not p: return 404, {'error': 'patient not found'}
+        return 200, results.for_patient(conn, p)
     match = re.fullmatch(r'/api/patients/(\d+)/pathology-records', path)
     if match and method in ('GET', 'POST'):
         import pathology_records
@@ -59,6 +66,16 @@ def handle(conn, method, path, query, body):
         result = reconciliation.audit(record)
         result.update(reconciliation.review_status(record, saved_review))
         return 200, result
+    match = re.fullmatch(r'/api/patients/(\d+)/interview/medicine-row-image', path)
+    if match and method == 'POST':
+        import interview
+        import referral_row_image
+        p = conn.execute('SELECT * FROM patients WHERE id=?', (int(match[1]),)).fetchone()
+        if not p: return 404, {'error': 'patient not found'}
+        # The row's own evidence travels with the request, so the image can only belong to the row that asked for it.
+        if not isinstance(body, dict) or set(body) != {'source_evidence'} or not interview.valid_use({'source_evidence': body['source_evidence']}, set(), set()): raise ValueError('invalid row evidence')
+        try: return 200, referral_row_image.render(jobs.patient_folder(p), {'source_evidence': body['source_evidence']})
+        except Exception: return 200, {'kind': 'none', 'note': 'The page image could not be produced. Open the original PDF and compare by eye.'}
     match = re.fullmatch(r'/api/patients/(\d+)/interview', path)
     if match:
         import interview

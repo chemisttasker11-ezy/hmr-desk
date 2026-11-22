@@ -206,9 +206,7 @@ async function interviewScreen() {
     authorised_name: '',
     ...interviewRecord.consent,
   };
-  normalizeInterviewDetails(interviewRecord, false);
-  const recovery = offline ? interviewSaver.resetOffline(interviewRecord) : interviewSaver.reset(interviewRecord);
-  normalizeInterviewDetails(interviewRecord);
+  const recovery = interviewResetBaseline(interviewRecord, offline);
   interviewConflict = offline ? interviewSaver.hasConflict() : recovery.conflict;
   interviewEdited = new Set();
   interviewOutput = '';
@@ -229,6 +227,15 @@ async function interviewScreen() {
   renderInterview();
   if (!offline && typeof medicinePrefillSuggestions === 'function') void medicinePrefillSuggestions();
   $('interview-notes')?.focus();
+}
+// Open an interview: fill defaults BEFORE taking the saved baseline, so an unedited open is not dirty and leaving it
+// does not write. A recovered draft replaces the record afterwards, so defaults are filled again for it.
+function interviewResetBaseline(record, offline, saver = interviewSaver) {
+  normalizeInterviewDetails(record, false);
+  if (!offline) normalizeInterviewDetails(record);
+  const recovery = offline ? saver.resetOffline(record) : saver.reset(record);
+  normalizeInterviewDetails(record);
+  return recovery;
 }
 function normalizeInterviewDetails(record, newEntries = true, assignIds = true) {
   if (!record.details) record.details = { version: 1, manager: '', manager_details: '', daa: '', daa_type: '', daa_pharmacy: '', smoking: '', alcohol: '', alcohol_details: '', height_referral: '', height_actual: '', weight_referral: '', weight_actual: '', bmi_referral: '', bmi_actual: '', height_as_listed: false, weight_as_listed: false, bmi_as_listed: false, meds: (record.meds || []).map(() => ({ packed: '', as_instructed: false })) };
@@ -296,9 +303,10 @@ function interviewMedicineRow(key, row, meta, i, notUsing = false) {
     ${other ? `<fieldset class="interview-choices interview-chips"><legend>Medicine kind</legend>${[['prescribed','Prescribed elsewhere'],['otc','Over the counter'],['complementary','Complementary or vitamin']].map(([v,l]) => `<label><input type="radio" name="kind-${i}" data-use-field="kind" data-use-table="other_meds" data-row="${i}" value="${v}" ${meta.kind === v ? 'checked' : ''}> ${l}</label>`).join('')}</fieldset>` : `<label data-prn-row="${i}" ${(meta.prn_use || (interviewPrnVisible(row[2]) && !notUsing)) ? '' : 'hidden'}>How often used<input data-med-detail="prn_use" data-row="${i}" value="${esc(meta.prn_use)}"></label>`}
     <div class="interview-medicine-actions">${interviewUseControls(key, i, meta)}${!other && !notUsing ? `<button type="button" class="${meta.as_instructed ? 'primary' : ''}" data-interview-as-instructed="${i}" ${row[1]?.trim() ? '' : 'disabled title="No referral directions to copy"'}>${meta.as_instructed ? '✓ ' : ''}As instructed</button>` : ''}
     <button type="button" data-interview-details="${key}" data-row="${i}" aria-expanded="${expanded}">Details</button></div>
-    <div class="interview-badges">${badge('Note', !!row[other ? 3 : 4]?.trim(), 'note')}${other ? badge('Why or who', !!row[2]?.trim(), 'why') : badge('To check', !!row[3]?.trim(), 'check') + badge(`DAA: ${meta.packed}`, !!meta.packed, 'packed')}</div>
+    <div class="interview-badges">${typeof interviewDupBadge === 'function' ? interviewDupBadge(key, meta, i) : ''}${badge('Note', !!row[other ? 3 : 4]?.trim(), 'note')}${other ? badge('Why or who', !!row[2]?.trim(), 'why') : badge('To check', !!row[3]?.trim(), 'check') + badge(`DAA: ${meta.packed}`, !!meta.packed, 'packed')}</div>
   </div><div class="interview-medicine-detail" ${expanded ? '' : 'hidden'}>
     ${other ? `<label>Why or who${field(2)}</label><label>Notes${field(3)}</label>` : `<label>Points to check (AI)${field(3)}</label><label>Notes${field(4)}</label>${interviewRecord.details.daa === 'yes' ? `<div>DAA packing<fieldset class="interview-choices interview-chips"><legend>DAA packing</legend>${[['packed','Packed'],['not packed','Not packed'],['unknown','Unknown']].map(([v,l]) => `<label><input type="radio" name="packed-${i}" data-med-detail="packed" data-row="${i}" value="${v}" ${meta.packed === v ? 'checked' : ''}> ${l}</label>`).join('')}</fieldset></div>` : ''}`}
+    ${typeof interviewDuplicateControls === 'function' ? interviewDuplicateControls(key, meta, i) : ''}
     <button type="button" ${other ? `data-interview-top-other="${i}"` : `data-interview-top="${i}"`}>Move to top</button><button type="button" data-amh-row aria-label="Search AMH for medicine row ${i + 1}">AMH</button><button type="button" data-interview-remove="${key}" data-row="${i}">Remove</button>
   </div></td></tr>`;
 }
@@ -369,6 +377,7 @@ function interviewOutstanding() {
     [total > checked, `${checked}/${total} checked`, 'meds', `${checked} of ${total} medicines checked`],
     [withoutStatus, `${withoutStatus} no status`, 'meds', `${withoutStatus} medicines without a status`],
     [clarify, `${clarify} to clarify`, 'clarify', `${clarify} to clarify`],
+    [(interviewRecord.fidelity_warnings || []).length, 'Referral text check', 'meds', (interviewRecord.fidelity_warnings || []).join(' ')],
     [healthUnanswered, `${healthUnanswered} health check`, 'health_check', `${healthUnanswered} health-check questions unanswered`],
     [consentMissing, 'Consent', 'consent', 'Consent not signed'],
   ].filter(([show]) => show);
@@ -429,6 +438,7 @@ function renderInterview() {
     if (key === 'manages_meds') input = input.replace('<label><span >Other notes', entries(['missed_doses', 'device_technique', 'swallowing']) + '<label><span >Other notes');
     if (key === 'conditions') input += entries(['recent_change']);
     if (key === 'alcohol_smoking') input = input.replace(interviewChoices('alcohol', 'Alcohol', [['yes','Yes'],['no','No'],['unknown','Unknown']]), `<div data-entry-detail="smoking" ${['current','ex'].includes(record.details.smoking) || record.details.smoking_details ? '' : 'hidden'}>${interviewDetailText('smoking_details', 'Smoking details (amount, quit date, vaping)')}</div>` + interviewChoices('alcohol', 'Alcohol', [['yes','Yes'],['no','No'],['unknown','Unknown']]));
+    if (key === 'pathology') input = pathologyLegacyHint() + input;
     return `<section id="section-${key}" class="interview-section"><h2 tabindex="-1">${esc(title)} ${source}</h2>${input}</section>`;
   };
   const sections = interviewSections.map(section);
@@ -440,6 +450,8 @@ function renderInterview() {
       ? `<p role="status">${esc(interviewReconciliation.reviewed ? 'Reviewed and acknowledged for the saved medicines' : interviewReconciliation.stale ? 'Review is stale: medicines changed. Acknowledge again for the current medicines' : reconciliationRows.length + ' discrepancies require review')}</p>
          <ul>${reconciliationRows.map(f => `<li><strong>${esc(f.medicine_id)}</strong>: ${esc(f.message)} <button type="button" data-interview-jump="meds">Go to medicines</button></li>`).join('')}</ul>`
       : '<p>Save changes, then load the current reconciliation checklist.</p>'}
+    ${canAcknowledgeReconciliation(interviewReconciliation)
+      ? `<label>Reviewing pharmacist (the name recorded with this acknowledgement)<input id="reconciliation-reviewer" maxlength="120" autocomplete="name" value="${esc(record.header?.pharmacist || '')}"></label>` : ''}
     <div class="actions"><button type="button" data-reconciliation-load>Save and refresh checklist</button>
     ${canAcknowledgeReconciliation(interviewReconciliation)
       ? '<button type="button" data-reconciliation-ack>Acknowledge reviewed discrepancies</button>' : ''}</div>
@@ -448,7 +460,7 @@ function renderInterview() {
   const pathologyCols = [['test','Test'],['value','Result'],['unit','Unit'],['reference_interval','Range'],
     ['sample_date','Sample date'],['source','Source document/page'],['comment','Notes']];
   const pathologyView = `<section class="interview-section" id="section-pathology-verified">
-    <h2>Pathology provenance and verification</h2><p>Units, sample dates and source are entered explicitly. A result cannot be marked verified without all required details.</p>
+    <h2 tabindex="-1">Pathology provenance and verification</h2><p>Units, sample dates and source are entered explicitly. A result cannot be marked verified without all required details.</p>
     <div class="actions"><button type="button" data-pathology-import>Import a local pathology PDF (unconfirmed)</button><button type="button" data-pathology-reload-sources>Reload sources</button></div>
     ${(pathologySourceIndex?.sources || []).map(source => `<details class="card"><summary>${esc(source.name)} — ${source.page_count} page(s), unconfirmed</summary>
       <button type="button" data-pathology-open-source="${esc(source.id)}">Open original PDF</button>
@@ -457,7 +469,7 @@ function renderInterview() {
       <button type="button" data-pathology-use-source="${esc(source.id)}" data-source-page="${page.page}">Add blank unverified result linked to this page</button></section>`).join('')}
       </details>`).join('')}
     ${interviewPathologyError ? `<p class="error" role="alert">${esc(interviewPathologyError)}</p>` : ''}
-    ${interviewPathology ? `<div class="table-scroll"><table><thead><tr>${pathologyCols.map(([,label])=>`<th>${esc(label)}</th>`).join('')}<th>Verified</th><th>Remove</th></tr></thead><tbody>${interviewPathology.records.map((r,i)=>`<tr>${pathologyCols.map(([key,label])=>`<td><input aria-label="${esc(label)} row ${i+1}" type="${key==='sample_date'?'date':'text'}" data-pathology-entry="${i}" data-pathology-field="${key}" value="${esc(r[key])}"></td>`).join('')}<td><input aria-label="Verify row ${i+1}" type="checkbox" data-pathology-entry="${i}" data-pathology-field="verified" ${r.verified?'checked':''}></td><td><button type="button" data-pathology-remove="${i}">Remove</button></td></tr>`).join('')}</tbody></table></div>
+    ${interviewPathology ? `<div class="table-scroll pathology-records"><table><thead><tr>${pathologyCols.map(([,label])=>`<th>${esc(label)}</th>`).join('')}<th>Verified</th><th>Remove</th></tr></thead><tbody>${interviewPathology.records.map((r,i)=>`<tr>${pathologyCols.map(([key,label])=>`<td><input aria-label="${esc(label)} row ${i+1}" type="${key==='sample_date'?'date':'text'}" data-pathology-entry="${i}" data-pathology-field="${key}" value="${esc(r[key])}"></td>`).join('')}<td><input aria-label="Verify row ${i+1}" type="checkbox" data-pathology-entry="${i}" data-pathology-field="verified" ${r.verified?'checked':''}></td><td><button type="button" data-pathology-remove="${i}">Remove</button></td></tr>`).join('')}</tbody></table></div>
     <div class="actions"><button type="button" data-pathology-add>Add pathology result</button><button type="button" data-pathology-save>Save pathology</button><span>${interviewPathologyDirty?'Unsaved changes':'Saved'}</span></div>` : '<p>Pathology records unavailable until engine reconnects.</p>'}
     </section>`;
   const observationPositionLabels = {
@@ -498,10 +510,16 @@ function renderInterview() {
     interviewPicker() + `<div class="interview-context"><span class="interview-context-patient" title="${esc(header[0])}">${esc(header[0])}</span><span id="interview-status" role="status">${esc(interviewSaveStatus)}</span><button type="button" data-interview-save>Save</button><div id="interview-outstanding">${interviewOutstanding()}</div></div>${record.details.reason?.trim() ? `<p>Reason for referral: ${esc(record.details.reason)}</p>` : ''}${header[1] ? `<p class="interview-header">${esc(header[1])}</p>` : ''}<div class="interview-layout"><div>${formSections}<div class="actions interview-actions"><button type="button" class="primary" data-interview-record-visit>Record visit</button><button type="button" data-interview-save>Save</button><details class="more-actions"><summary>More actions</summary><div class="actions"><button data-interview-export="docx">Export Word</button><button data-interview-export="pdf">Export PDF</button><button data-interview-export="both">Interview pack</button>${interviewAi ? `<button data-interview-assist title="${esc(interviewAgent)}">Suggest points (AI)</button>` : ''}<button data-interview-folder>Open folder</button></div></details></div><pre id="interview-output" role="status">${esc(interviewOutput)}</pre></div><nav class="interview-index" aria-label="Interview sections"><a href="#section-notes">Back to notes</a>${interviewSections
       .slice(1)
       .map(([key, title]) => `<a href="#section-${key}">${esc(({meds: 'Referral medicines', other_meds: 'Found medicines', not_using_meds: 'Not using', allergies: 'Allergies', manages_meds: 'Managing medicines'})[key] || title)}</a>`)
-      .join('')}</nav></div>`;
+      .join('') + pathologySourcesLink()}</nav></div>`;
   if(typeof refreshEvidenceReferences==='function')refreshEvidenceReferences();
   document.querySelectorAll('.interview-section textarea').forEach(growInterview);
   if (focus) { const el = document.querySelector(`[data-field="${focus.key}"][data-row="${focus.row}"][data-col="${focus.col}"]`); if (el) { el.focus(); el.setSelectionRange(focus.start, focus.end); } }
+}
+function pathologySourcesLink() {
+  return '<a href="#section-pathology-verified" data-interview-jump="pathology-verified">Pathology sources and results</a>';
+}
+function pathologyLegacyHint() {
+  return '<p class="field-hint" data-pathology-sources-hint>These are free-text pathology notes. Imported sources (unconfirmed until checked) and pathology result rows are in <button type="button" class="link-button" data-interview-jump="pathology-verified">Pathology sources and results</button>.</p>';
 }
 async function openConsentDialog() {
   const patientId = interviewId;
@@ -858,9 +876,17 @@ async function interviewClick(b) {
     return true;
   }
   if (b.dataset.reconciliationAck !== undefined) {
+    const typed = document.getElementById('reconciliation-reviewer')?.value ?? ''; // read before the save re-renders the form
     if (!interviewReconciliation || !(await saveInterview(true))) return true;
+    const who = H.reconciliationReviewer({ pharmacist: typed });
+    if (!who.ok) {
+      interviewOutput = who.hint; renderInterview();
+      const field = document.getElementById('reconciliation-reviewer');
+      if (field) { field.value = typed; field.scrollIntoView({ block: 'center' }); field.focus({ preventScroll: true }); }
+      return true;
+    }
     try {
-      const reviewer = interviewRecord.header.pharmacist;
+      const reviewer = who.reviewer;
       const result = await hmr.api('POST', `/api/patients/${encodeURIComponent(interviewId)}/reconciliation`,
         { source_hash: interviewReconciliation.source_hash, reviewed_by: reviewer });
       interviewReconciliation = { ...interviewReconciliation, ...result };
@@ -885,7 +911,7 @@ async function interviewClick(b) {
     if (meta.use_status === 'taking' && meta.as_instructed && meta.checked && interviewRecord.meds[i][2] === interviewRecord.meds[i][1]) return true;
     interviewMoveFocus(b, 'meds', () => { meta.use_status = 'taking'; interviewSetMedicineDetail(i, 'as_instructed', true); interviewSetMedicineDetail(i, 'checked', true); interviewChanged('meds'); }); return true;
   }
-  if (b.dataset.interviewJump) { document.getElementById(`section-${b.dataset.interviewJump}`)?.scrollIntoView(); return true; }
+  if (b.dataset.interviewJump) { const target = document.getElementById(`section-${b.dataset.interviewJump}`); target?.scrollIntoView(); target?.querySelector?.('h2')?.focus?.({ preventScroll: true }); return true; }
   if (b.dataset.interviewRecordVisit !== undefined) { const id = interviewId; if (!(await saveInterview(true)) || page !== 'interview' || interviewId !== id) return true; await navigate('patients', { selected: String(id), detailTab: 'Overview', scroll: 0 }); if (page === 'patients') await showPatient(id, 'visited'); return true; }
   if (b.dataset.interviewSave !== undefined) { await saveInterview(true); return true; }
   if (b.dataset.interviewResolve) { interviewSaver.resolveConflict(b.dataset.interviewResolve); interviewConflict = interviewSaver.hasConflict(); renderInterview(); return true; }

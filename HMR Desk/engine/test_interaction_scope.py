@@ -173,3 +173,93 @@ def test_approved_template_with_the_optional_marker_places_the_warning_there_and
     assert 'Interaction check: no interaction result is on file.' in body
     assert 'Intro text' in body
     assert renderer.validate_layout(template) is True
+
+
+def test_a_not_using_row_with_the_same_name_as_a_taking_row_gets_a_factual_row_status_note_only():
+    result = scope.compute(['Omeprazole'], rows(('Omeprazole', 'taking', True), ('Omeprazole', 'not_using', True), ('Old', 'not_using', False)), 'automated_current')
+    assert result['not_using'] == ['Omeprazole', 'Old'] and result['not_using_namesake'] == ['Omeprazole']
+    text = txt(result)
+    assert 'Omeprazole (another row with this name is recorded as taking)' in text
+    assert ', Old.' in text and 'Old (another' not in text
+    # No claim of duplication, identity or coverage, and nothing cleared or added.
+    assert 'duplicate' not in text and 'is the one checked' not in text
+    assert not scope.has_unconfirmed(result)
+
+
+def test_same_name_different_formulation_or_directions_text_is_not_labelled():
+    result = scope.compute(['Omeprazole 20 mg capsule'], rows(('Omeprazole 20 mg capsule', 'taking', True), ('Omeprazole 10 mg tablet', 'not_using', True)), 'automated_current')
+    assert result['not_using'] == ['Omeprazole 10 mg tablet'] and result['not_using_namesake'] == []
+    assert 'Recorded as not using, not part of the check: Omeprazole 10 mg tablet.' in txt(result)
+
+
+def test_the_note_keeps_the_evidence_wording_for_manual_stale_and_missing_checks():
+    for evidence, phrase in (('manual_note', 'only a manually saved interaction note'), ('stale', 'no current result'), ('none', 'no interaction result is on file')):
+        result = scope.compute(['Omeprazole'], rows(('Omeprazole', 'taking', True), ('Omeprazole', 'not_using', True)), evidence)
+        text = txt(result)
+        assert phrase in text and 'Omeprazole (another row with this name is recorded as taking)' in text and 'verified' not in text.replace('not verified', '').replace('has not verified', '')
+        assert scope.needs_statement(result)
+
+
+def test_the_note_also_applies_when_no_confirmed_list_exists_but_a_taking_row_does():
+    result = scope.compute(None, rows(('Omeprazole', 'taking', True), ('Omeprazole', 'not_using', True)), 'no_current_confirmation')
+    assert result['not_using_namesake'] == ['Omeprazole'] and 'another row with this name is recorded as taking' in txt(result)
+
+
+def test_a_not_using_row_with_no_active_namesake_keeps_the_plain_wording():
+    result = scope.compute(['Alpha'], rows(('Alpha', 'taking', True), ('Old', 'not_using', False)), 'automated_current')
+    assert result['not_using_namesake'] == []
+    assert 'Recorded as not using, not part of the check: Old.' in txt(result)
+
+
+def test_confirmed_list_membership_alone_never_produces_the_taking_note():
+    # A not-using row and a same-name row with unknown use, the name being on the confirmed list: no row is recorded as taking.
+    result = scope.compute(['Omeprazole'], rows(('Omeprazole', 'not_using', True), ('Omeprazole', 'unknown', True)), 'automated_current')
+    assert result['not_using'] == ['Omeprazole'] and result['not_using_namesake'] == []
+    assert 'another row with this name is recorded as taking' not in txt(result)
+    assert 'Recorded as not using, not part of the check: Omeprazole.' in txt(result)
+    assert result['on_list'] == ['Omeprazole']  # the existing list-membership statement is unchanged
+    result = scope.compute(['Omeprazole'], rows(('Omeprazole', 'not_using', True)), 'automated_current')
+    assert result['not_using_namesake'] == []
+
+
+def test_the_recorded_not_using_reason_is_carried_verbatim_and_never_inferred():
+    r = rows(('Omeprazole', 'taking', True), ('Omeprazole', 'not_using', True), ('Old', 'not_using', False))
+    r[1]['note'] = 'Other: duplicate entry, patient takes it once daily'
+    result = scope.compute(['Omeprazole'], r, 'automated_current')
+    lines = scope.lines(result)
+    assert 'Omeprazole (another row with this name is recorded as taking), Old.' in ' '.join(lines)
+    assert 'Recorded reason for Omeprazole: Other: duplicate entry, patient takes it once daily' in lines
+    assert sum(1 for l in lines if l.startswith('Recorded reason for')) == 1  # no note recorded for Old: nothing is invented
+
+
+def test_a_not_using_row_with_no_recorded_reason_gets_no_reason_text_even_with_a_namesake():
+    result = scope.compute(['Omeprazole'], rows(('Omeprazole', 'taking', True), ('Omeprazole', 'not_using', True)), 'automated_current')
+    assert 'Recorded reason' not in txt(result)
+
+
+def test_same_name_not_using_rows_keep_their_own_reason_and_the_pairing_survives_reordering():
+    def build(order):
+        r = rows(*[('Omeprazole', 'not_using', True) for _ in order])
+        for row, note in zip(r, order): row['note'] = note
+        return [l for l in scope.lines(scope.compute([], r, 'none')) if l.startswith('Recorded reason')]
+    a = build(['Other: first reason', 'Self ceased: second reason'])
+    assert a == ['Recorded reason for Omeprazole (entry 1 of 2 recorded as not using with this name): Other: first reason',
+                 'Recorded reason for Omeprazole (entry 2 of 2 recorded as not using with this name): Self ceased: second reason']
+    b = build(['Self ceased: second reason', 'Other: first reason'])
+    assert b[0].endswith('Self ceased: second reason') and b[1].endswith('Other: first reason')  # each reason stays on its own row
+    assert not any('first reason' in l and 'second reason' in l for l in a + b)
+    c = build(['', 'Other: only the second has one'])
+    assert len(c) == 1 and '(entry 2 of 2' in c[0]
+
+
+def test_a_long_recorded_reason_is_kept_in_full_on_its_own_line():
+    long = 'Simulation prefix. ' * 40 + 'Duplicate referral representation; the other daily regimen is retained.'
+    r = rows(('Alpha', 'not_using', True)); r[0]['note'] = long
+    out = scope.lines(scope.compute(['Alpha'], r, 'automated_current'))
+    assert out[-1] == 'Recorded reason for Alpha: ' + ' '.join(long.split()) and out[-1].endswith('the other daily regimen is retained.')
+
+
+def test_for_patient_reads_the_saved_label_and_free_text_of_a_not_using_row():
+    assert scope._recorded_reason({'use_status': 'not_using', 'use_reason': 'other', 'use_details': ' duplicate '}) == 'Other: duplicate'
+    assert scope._recorded_reason({'use_status': 'not_using', 'use_reason': '', 'use_details': 'Ceased per referral'}) == 'Ceased per referral'
+    assert scope._recorded_reason({'use_status': 'taking', 'use_reason': 'other', 'use_details': 'x'}) == ''

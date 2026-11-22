@@ -71,7 +71,7 @@ _alias_cache = None
 def _default_aliases():
  global _alias_cache
  if _alias_cache is None:
-  path = jobs.SKILL / 'references' / 'case-index.jsonl'
+  path = jobs.references_dir() / 'case-index.jsonl'
   cases = [json.loads(x) for x in report._read(path).splitlines() if x.strip()]
   _alias_cache = aliases_for(cases, classes())
  return _alias_cache
@@ -159,7 +159,7 @@ class LibraryUnavailable(ValueError):
 INDEX_ALGORITHM_VERSION = 4
 
 def build_index():
- refs=jobs.SKILL/'references'
+ refs=jobs.references_dir()
  paths=[refs/'case-index.jsonl',refs/'finding-library.md',refs/'brainstorm-index.md',CLASSES_PATH]
  pdf=refs/'brainstorm-v2.pdf'
  try:
@@ -192,12 +192,22 @@ def build_index():
  except (OSError, ValueError, TypeError, KeyError, AttributeError):
   raise LibraryUnavailable() from None
 
+_NEGATED=re.compile(r"\b(?:no|nil|nor|not|never|denies|denied|without|negative|nad|ceased|stopped|discontinued|ceases|no longer|resolved)\b",re.I)
+def _affirmed(text):
+ """Drop sentences/lines with a negation or stopped cue, so they never count as a confirmed-present fact (keyword screen only; it can wrongly drop an affirmed clause that shares a sentence with a negation)."""
+ return ' '.join(x for x in re.split(r'[\n.;]+',str(text)) if not _NEGATED.search(x))
+
 def suggest(context, index=None):
  index=index or build_index(); mapping=index['mapping']; aliases=index['aliases']; extract=extractor(mapping,aliases,index.get('tuning',2))
  patient=med_keys(context.get('meds',[]),mapping,aliases); rules=context_rules(context); keys=patient | set(rules)
  notes=str(context.get('obs',''))+' '+str(context.get('conditions',''))+' '+' '.join(context.get('labs',[]))
  tags={x for x in extract(notes) if x.startswith('topic:')}; keys |= tags
  interaction=str(context.get('interactions','')); interaction_lines=[extract(line)&patient for line in interaction.splitlines()]
+ current=[m for m in context.get('meds',[]) if not _NEGATED.search(str(m))]
+ have=med_keys(current,mapping,aliases)|set(rules)|extract(' '.join(str(m) for m in current))|{x for x in extract(_affirmed(notes)) if x.startswith('topic:')}
+ if context.get('evidence_version') == 1:
+  for e in context['evidence']:
+   if e['eligible']: have |= med_keys([e['text']],mapping,aliases) if e['kind']=='medicine' else extract(_affirmed(e['text']))
  scores=[]
  for key in keys:
   exposed,with_finding=index['counts'].get(key,[0,0])
@@ -246,6 +256,11 @@ def suggest(context, index=None):
     missing.extend(e['id']+': '+flag for flag in e.get('flags',[]))
     if e['kind']=='medicine' and e.get('use_status') not in ('taking','prn'):
      missing.append(e['id']+': actual use is not established')
+  # Lexical only, no clinical rule: terms the past-case wording uses that this patient's saved record does not contain.
+  asserted=extract(' '.join(f[k] for k in ('title','rec','rationale')))
+  absent=sorted(k for k in asserted if k.split(':',1)[0] in ('med','class','topic') and k not in have)
+  if absent:
+   missing.append("Keyword screen only, unflagged template facts are NOT verified. Template wording mentions, not found in this patient's saved record: "+', '.join(k.split(':',1)[1] for k in absent)+'. Remove or confirm each against the original before reuse.')
   lib=next((x['title'] for x in index['library'] if key in x['keys']),'')
   relevant={key} | set(f['keys'])
   matches=[(len(relevant & set(section['keys'])), section) for section in index.get('brainstorm_sections', [])]
@@ -268,7 +283,7 @@ def suggest(context, index=None):
    if (other['title'],other['rec'],other['rationale']) != identity:
     alternatives.append({k:other[k] for k in ('title','rec','rationale')})
     if len(alternatives)==2: break
-  result.append({**{k:f[k] for k in ('title','rec','rationale')},'source':'past cases','why':why,'missing':missing,'alternatives':alternatives,'library':lib,'brainstorm':brain,'key':key})
+  result.append({**{k:f[k] for k in ('title','rec','rationale')},'source':'past cases','why':why,'missing':missing,'template_mentions_not_in_record':absent,'alternatives':alternatives,'library':lib,'brainstorm':brain,'key':key})
   if context.get('evidence_version') == 1:
    result[-1].update(evidence=supporting, context_snapshot_sha256=context['context_snapshot_sha256'], review_status='pharmacist_review_required')
   if len(result)==15: break
