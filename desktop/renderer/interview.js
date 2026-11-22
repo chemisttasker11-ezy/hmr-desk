@@ -46,6 +46,7 @@ let interviewCandidateChecks = null, interviewCandidateChecksError = '', intervi
 // fetch-before-save completions can never install old evidence as current.
 let interviewObservationEpoch = 0;
 let pathologySourceIndex = {sources: []};
+let pathologyProposalState = null, pathologyProposalError = '', pathologyProposalBusy = false;
 let interviewRequest = 0;
 const interviewExpanded = new WeakSet();
 function interviewEquivalent(a, b) {
@@ -95,6 +96,7 @@ async function leaveInterview() {
   if (interviewPathologyDirty && !(await savePathologyRecords())) return false;
   if (!(await interviewSaver.leave())) return false;
   interviewRequest++;
+  pathologyProposalState = null; pathologyProposalError = ''; pathologyProposalBusy = false;
   interviewRecord = null;
   interviewId = '';
   return true;
@@ -212,6 +214,7 @@ async function interviewScreen() {
   interviewOutput = '';
   interviewReconciliation = null;
   interviewPathology = null; interviewPathologyDirty = false; interviewPathologyError = '';
+  pathologyProposalState = null; pathologyProposalError = ''; pathologyProposalBusy = false;
   interviewCandidateChecks = null; interviewCandidateChecksError = ''; interviewCandidateChecksStale = false;
   if (!offline) {
     try {
@@ -457,17 +460,34 @@ function renderInterview() {
       ? '<button type="button" data-reconciliation-ack>Acknowledge reviewed discrepancies</button>' : ''}</div>
     </section>`;
 
+
+  function proposalReviewMarkup() {
+    if (!pathologyProposalState) return '';
+    const data = pathologyProposalState;
+    const fields = [['test','Test'],['value','Result'],['unit','Unit'],['reference_interval','Range'],['sample_date','Sample date']];
+    const rows = data.proposals.map((r,i) =>
+      '<tr><td>Page ' + esc(String(r.page)) + ' / ' + esc(r.source_column_label) + '<small> PDF cell ' + esc(JSON.stringify(r.cell_bbox.value)) + '</small></td>' +
+      fields.map(([key,label]) => '<td><label><span class="sr-only">' + label + '</span><input aria-label="' + label + ' proposal ' + (i+1) + '" data-path-proposal-index="' + i + '" data-path-proposal-field="' + key + '" type="' + (key === 'sample_date' ? 'date' : 'text') + '" value="' + esc(r.fields[key] || '') + '"></label>' +
+      ((r.field_uncertainty[key] || []).length ? '<small role="alert">' + esc(r.field_uncertainty[key].join('; ')) + '</small>' : '') + '</td>').join('') +
+      '<td><button type="button" data-path-proposal-crop="' + i + '">Compare row image</button> <button type="button" data-path-proposal-original="' + i + '">Open original</button> <button type="button" data-path-proposal-accept="' + i + '"' + (interviewPathologyDirty || pathologyProposalBusy ? ' disabled' : '') + '>Accept unverified</button></td></tr>').join('');
+    return '<div class="card" id="pathology-proposals"><h3>Unverified digital PDF proposals</h3><p>Compare the exact original PDF cells before acceptance. Accept creates a normal UNVERIFIED record, not a verified result. Scanned PDFs are not supported yet.</p>' +
+      (data.pages || []).map(p => '<p>Page ' + esc(String(p.page)) + ': ' + esc(p.status) + ' ' + esc((p.reasons || []).join('; ')) + '</p>').join('') +
+      '<div class="table-scroll"><table><thead><tr><th>Source</th>' + fields.map(x => '<th>' + x[1] + '</th>').join('') + '<th>Review</th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
+      (!data.proposals.length ? '<p>No supported table proposals; use manual entry and the original PDF.</p>' : '') + '</div>';
+  }
   const pathologyCols = [['test','Test'],['value','Result'],['unit','Unit'],['reference_interval','Range'],
     ['sample_date','Sample date'],['source','Source document/page'],['comment','Notes']];
   const pathologyView = `<section class="interview-section" id="section-pathology-verified">
     <h2 tabindex="-1">Pathology provenance and verification</h2><p>Units, sample dates and source are entered explicitly. A result cannot be marked verified without all required details.</p>
     <div class="actions"><button type="button" data-pathology-import>Import a local pathology PDF (unconfirmed)</button><button type="button" data-pathology-reload-sources>Reload sources</button></div>
     ${(pathologySourceIndex?.sources || []).map(source => `<details class="card"><summary>${esc(source.name)} — ${source.page_count} page(s), unconfirmed</summary>
-      <button type="button" data-pathology-open-source="${esc(source.id)}">Open original PDF</button>
+      <button type="button" data-pathology-open-source="${esc(source.id)}">Open original PDF</button><button type="button" data-path-proposal-load="${esc(source.id)}" ${interviewPathologyDirty || pathologyProposalBusy ? 'disabled' : ''}>Extract table proposals</button>
       ${source.pages.map(page => `<section><h4>Page ${page.page} — ${esc(page.method)}</h4>
       <pre style="white-space:pre-wrap;overflow-wrap:anywhere">${esc(page.unconfirmed_excerpt || 'No machine-readable text; review original image')}</pre>
       <button type="button" data-pathology-use-source="${esc(source.id)}" data-source-page="${page.page}">Add blank unverified result linked to this page</button></section>`).join('')}
       </details>`).join('')}
+    ${pathologyProposalError ? '<p role="alert" class="error">' + esc(pathologyProposalError) + '</p>' : ''}
+    ${proposalReviewMarkup()}
     ${interviewPathologyError ? `<p class="error" role="alert">${esc(interviewPathologyError)}</p>` : ''}
     ${interviewPathology ? `<div class="table-scroll pathology-records"><table><thead><tr>${pathologyCols.map(([,label])=>`<th>${esc(label)}</th>`).join('')}<th>Verified</th><th>Remove</th></tr></thead><tbody>${interviewPathology.records.map((r,i)=>`<tr>${pathologyCols.map(([key,label])=>`<td><input aria-label="${esc(label)} row ${i+1}" type="${key==='sample_date'?'date':'text'}" data-pathology-entry="${i}" data-pathology-field="${key}" value="${esc(r[key])}"></td>`).join('')}<td><input aria-label="Verify row ${i+1}" type="checkbox" data-pathology-entry="${i}" data-pathology-field="verified" ${r.verified?'checked':''}></td><td><button type="button" data-pathology-remove="${i}">Remove</button></td></tr>`).join('')}</tbody></table></div>
     <div class="actions"><button type="button" data-pathology-add>Add pathology result</button><button type="button" data-pathology-save>Save pathology</button><span>${interviewPathologyDirty?'Unsaved changes':'Saved'}</span></div>` : '<p>Pathology records unavailable until engine reconnects.</p>'}
@@ -801,6 +821,12 @@ async function savePathologyRecordsNow() {
 }
 
 document.addEventListener('input', event => {
+  const input = event.target.closest?.('[data-path-proposal-index]');
+  if (!input || page !== 'interview' || !pathologyProposalState) return;
+  const row = pathologyProposalState.proposals[Number(input.dataset.pathProposalIndex)];
+  if (row && Object.hasOwn(row.fields, input.dataset.pathProposalField)) row.fields[input.dataset.pathProposalField] = input.value;
+});
+document.addEventListener('input', event => {
   const input = event.target.closest?.('[data-pathology-entry]');
   if (!input || page !== 'interview' || !interviewPathology) return;
   const row = interviewPathology.records[Number(input.dataset.pathologyEntry)];
@@ -810,7 +836,80 @@ document.addEventListener('input', event => {
   if(typeof invalidateEvidenceReferences==='function')invalidateEvidenceReferences();
 });
 
+
 async function interviewClick(b) {
+  if (b.dataset.pathProposalLoad !== undefined) {
+    if (interviewPathologyDirty) { pathologyProposalError = 'Save manual changes before extracting.'; renderInterview(); return true; }
+    const id = interviewId, request = interviewRequest, source = b.dataset.pathProposalLoad;
+    pathologyProposalBusy = true; pathologyProposalError = '';
+    try {
+      const data = await hmr.api('GET', '/api/patients/' + encodeURIComponent(id) + '/pathology/sources/' + encodeURIComponent(source) + '/proposals');
+      if (page !== 'interview' || id !== interviewId || request !== interviewRequest) return true;
+      pathologyProposalState = data;
+    } catch(error) {
+      if (page !== 'interview' || id !== interviewId || request !== interviewRequest) return true;
+      pathologyProposalError = errorText(error); pathologyProposalState = null;
+    } finally {
+      if (page === 'interview' && id === interviewId && request === interviewRequest) { pathologyProposalBusy = false; renderInterview(); }
+    }
+    return true;
+  }
+  if (b.dataset.pathProposalCrop !== undefined && pathologyProposalState) {
+    const id = interviewId, request = interviewRequest, data = pathologyProposalState;
+    const item = data.proposals[Number(b.dataset.pathProposalCrop)];
+    if (!item) return true;
+    const dialog = document.createElement('dialog');
+    dialog.setAttribute('aria-label', 'Original pathology row comparison');
+    dialog.className = 'consent-dialog';
+    dialog.innerHTML = '<h2>Original PDF row - unverified</h2><p role="status">Loading source image...</p><img alt="Cropped original PDF row for visual comparison" style="max-width:100%;height:auto" hidden><p class="field-hint"></p><button type="button" data-close-path-crop>Close</button>';
+    dialog.querySelector('[data-close-path-crop]').onclick = () => dialog.close();
+    dialog.addEventListener('close', () => dialog.remove(), {once: true});
+    document.body.append(dialog);
+    dialog.showModal();
+    try {
+      const image = await hmr.api('POST', '/api/patients/' + encodeURIComponent(id) + '/pathology/sources/' + encodeURIComponent(data.source_id) + '/proposal-image', {
+        proposal_id: item.id, source_sha256: data.source_sha256
+      });
+      if (!dialog.open || page !== 'interview' || id !== interviewId || request !== interviewRequest) { dialog.close(); return true; }
+      dialog.querySelector('p[role="status"]').textContent = image.note || 'Original image unavailable';
+      if (image.kind === 'row' && image.png) {
+        const img = dialog.querySelector('img');
+        img.src = 'data:image/png;base64,' + image.png; img.hidden = false;
+      }
+    } catch(error) {
+      if (dialog.open) dialog.querySelector('p[role="status"]').textContent = errorText(error);
+    }
+    return true;
+  }
+  if (b.dataset.pathProposalOriginal !== undefined && pathologyProposalState) {
+    try { await hmr.openPathologySource(Number(interviewId), pathologyProposalState.source_id); }
+    catch(error) { pathologyProposalError = errorText(error); renderInterview(); }
+    return true;
+  }
+  if (b.dataset.pathProposalAccept !== undefined && pathologyProposalState) {
+    const id = interviewId, request = interviewRequest, data = pathologyProposalState;
+    const item = data.proposals[Number(b.dataset.pathProposalAccept)];
+    if (!item || interviewPathologyDirty || pathologyProposalBusy || !interviewPathology ||
+        data.records_revision !== interviewPathology.revision) {
+      pathologyProposalError = 'Records changed. Save and reload proposals.'; renderInterview(); return true;
+    }
+    pathologyProposalBusy = true; pathologyProposalError = '';
+    try {
+      const response = await hmr.api('POST', '/api/patients/' + encodeURIComponent(id) + '/pathology/sources/' + encodeURIComponent(data.source_id) + '/proposals', {
+        proposal_id: item.id, source_sha256: data.source_sha256, revision: data.records_revision, fields: {...item.fields}
+      });
+      if (page !== 'interview' || id !== interviewId || request !== interviewRequest) return true;
+      interviewPathology = response.records; interviewPathologyDirty = false;
+      pathologyProposalState = null; interviewInvalidateObservations();
+      if (typeof invalidateEvidenceReferences === 'function') invalidateEvidenceReferences();
+    } catch(error) {
+      if (page !== 'interview' || id !== interviewId || request !== interviewRequest) return true;
+      pathologyProposalError = errorText(error);
+    } finally {
+      if (page === 'interview' && id === interviewId && request === interviewRequest) { pathologyProposalBusy = false; renderInterview(); }
+    }
+    return true;
+  }
   if (b.dataset.pathologyImport !== undefined) {
     const importPatient = interviewId, importRequest = interviewRequest;
     try {
@@ -821,6 +920,7 @@ async function interviewClick(b) {
         // Install only if still current; the await itself must not install.
         if (page !== 'interview' || importRequest !== interviewRequest || importPatient !== interviewId) return true;
         pathologySourceIndex = sources;
+        pathologyProposalState = null; pathologyProposalError = '';
         interviewPathologyError = '';
         interviewInvalidateObservations();
       }
@@ -831,7 +931,12 @@ async function interviewClick(b) {
     renderInterview(); return true;
   }
   if (b.dataset.pathologyReloadSources !== undefined) {
-    try { pathologySourceIndex = await hmr.api('GET', `/api/patients/${encodeURIComponent(interviewId)}/pathology/sources`); }
+    const id = interviewId, request = interviewRequest;
+    try {
+      const index = await hmr.api('GET', '/api/patients/' + encodeURIComponent(id) + '/pathology/sources');
+      if (page !== 'interview' || id !== interviewId || request !== interviewRequest) return true;
+      pathologySourceIndex = index; pathologyProposalState = null;
+    }
     catch (error) { interviewPathologyError = errorText(error); }
     renderInterview(); return true;
   }

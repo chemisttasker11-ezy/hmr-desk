@@ -26,6 +26,35 @@ def handle(conn, method, path, query, body):
                {'sha256': result['sha256'], 'pages': result['page_count'], 'name': result['name']}, 'api')
         conn.commit()
         return 200, result
+    match = re.fullmatch(r'/api/patients/(\d+)/pathology/sources/([a-f0-9]{32})/proposals', path)
+    if match and method in ('GET', 'POST'):
+        import pathology_proposals
+        p = conn.execute('SELECT * FROM patients WHERE id=?', (int(match[1]),)).fetchone()
+        if not p:
+            return 404, {'error': 'patient not found'}
+        if method == 'GET':
+            return 200, pathology_proposals.for_source(conn, p, match[2])
+        if not isinstance(body, dict):
+            raise ValueError('Invalid pathology proposal acceptance')
+        try:
+            result = pathology_proposals.accept(conn, p, match[2], body)
+        except ValueError as exc:
+            if 'changed; reload' in str(exc) or 'stale' in str(exc):
+                return 409, {'error': str(exc)}
+            raise
+        db.log(conn, p['id'], 'pathology_proposal_accepted_unverified',
+               {'source_id': match[2], 'proposal_id': body['proposal_id'],
+                'row_id': result['record']['id'], 'verified': False}, 'api')
+        conn.commit()
+        return 200, result
+    match = re.fullmatch(r'/api/patients/(\d+)/pathology/sources/([a-f0-9]{32})/proposal-image', path)
+    if match and method == 'POST':
+        import pathology_source_image
+        p = conn.execute('SELECT * FROM patients WHERE id=?', (int(match[1]),)).fetchone()
+        if not p: return 404, {'error': 'patient not found'}
+        if not isinstance(body, dict) or set(body) != {'proposal_id', 'source_sha256'}:
+            raise ValueError('Invalid original-cell review request')
+        return 200, pathology_source_image.for_proposal(conn, p, match[2], body['proposal_id'], body['source_sha256'])
     match = re.fullmatch(r'/api/patients/(\d+)/results', path)
     if match and method == 'GET':
         import results
