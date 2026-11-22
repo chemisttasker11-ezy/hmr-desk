@@ -1,0 +1,772 @@
+{
+  "p01_single_column_basic": {
+    "description": "One dated result column, plain units.",
+    "traps": [
+      "header date is dd/mm/yyyy and not repeated per row"
+    ],
+    "expected_rows": [
+      {
+        "test": "HbA1c",
+        "value": "5.9",
+        "unit": "%",
+        "reference_interval": "<6.5",
+        "sample_date": "2026-02-14",
+        "flags": []
+      },
+      {
+        "test": "Ferritin",
+        "value": "88",
+        "unit": "ug/L",
+        "reference_interval": "30 - 400",
+        "sample_date": "2026-02-14",
+        "flags": []
+      },
+      {
+        "test": "Magnesium",
+        "value": "0.82",
+        "unit": "mmol/L",
+        "reference_interval": "0.70 - 1.10",
+        "sample_date": "2026-02-14",
+        "flags": []
+      },
+      {
+        "test": "ALT",
+        "value": "27",
+        "unit": "U/L",
+        "reference_interval": "<35",
+        "sample_date": "2026-02-14",
+        "flags": []
+      }
+    ],
+    "meta": {
+      "date_raw": "14/02/2026",
+      "date_proposed_iso": "2026-02-14",
+      "date_flags": [
+        "date_format_assumed_dmy"
+      ]
+    }
+  },
+  "p02_two_dated_columns": {
+    "description": "Current and older result columns. Older value must never be reported as current.",
+    "traps": [
+      "two dates, one analyte each: emit one row per (analyte, date), pharmacist picks current",
+      "'-' means no result, not a value"
+    ],
+    "expected_rows": [
+      {
+        "test": "ALT",
+        "value": "27",
+        "unit": "U/L",
+        "reference_interval": "<35",
+        "sample_date": "2026-02-14",
+        "flags": []
+      },
+      {
+        "test": "ALT",
+        "value": "44",
+        "unit": "U/L",
+        "reference_interval": "<35",
+        "sample_date": "2024-08-09",
+        "flags": []
+      },
+      {
+        "test": "AST",
+        "value": "24",
+        "unit": "U/L",
+        "reference_interval": "<40",
+        "sample_date": "2026-02-14",
+        "flags": []
+      },
+      {
+        "test": "AST",
+        "value": "29",
+        "unit": "U/L",
+        "reference_interval": "<40",
+        "sample_date": "2024-08-09",
+        "flags": []
+      },
+      {
+        "test": "Ferritin",
+        "value": "88",
+        "unit": "ug/L",
+        "reference_interval": "30 - 400",
+        "sample_date": "2026-02-14",
+        "flags": []
+      }
+    ],
+    "meta": {
+      "date_raw": [
+        "14/02/2026",
+        "09/08/2024"
+      ],
+      "date_proposed_iso": [
+        "2026-02-14",
+        "2024-08-09"
+      ],
+      "date_flags": [
+        "date_format_assumed_dmy"
+      ]
+    }
+  },
+  "p03_total_vs_corrected": {
+    "description": "Total and albumin-corrected calcium are different analytes.",
+    "traps": [
+      "never merge or rename total/corrected",
+      "no abnormal flag unless the report itself prints one"
+    ],
+    "expected_rows": [
+      {
+        "test": "Calcium (total)",
+        "value": "2.31",
+        "unit": "mmol/L",
+        "reference_interval": "2.10 - 2.60",
+        "sample_date": "2026-02-14",
+        "flags": []
+      },
+      {
+        "test": "Calcium (corrected)",
+        "value": "2.38",
+        "unit": "mmol/L",
+        "reference_interval": "2.10 - 2.60",
+        "sample_date": "2026-02-14",
+        "flags": []
+      },
+      {
+        "test": "Albumin",
+        "value": "38",
+        "unit": "g/L",
+        "reference_interval": "35 - 50",
+        "sample_date": "2026-02-14",
+        "flags": []
+      }
+    ],
+    "meta": {
+      "date_raw": "14/02/2026",
+      "date_proposed_iso": "2026-02-14",
+      "date_flags": [
+        "date_format_assumed_dmy"
+      ]
+    }
+  },
+  "p04_flags_and_range_forms": {
+    "description": "H/L flags, '<', '>', parenthesised and dash ranges.",
+    "traps": [
+      "inequality prefix is part of the value",
+      "flag column is not a unit",
+      "keep range text exactly as printed"
+    ],
+    "expected_rows": [
+      {
+        "test": "CRP",
+        "value": "<0.5",
+        "unit": "mg/L",
+        "reference_interval": "<5.0",
+        "sample_date": "2026-02-14",
+        "flags": []
+      },
+      {
+        "test": "Potassium",
+        "value": "5.4",
+        "unit": "mmol/L",
+        "reference_interval": "(3.5 - 5.2)",
+        "sample_date": "2026-02-14",
+        "flags": [
+          "report_flag_H"
+        ]
+      },
+      {
+        "test": "eGFR",
+        "value": ">90",
+        "unit": "mL/min/1.73m2",
+        "reference_interval": ">59",
+        "sample_date": "2026-02-14",
+        "flags": []
+      },
+      {
+        "test": "Sodium",
+        "value": "132",
+        "unit": "mmol/L",
+        "reference_interval": "135-145",
+        "sample_date": "2026-02-14",
+        "flags": [
+          "report_flag_L"
+        ]
+      }
+    ],
+    "meta": {
+      "date_raw": "2026-02-14",
+      "date_proposed_iso": "2026-02-14",
+      "date_flags": []
+    }
+  },
+  "p05_unit_variants": {
+    "description": "Unit strings with symbols and superscripts as text.",
+    "traps": [
+      "unit copied verbatim, never converted",
+      "Haemoglobin vs Haematocrit vs HbA1c are distinct"
+    ],
+    "expected_rows": [
+      {
+        "test": "White cell count",
+        "value": "6.1",
+        "unit": "x10^9/L",
+        "reference_interval": "4.0 - 11.0",
+        "sample_date": "2026-02-14",
+        "flags": []
+      },
+      {
+        "test": "Creatinine",
+        "value": "78",
+        "unit": "umol/L",
+        "reference_interval": "60 - 110",
+        "sample_date": "2026-02-14",
+        "flags": []
+      },
+      {
+        "test": "Haemoglobin",
+        "value": "142",
+        "unit": "g/L",
+        "reference_interval": "130 - 180",
+        "sample_date": "2026-02-14",
+        "flags": []
+      },
+      {
+        "test": "Haematocrit",
+        "value": "0.43",
+        "unit": "L/L",
+        "reference_interval": "0.40 - 0.54",
+        "sample_date": "2026-02-14",
+        "flags": []
+      },
+      {
+        "test": "Vitamin B12",
+        "value": "310",
+        "unit": "pmol/L",
+        "reference_interval": ">150",
+        "sample_date": "2026-02-14",
+        "flags": []
+      }
+    ],
+    "meta": {
+      "date_raw": "14/02/2026",
+      "date_proposed_iso": "2026-02-14",
+      "date_flags": [
+        "date_format_assumed_dmy"
+      ]
+    }
+  },
+  "p06_wrapped_analyte_names": {
+    "description": "Analyte name wraps to a second line.",
+    "traps": [
+      "second line belongs to the same row; do not emit '(ALT)' as its own analyte"
+    ],
+    "expected_rows": [
+      {
+        "test": "Alanine aminotransferase (ALT)",
+        "value": "27",
+        "unit": "U/L",
+        "reference_interval": "<35",
+        "sample_date": "2026-02-14",
+        "flags": []
+      },
+      {
+        "test": "Thyroid stimulating hormone",
+        "value": "2.1",
+        "unit": "mU/L",
+        "reference_interval": "0.4 - 4.0",
+        "sample_date": "2026-02-14",
+        "flags": []
+      }
+    ],
+    "meta": {
+      "date_raw": "14/02/2026",
+      "date_proposed_iso": "2026-02-14",
+      "date_flags": [
+        "date_format_assumed_dmy"
+      ]
+    }
+  },
+  "p07_comment_lines_not_results": {
+    "description": "Comment and footnote lines contain numbers but are not results.",
+    "traps": [
+      "footnotes mention numbers (repeat 36, see 2024 result) that must not become rows"
+    ],
+    "expected_rows": [
+      {
+        "test": "Ferritin",
+        "value": "88",
+        "unit": "ug/L",
+        "reference_interval": "30 - 400",
+        "sample_date": "2026-02-14",
+        "flags": []
+      }
+    ],
+    "meta": {
+      "date_raw": "14/02/2026",
+      "date_proposed_iso": "2026-02-14",
+      "date_flags": [
+        "date_format_assumed_dmy"
+      ],
+      "date_decoys_not_to_use": [
+        "09/08/2024"
+      ]
+    }
+  },
+  "p08_no_sample_date": {
+    "description": "Only a 'Reported' date, no collection or sample date anywhere.",
+    "traps": [
+      "reported date is not a sample date; leave sample_date blank and flag (verification would then be refused until typed)"
+    ],
+    "expected_rows": [
+      {
+        "test": "Ferritin",
+        "value": "88",
+        "unit": "ug/L",
+        "reference_interval": "30 - 400",
+        "sample_date": "",
+        "flags": [
+          "sample_date_missing_check_by_hand"
+        ]
+      }
+    ],
+    "meta": {
+      "date_raw": null,
+      "date_proposed_iso": "",
+      "date_flags": [
+        "sample_date_missing_check_by_hand"
+      ],
+      "required_page_flags": []
+    }
+  },
+  "p09_textual_date": {
+    "description": "Date as 14-Feb-2026 in 'Sample date' label.",
+    "traps": [
+      "two dates in header: sample date, not reported date"
+    ],
+    "expected_rows": [
+      {
+        "test": "Ferritin",
+        "value": "88",
+        "unit": "ug/L",
+        "reference_interval": "30 - 400",
+        "sample_date": "2026-02-14",
+        "flags": []
+      }
+    ],
+    "meta": {
+      "date_raw": "14-Feb-2026",
+      "date_proposed_iso": "2026-02-14",
+      "date_flags": []
+    }
+  },
+  "p10_nonnumeric_results": {
+    "description": "Text results stay text; none become numbers.",
+    "traps": [
+      "empty unit is legitimate here but verification will still require a unit: leave blank, flag"
+    ],
+    "expected_rows": [
+      {
+        "test": "Hepatitis B surface Ag",
+        "value": "Not detected",
+        "unit": "",
+        "reference_interval": "Not detected",
+        "sample_date": "2026-02-14",
+        "flags": [
+          "non_numeric"
+        ]
+      },
+      {
+        "test": "Urine protein",
+        "value": "Trace",
+        "unit": "",
+        "reference_interval": "Negative",
+        "sample_date": "2026-02-14",
+        "flags": [
+          "non_numeric"
+        ]
+      },
+      {
+        "test": "H. pylori Ab",
+        "value": "Positive",
+        "unit": "",
+        "reference_interval": "Negative",
+        "sample_date": "2026-02-14",
+        "flags": [
+          "non_numeric"
+        ]
+      }
+    ],
+    "meta": {
+      "date_raw": "14/02/2026",
+      "date_proposed_iso": "2026-02-14",
+      "date_flags": [
+        "date_format_assumed_dmy"
+      ],
+      "row_flags_all": [
+        "non_numeric"
+      ]
+    }
+  },
+  "p11_missing_unit": {
+    "description": "Unit column empty for a numeric result.",
+    "traps": [
+      "never infer ug/L from the analyte name"
+    ],
+    "expected_rows": [
+      {
+        "test": "Ferritin",
+        "value": "88",
+        "unit": "",
+        "reference_interval": "30 - 400",
+        "sample_date": "2026-02-14",
+        "flags": [
+          "unit_missing_check_by_hand"
+        ]
+      },
+      {
+        "test": "Magnesium",
+        "value": "0.82",
+        "unit": "mmol/L",
+        "reference_interval": "0.70 - 1.10",
+        "sample_date": "2026-02-14",
+        "flags": []
+      }
+    ],
+    "meta": {
+      "date_raw": "14/02/2026",
+      "date_proposed_iso": "2026-02-14",
+      "date_flags": [
+        "date_format_assumed_dmy"
+      ],
+      "row_flags_ferritin": [
+        "unit_missing_check_by_hand"
+      ]
+    }
+  },
+  "p12_sex_specific_ranges": {
+    "description": "Reference text with sex-specific ranges stays one string.",
+    "traps": [
+      "do not pick the sex-matching range; do not compute position"
+    ],
+    "expected_rows": [
+      {
+        "test": "Ferritin",
+        "value": "88",
+        "unit": "ug/L",
+        "reference_interval": "M 30-400 F 15-150",
+        "sample_date": "2026-02-14",
+        "flags": []
+      },
+      {
+        "test": "Haemoglobin",
+        "value": "142",
+        "unit": "g/L",
+        "reference_interval": "M 130-180 F 115-165",
+        "sample_date": "2026-02-14",
+        "flags": []
+      }
+    ],
+    "meta": {
+      "date_raw": "14/02/2026",
+      "date_proposed_iso": "2026-02-14",
+      "date_flags": [
+        "date_format_assumed_dmy"
+      ]
+    }
+  },
+  "p13_similar_analytes": {
+    "description": "Near-identical names that must stay separate.",
+    "traps": [
+      "qualifier in brackets is part of the analyte identity"
+    ],
+    "expected_rows": [
+      {
+        "test": "Glucose (fasting)",
+        "value": "5.4",
+        "unit": "mmol/L",
+        "reference_interval": "3.0 - 5.4",
+        "sample_date": "2026-02-14",
+        "flags": []
+      },
+      {
+        "test": "Glucose (random)",
+        "value": "6.9",
+        "unit": "mmol/L",
+        "reference_interval": "3.0 - 7.7",
+        "sample_date": "2026-02-14",
+        "flags": []
+      },
+      {
+        "test": "HbA1c",
+        "value": "5.9",
+        "unit": "%",
+        "reference_interval": "<6.5",
+        "sample_date": "2026-02-14",
+        "flags": []
+      },
+      {
+        "test": "Haemoglobin",
+        "value": "142",
+        "unit": "g/L",
+        "reference_interval": "130 - 180",
+        "sample_date": "2026-02-14",
+        "flags": []
+      },
+      {
+        "test": "LDL cholesterol",
+        "value": "3.1",
+        "unit": "mmol/L",
+        "reference_interval": "<3.5",
+        "sample_date": "2026-02-14",
+        "flags": []
+      },
+      {
+        "test": "HDL cholesterol",
+        "value": "1.2",
+        "unit": "mmol/L",
+        "reference_interval": ">1.0",
+        "sample_date": "2026-02-14",
+        "flags": []
+      }
+    ],
+    "meta": {
+      "date_raw": "14/02/2026",
+      "date_proposed_iso": "2026-02-14",
+      "date_flags": [
+        "date_format_assumed_dmy"
+      ]
+    }
+  },
+  "p14_result_with_embedded_unit": {
+    "description": "Unit printed inside the result cell, no unit column.",
+    "traps": [
+      "split only when the suffix is exactly a printed unit token; else keep whole text and flag"
+    ],
+    "expected_rows": [
+      {
+        "test": "HbA1c",
+        "value": "5.9",
+        "unit": "%",
+        "reference_interval": "<6.5 %",
+        "sample_date": "2026-02-14",
+        "flags": [
+          "unit_taken_from_result_cell"
+        ]
+      },
+      {
+        "test": "ALT",
+        "value": "27",
+        "unit": "U/L",
+        "reference_interval": "<35 U/L",
+        "sample_date": "2026-02-14",
+        "flags": [
+          "unit_taken_from_result_cell"
+        ]
+      }
+    ],
+    "meta": {
+      "date_raw": "14/02/2026",
+      "date_proposed_iso": "2026-02-14",
+      "date_flags": [
+        "date_format_assumed_dmy"
+      ]
+    }
+  },
+  "p15_duplicate_analyte_same_date": {
+    "description": "Same analyte twice on one date with different values (repeat/corrected report).",
+    "traps": [
+      "emit both with flag, never choose one"
+    ],
+    "expected_rows": [
+      {
+        "test": "Potassium",
+        "value": "5.4",
+        "unit": "mmol/L",
+        "reference_interval": "3.5 - 5.2",
+        "sample_date": "2026-02-14",
+        "flags": [
+          "duplicate_same_date_check_by_hand"
+        ]
+      },
+      {
+        "test": "Potassium",
+        "value": "4.6",
+        "unit": "mmol/L",
+        "reference_interval": "3.5 - 5.2",
+        "sample_date": "2026-02-14",
+        "flags": [
+          "duplicate_same_date_check_by_hand"
+        ]
+      }
+    ],
+    "meta": {
+      "date_raw": "14/02/2026",
+      "date_proposed_iso": "2026-02-14",
+      "date_flags": [
+        "date_format_assumed_dmy"
+      ]
+    }
+  },
+  "p16_rotated_page": {
+    "description": "Same table on a page with /Rotate 90. Either extract correctly or abstain; never garble.",
+    "traps": [
+      "acceptable outcomes: exact rows OR zero rows with page flag"
+    ],
+    "expected_rows": [
+      {
+        "test": "Ferritin",
+        "value": "88",
+        "unit": "ug/L",
+        "reference_interval": "30 - 400",
+        "sample_date": "2026-02-14",
+        "flags": []
+      },
+      {
+        "test": "ALT",
+        "value": "27",
+        "unit": "U/L",
+        "reference_interval": "<35",
+        "sample_date": "2026-02-14",
+        "flags": []
+      }
+    ],
+    "meta": {
+      "date_raw": "14/02/2026",
+      "date_proposed_iso": "2026-02-14",
+      "date_flags": [
+        "date_format_assumed_dmy"
+      ],
+      "alternative_outcomes": [
+        "exact_rows",
+        "zero_rows_with_page_flag"
+      ],
+      "required_page_flags_if_zero_rows": [
+        "rotated_page_not_read"
+      ]
+    }
+  },
+  "p17_multipage_date_on_first_page": {
+    "description": "Header date only on page 1, table continues on page 2 with repeated header.",
+    "traps": [
+      "inheriting a date across pages must be flagged, not silent"
+    ],
+    "expected_rows": [
+      {
+        "test": "Ferritin",
+        "value": "88",
+        "unit": "ug/L",
+        "reference_interval": "30 - 400",
+        "sample_date": "2026-02-14",
+        "flags": []
+      },
+      {
+        "test": "ALT",
+        "value": "27",
+        "unit": "U/L",
+        "reference_interval": "<35",
+        "sample_date": "2026-02-14",
+        "flags": []
+      },
+      {
+        "test": "Magnesium",
+        "value": "0.82",
+        "unit": "mmol/L",
+        "reference_interval": "0.70 - 1.10",
+        "sample_date": "2026-02-14",
+        "flags": [
+          "date_inherited_from_page_1"
+        ]
+      }
+    ],
+    "meta": {
+      "date_raw": "14/02/2026",
+      "date_proposed_iso": "2026-02-14",
+      "date_flags": [
+        "date_format_assumed_dmy"
+      ],
+      "row_flags_page2": [
+        "date_inherited_from_page_1"
+      ]
+    }
+  },
+  "p18_decoy_numbers_in_header": {
+    "description": "Patient/lab header numbers (phone, ref no, Medicare-like) must never appear as results.",
+    "traps": [
+      "numbers outside the table area are not rows"
+    ],
+    "expected_rows": [
+      {
+        "test": "Ferritin",
+        "value": "88",
+        "unit": "ug/L",
+        "reference_interval": "30 - 400",
+        "sample_date": "2026-02-14",
+        "flags": []
+      }
+    ],
+    "meta": {
+      "date_raw": "14/02/2026",
+      "date_proposed_iso": "2026-02-14",
+      "date_flags": [
+        "date_format_assumed_dmy"
+      ],
+      "numeric_decoys_not_rows": [
+        "0000 00000 0",
+        "2026-0214-0042",
+        "000000",
+        "0400 000 000"
+      ]
+    }
+  },
+  "p19_scanned_image_only": {
+    "description": "Image-only page, no text layer. Current import labels it unreadable_or_scanned.",
+    "traps": [
+      "expected: zero proposed rows and flag 'scanned: read original'; an OCR step may propose rows only if every field is flagged ocr_unverified and the exact-match rate is reported"
+    ],
+    "expected_rows": [],
+    "meta": {
+      "required_page_flags": [
+        "scanned_read_original"
+      ],
+      "expected_row_count": 0,
+      "date_raw": null,
+      "date_proposed_iso": "",
+      "date_flags": [
+        "scanned_read_original"
+      ]
+    }
+  },
+  "p20_mixed_text_and_scanned_pages": {
+    "description": "Page 1 text layer, page 2 scanned.",
+    "traps": [
+      "page 2 yields no rows and a scanned flag; the document must not look complete"
+    ],
+    "expected_rows": [
+      {
+        "test": "Ferritin",
+        "value": "88",
+        "unit": "ug/L",
+        "reference_interval": "30 - 400",
+        "sample_date": "2026-02-14",
+        "flags": []
+      }
+    ],
+    "meta": {
+      "date_raw": "14/02/2026",
+      "date_proposed_iso": "2026-02-14",
+      "date_flags": [
+        "date_format_assumed_dmy"
+      ],
+      "required_page_flags_by_page": {
+        "2": [
+          "scanned_read_original"
+        ]
+      },
+      "document_flag": [
+        "incomplete_extraction"
+      ],
+      "date_scope": "page 1 only; page 2 is a scan with no text layer"
+    }
+  },
+  "_notes": "p19 ground truth (for OCR accuracy testing only): Ferritin 88 ug/L 30 - 400; ALT 27 U/L <35; date 2026-02-14 | Each case declares meta.date_flags explicitly. | sample_date in expected_rows is the PROPOSED ISO date; empty string means blank plus the flag in meta or row flags."
+}
