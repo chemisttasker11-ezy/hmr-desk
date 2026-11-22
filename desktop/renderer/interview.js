@@ -469,7 +469,7 @@ function renderInterview() {
       '<tr><td>Page ' + esc(String(r.page)) + ' / ' + esc(r.source_column_label) + '<small> PDF cell ' + esc(JSON.stringify(r.cell_bbox.value)) + '</small></td>' +
       fields.map(([key,label]) => '<td><label><span class="sr-only">' + label + '</span><input aria-label="' + label + ' proposal ' + (i+1) + '" data-path-proposal-index="' + i + '" data-path-proposal-field="' + key + '" type="' + (key === 'sample_date' ? 'date' : 'text') + '" value="' + esc(r.fields[key] || '') + '"></label>' +
       ((r.field_uncertainty[key] || []).length ? '<small role="alert">' + esc(r.field_uncertainty[key].join('; ')) + '</small>' : '') + '</td>').join('') +
-      '<td><button type="button" data-path-proposal-original="' + i + '">Open original</button> <button type="button" data-path-proposal-accept="' + i + '"' + (interviewPathologyDirty || pathologyProposalBusy ? ' disabled' : '') + '>Accept unverified</button></td></tr>').join('');
+      '<td><button type="button" data-path-proposal-crop="' + i + '">Compare row image</button> <button type="button" data-path-proposal-original="' + i + '">Open original</button> <button type="button" data-path-proposal-accept="' + i + '"' + (interviewPathologyDirty || pathologyProposalBusy ? ' disabled' : '') + '>Accept unverified</button></td></tr>').join('');
     return '<div class="card" id="pathology-proposals"><h3>Unverified digital PDF proposals</h3><p>Compare the exact original PDF cells before acceptance. Accept creates a normal UNVERIFIED record, not a verified result. Scanned PDFs are not supported yet.</p>' +
       (data.pages || []).map(p => '<p>Page ' + esc(String(p.page)) + ': ' + esc(p.status) + ' ' + esc((p.reasons || []).join('; ')) + '</p>').join('') +
       '<div class="table-scroll"><table><thead><tr><th>Source</th>' + fields.map(x => '<th>' + x[1] + '</th>').join('') + '<th>Review</th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
@@ -851,6 +851,33 @@ async function interviewClick(b) {
       pathologyProposalError = errorText(error); pathologyProposalState = null;
     } finally {
       if (page === 'interview' && id === interviewId && request === interviewRequest) { pathologyProposalBusy = false; renderInterview(); }
+    }
+    return true;
+  }
+  if (b.dataset.pathProposalCrop !== undefined && pathologyProposalState) {
+    const id = interviewId, request = interviewRequest, data = pathologyProposalState;
+    const item = data.proposals[Number(b.dataset.pathProposalCrop)];
+    if (!item) return true;
+    const dialog = document.createElement('dialog');
+    dialog.setAttribute('aria-label', 'Original pathology row comparison');
+    dialog.className = 'consent-dialog';
+    dialog.innerHTML = '<h2>Original PDF row - unverified</h2><p role="status">Loading source image...</p><img alt="Cropped original PDF row for visual comparison" style="max-width:100%;height:auto" hidden><p class="field-hint"></p><button type="button" data-close-path-crop>Close</button>';
+    dialog.querySelector('[data-close-path-crop]').onclick = () => dialog.close();
+    dialog.addEventListener('close', () => dialog.remove(), {once: true});
+    document.body.append(dialog);
+    dialog.showModal();
+    try {
+      const image = await hmr.api('POST', '/api/patients/' + encodeURIComponent(id) + '/pathology/sources/' + encodeURIComponent(data.source_id) + '/proposal-image', {
+        proposal_id: item.id, source_sha256: data.source_sha256
+      });
+      if (!dialog.open || page !== 'interview' || id !== interviewId || request !== interviewRequest) { dialog.close(); return true; }
+      dialog.querySelector('p[role="status"]').textContent = image.note || 'Original image unavailable';
+      if (image.kind === 'row' && image.png) {
+        const img = dialog.querySelector('img');
+        img.src = 'data:image/png;base64,' + image.png; img.hidden = false;
+      }
+    } catch(error) {
+      if (dialog.open) dialog.querySelector('p[role="status"]').textContent = errorText(error);
     }
     return true;
   }
