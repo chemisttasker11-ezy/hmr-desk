@@ -220,8 +220,11 @@ def export_folder(conn, patient_id, destination):
 def removable_files(conn, patient_id, folder):
     """Record files whose bytes match the database exactly (safe to retire in a later stage)."""
     folder = Path(folder)
+    if _linked_component(folder):
+        return []
     return [folder / n for n in sorted(os.listdir(folder))
-            if is_record_name(n) and (folder / n).is_file() and get(conn, patient_id, n) == (folder / n).read_bytes()]
+            if is_record_name(n) and not _linked_component(folder / n)
+            and (folder / n).is_file() and get(conn, patient_id, n) == (folder / n).read_bytes()]
 
 
 def stamp(conn, patient_id, name):
@@ -313,16 +316,31 @@ def status(conn, folder_for, extra=None):
             continue
         if not folder or not Path(folder).is_dir():
             continue
+        # A linked patient directory must not be traversed during a read-only
+        # protection-status check. Record the uncertainty as unprotected.
+        if _linked_component(folder):
+            plain_other += 1
+            continue
         for name in os.listdir(folder):
-            if not is_record_name(name) or not (Path(folder) / name).is_file():
+            if not is_record_name(name):
                 continue
-            if get(conn, patient['id'], name) == (Path(folder) / name).read_bytes():
+            path = Path(folder) / name
+            if _linked_component(path):
+                plain_other += 1
+                continue
+            if not path.is_file():
+                continue
+            if get(conn, patient['id'], name) == path.read_bytes():
                 plain_same += 1
             else:
                 plain_other += 1
     for patient_id, name, path in (extra(conn) if extra else ()):
-        if Path(path).is_file():
-            if get(conn, patient_id, name) == Path(path).read_bytes():
+        path = Path(path)
+        if _linked_component(path):
+            plain_other += 1
+            continue
+        if path.is_file():
+            if get(conn, patient_id, name) == path.read_bytes():
                 plain_same += 1
             else:
                 plain_other += 1
