@@ -17,7 +17,7 @@ def test_source_saved_during_render_is_not_recorded_as_built_from(tmp_path, monk
         report.save(conn, patient, loaded)
         conn.commit()
         before = pathology_records.revision(conn, patient)
-        clinical_before = report_auth.clinical_snapshot_hash(conn, patient)
+        clinical_before = report_auth.clinical_snapshot_hash(conn, patient, 3)
     real = local_report_builder.render
 
     def render_then_source_changes(data, draft, include_gp_plan=False):
