@@ -44,9 +44,10 @@ def details_text(data):
 
 def medicine_rows(data):
     rows = [r[:] for r in data['meds']]
+    dup_notes = duplicate_notes(data)
     for i, meta in enumerate((data.get('details') or {}).get('meds', [])):
         if i < len(rows):
-            rows[i][4] = '\n'.join(filter(None, (rows[i][4], 'DAA: ' + meta['packed'] if meta['packed'] else '', use_text(meta), reference_text(meta), 'How often used: ' + meta['prn_use'] if meta.get('prn_use') else '')))
+            rows[i][4] = '\n'.join(filter(None, (rows[i][4], 'DAA: ' + meta['packed'] if meta['packed'] else '', use_text(meta), reference_text(meta), dup_notes.get(('meds', i), ''), 'How often used: ' + meta['prn_use'] if meta.get('prn_use') else '')))
     return rows
 
 USE_REASONS = ('', 'finished_course', 'stopped_gp', 'stopped_specialist', 'self_ceased', 'ran_out_of_scripts', 'side_effects', 'other', 'unknown')
@@ -82,6 +83,107 @@ def reference_text(meta):
     # reference (provenance) but are not printed. Other sources keep their concept code.
     ident = 'PBS' if ref['source'] == 'pbs' else ref['source'].upper() + ' ' + ref['code']
     return 'Reference: ' + ref['display'] + ' (' + ident + ', release ' + ref['release'] + ')'
+
+DUP_KEYS = {'item_id', 'own_sig', 'target_sig', 'target_text', 'note'}
+
+def identity_sig(row, meta):
+    """What a duplicate confirmation was made about: the medicine text as entered (strength and form included, compared
+    whole after trimming and case-folding) plus the catalogue entry when one is linked. Any change makes it differ."""
+    ref = (meta or {}).get('reference')
+    ref_id = ref['source'] + ':' + ref['code'] if valid_reference(ref) else ''
+    return ' '.join(str(row[0]).lower().split()) + '|' + ref_id  # plain text so the renderer and engine compare the same way
+
+_STRENGTH = re.compile(r'(\d+(?:\.\d+)?)\s*(mg|mcg|\u00b5g|ug|g|ml|iu|units?|%)')
+_FORMS = {'tablet': 'tablet', 'tablets': 'tablet', 'tab': 'tablet', 'capsule': 'capsule', 'capsules': 'capsule', 'cap': 'capsule',
+          'mr': 'mr', 'sr': 'sr', 'xr': 'xr', 'er': 'er', 'cr': 'cr', 'ec': 'ec', 'patch': 'patch', 'injection': 'injection', 'syrup': 'syrup',
+          'solution': 'solution', 'suspension': 'suspension', 'cream': 'cream', 'ointment': 'ointment', 'drops': 'drops', 'inhaler': 'inhaler',
+          'spray': 'spray', 'sachet': 'sachet', 'suppository': 'suppository', 'wafer': 'wafer', 'lozenge': 'lozenge'}
+for _w in ('modified', 'release', 'extended', 'delayed', 'controlled', 'sustained', 'slow', 'long', 'acting', 'enteric', 'coated', 'film', 'chewable', 'dispersible', 'soluble', 'effervescent', 'orally', 'disintegrating', 'odt', 'liquid', 'elixir', 'gel', 'foam', 'powder', 'granules', 'pessary', 'enema', 'eye', 'ear', 'nasal', 'topical', 'oral', 'iv', 'im', 'subcutaneous', 'pen', 'vial', 'ampoule', 'cartridge', 'lotion', 'paste', 'implant', 'pellet', 'mouthwash', 'gargle', 'lancet', 'infusion', 'concentrate', 'emulsion', 'oil', 'shampoo', 'wash', 'tape', 'applicator', 'device', 'turbuhaler', 'accuhaler', 'nebule', 'respule', 'ml_liquid', 'xl', 'la', 'cd', 'dr', 'di', 'pr', 'sl', 'buccal', 'sublingual', 'transdermal', 'rectal', 'vaginal', 'depot', 'susp'): _FORMS.setdefault(_w, _w)  # qualifier words stay distinct, never merged
+del _w
+
+def _strengths(text):
+    return {(str(float(n)), u) for n, u in _STRENGTH.findall(text)}
+
+def _forms(text):
+    return {_FORMS[w] for w in re.findall(r'[a-z]+', text) if w in _FORMS}
+
+_SYN = {'tablets': 'tablet', 'tabs': 'tablet', 'tab': 'tablet', 'capsules': 'capsule', 'caps': 'capsule', 'cap': 'capsule'}
+
+def _canon(text):
+    """Fail-closed comparison text: only case, whitespace and tablet/capsule plurals are ignored. Every punctuation mark is kept as a token (a leading decimal point, hyphen versus plus, slash, comma). Every other word, number, slash
+    and their order must be identical. No word is recognised as a form, so unknown forms, release types and combination order all must match."""
+    t = text.lower().replace('\u00b5', 'mc')
+    return ' '.join(_SYN.get(w, w) for w in re.findall(r'[a-z]+|[0-9]+|\S', t, re.ASCII))
+
+def duplicate_compatible(row_a, meta_a, row_b, meta_b):
+    """Whether two entries may be confirmed as duplicates. Used only to refuse. Bounded rule: the entered texts must be the same once case,
+    spacing, punctuation and tablet/capsule plurals are ignored, and must contain a real strength (number plus unit). Different catalogue
+    entries never qualify. Reworded entries (brand versus generic wording) are not confirmable; the pharmacist edits the text. Nothing
+    here infers what a medicine is or whether two products are interchangeable."""
+    text_a, _, ref_a = identity_sig(row_a, meta_a).partition('|')
+    text_b, _, ref_b = identity_sig(row_b, meta_b).partition('|')
+    if ref_a and ref_b and ref_a != ref_b: return False
+    return _canon(text_a) == _canon(text_b) and bool(_strengths(text_a))
+
+def valid_duplicate(d):
+    return (isinstance(d, dict) and set(d) in (DUP_KEYS, DUP_KEYS | {'lapsed'}) and d.get('lapsed', True) is True and medicine_snapshot.valid_id(d['item_id'])
+            and all(isinstance(d[k], str) and 0 < len(d[k]) <= 2000 for k in ('own_sig', 'target_sig'))
+            and isinstance(d['target_text'], str) and len(d['target_text']) <= 400 and isinstance(d['note'], str) and len(d['note']) <= 2000)
+
+def _entries(data):
+    d = data.get('details') or {}
+    for key in ('meds', 'other_meds'):
+        for i, (row, meta) in enumerate(zip(data.get(key, []), d.get(key, []))):
+            yield key, i, row, meta
+
+def check_duplicates(data):
+    """Structure rules for pharmacist duplicate confirmations. A target that no longer exists is allowed (it shows as no
+    longer current); a self-link, a link to a row that is itself marked, and so a chain or cycle, is refused."""
+    entries = {m['item_id']: m for _, _, _, m in _entries(data) if isinstance(m, dict) and 'item_id' in m}
+    for _, _, _, m in _entries(data):
+        link = m.get('duplicate_of') if isinstance(m, dict) else None
+        if link is None: continue
+        if 'item_id' not in m: raise ValueError('duplicate confirmation needs a saved medicine row')
+        if link['item_id'] == m['item_id']: raise ValueError('a medicine row cannot be a duplicate of itself')
+        target = next((t for _, _, t_row, t in _entries(data) if isinstance(t, dict) and t.get('item_id') == link['item_id']), None)
+        if target is not None and not link.get('lapsed'):
+            own_row = next(r for _, _, r, x in _entries(data) if x is m); t_row = next(r for _, _, r, x in _entries(data) if x is target)
+            if (link['own_sig'] == identity_sig(own_row, m) and link['target_sig'] == identity_sig(t_row, target)
+                    and not duplicate_compatible(own_row, m, t_row, target)):
+                raise ValueError('a duplicate confirmation needs the same strength and form: identical medicine text with a strength, or the same catalogue entry with equal strength and form')
+        target_link = entries.get(link['item_id'], {}).get('duplicate_of')
+        if target_link is not None and not target_link.get('lapsed') and not link.get('lapsed'): raise ValueError('a duplicate confirmation cannot point at a row that is itself marked as a duplicate')
+
+def duplicate_state(data):
+    """One dict per confirmation: where it is, what it names, and whether it is still current. Current means the target row
+    exists, is not the row itself, and neither entry's identity changed since the pharmacist ticked it. It never implies use."""
+    by_id = {m['item_id']: (key, i, row, m) for key, i, row, m in _entries(data) if 'item_id' in m}
+    out = []
+    for key, i, row, meta in _entries(data):
+        link = meta.get('duplicate_of')
+        if not valid_duplicate(link): continue
+        target = by_id.get(link['item_id'])
+        current = bool(not link.get('lapsed') and target and target[3] is not meta and link['own_sig'] == identity_sig(row, meta) and link['target_sig'] == identity_sig(target[2], target[3]))
+        out.append({'section': key, 'index': i, 'name': str(row[0]), 'target_name': str(target[2][0]) if target else link['target_text'],
+                    'current': current, 'note': link['note']})
+    return out
+
+def lapse_duplicates(data):
+    """Called when a record is saved. A confirmation whose identity check fails is marked lapsed and stays on the record as audit.
+    It is never current again, even if the text is later put back: the pharmacist has to confirm again."""
+    current = {(st['section'], st['index']): st['current'] for st in duplicate_state(data)}
+    for (key, i), ok in current.items():
+        link = data['details'][key][i]['duplicate_of']
+        if not ok and not link.get('lapsed'): link['lapsed'] = True
+
+def duplicate_text(state):
+    if not state['current']:
+        return 'An earlier pharmacist duplicate confirmation is no longer current (an entry changed or was removed). It needs a new confirmation. Check by hand.'
+    text = 'Pharmacist confirmed this entry as a duplicate of "' + state['target_name'] + '". Use is recorded separately on each entry.'
+    return text + (' Pharmacist note: ' + ' '.join(state['note'].split()) if state['note'].strip() else '')
+
+def duplicate_notes(data):
+    return {(st['section'], st['index']): duplicate_text(st) for st in duplicate_state(data)}
 
 PROPOSAL_CANDIDATE_KEYS = {'source', 'code', 'display', 'kind', 'generic_name', 'brand_name', 'dose_form', 'release'}
 
@@ -121,6 +223,9 @@ def valid_use(m, base, optional):
     if 'reference' in m:
         if not valid_reference(m['reference']): return False
         m = {k: v for k, v in m.items() if k != 'reference'}
+    if 'duplicate_of' in m:
+        if not valid_duplicate(m['duplicate_of']): return False
+        m = {k: v for k, v in m.items() if k != 'duplicate_of'}
     if 'prefill_proposal' in m:
         if not valid_prefill_proposal(m['prefill_proposal']): return False
         m = {k: v for k, v in m.items() if k != 'prefill_proposal'}
@@ -431,6 +536,7 @@ def validate(record):
         for key, field in (('meds', 'prn_use'), ('other_meds', 'kind')):
             for m in d.get(key, []): m.setdefault(field, '')
     medicine_snapshot.validate_ids(record)
+    check_duplicates(record)
     if 'consent_signed_draft' in record and (type(record['consent_signed_draft']) is not bool or (record['consent_signed_draft'] and c['signed'])): raise ValueError('invalid consent draft')
     if 'revision' in record and (not isinstance(record['revision'], str) or not re.fullmatch(r'missing|[0-9a-f]{64}', record['revision'])): raise ValueError('invalid revision')
     if 'saved' in record and not isinstance(record['saved'], bool): raise ValueError('invalid saved flag')
@@ -511,7 +617,7 @@ def save(conn, patient, record, *, locked=False, signing=False):
                             if os.path.exists(temp): os.unlink(temp)
                 if isinstance(record, dict) and old_revision is not None: record['revision'] = old_revision
                 raise
-    validate(record); data = {k: v for k, v in record.items() if k not in ('saved', 'consent_file', 'revision', 'fidelity_warnings')}
+    validate(record); lapse_duplicates(record); data = {k: v for k, v in record.items() if k not in ('saved', 'consent_file', 'revision', 'fidelity_warnings')}
     folder = jobs.patient_folder(patient)
     previous_bytes = records.get(conn, patient['id'], 'interview.json')
     if record.get('revision') != records.digest(previous_bytes): raise Conflict('interview conflict')
@@ -589,7 +695,7 @@ def export_with_note(conn, patient, fmt):
     table('Medicines on referral', ['Medicine','Referral directions','Actually taking','Points to check','Notes'], medicine_rows(data), 3)
     other_rows = [r[:] for r in data['other_meds']]
     for i, meta in enumerate(data['details'].get('other_meds', [])):
-        if i < len(other_rows): other_rows[i][3] = '\n'.join(filter(None, (other_rows[i][3], use_text(meta), CHOICE_LABELS['kind'].get(meta.get('kind'), ''), reference_text(meta))))
+        if i < len(other_rows): other_rows[i][3] = '\n'.join(filter(None, (other_rows[i][3], use_text(meta), CHOICE_LABELS['kind'].get(meta.get('kind'), ''), reference_text(meta), duplicate_notes(data).get(('other_meds', i), ''))))
     table('Other medicines found', ['Medicine','Directions','Why / who','Notes'], other_rows, 3)
     table('Pathology on file', ['Test','Result','Date','Comment'], data['pathology'], 2)
     section('To clarify', '\n'.join(data['clarify']))

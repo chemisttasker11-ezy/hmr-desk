@@ -308,8 +308,10 @@ def _derived(conn, patient):
 
     def other_note(r, m):
         return ' | '.join(filter(None, [*r[2:], interview.use_text(m)]))
+    dup_notes = interview.duplicate_notes(record)
     def referral_note(r, m):
-        return '\n'.join(filter(None, (r[4], 'DAA: ' + m['packed'] if m['packed'] else '')))
+        index = next((n for n, x in enumerate(referral_meta) if x is m), -1)
+        return '\n'.join(filter(None, (r[4], 'DAA: ' + m['packed'] if m['packed'] else '', dup_notes.get(('meds', index), ''))))
     import pathology_records
     clinical_pathology = pathology_records.load(conn, patient)
     verified_pathology = clinical_pathology['records']

@@ -833,3 +833,8 @@ main:has(.interview-context) > header { height: 96px; min-height: 96px; }
   .interview-section { scroll-margin-top: 110px; }
   main:has(.interview-context) > header { height: auto; min-height: 56px; max-height: none; }
 }
+
+.interview-duplicate { border: 1px solid var(--control-border); border-radius: 6px; padding: 8px; margin: 6px 0; display: grid; gap: 6px; }
+.interview-duplicate select, .interview-duplicate textarea { width: 100%; }
+.interview-dup-hint { margin: 0; font-size: 12px; }
+.interview-dup-stale { margin: 0; font-size: 12px; font-weight: 600; }

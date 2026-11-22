@@ -30,7 +30,7 @@ def _classify(name, keys, checked, ingredients):
     return 'unmatched'
 
 
-def compute(confirmed, rows, evidence, ingredients=None):
+def compute(confirmed, rows, evidence, ingredients=None, duplicates=None):
     """confirmed: names on the confirmed list, or None. rows: dicts with name, status, source, has_text.
     Membership of the confirmed list is not proof that an interaction check covered a medicine."""
     checked = [n for n in (confirmed or []) if str(n).strip()]
@@ -52,7 +52,7 @@ def compute(confirmed, rows, evidence, ingredients=None):
     # Only an explicit taking row counts. Confirmed-list membership alone proves neither a status nor coverage.
     active = {_norm(r.get('name')) for r in rows if r.get('status') == 'taking' and str(r.get('name', '')).strip()}
     namesake = [n for n in not_using if _norm(n) in active]
-    return {'evidence': evidence, 'checked': checked, 'not_using': not_using, 'not_using_namesake': namesake, 'not_using_row_notes': row_notes, **groups}
+    return {'evidence': evidence, 'checked': checked, 'not_using': not_using, 'not_using_namesake': namesake, 'not_using_row_notes': row_notes, 'duplicates': list(duplicates or []), **groups}
 
 
 GROUPS = ('on_list', 'ingredient_only', 'off_list', 'unmatched')
@@ -90,13 +90,17 @@ def lines(scope):
             same = [k for k, other in enumerate(scope['not_using']) if _norm(other) == _norm(name)]
             which = ' (entry ' + str(same.index(n) + 1) + ' of ' + str(len(same)) + ' recorded as not using with this name)' if len(same) > 1 else ''
             out.append('Recorded reason for ' + name + which + ': ' + note)
+    for state in scope.get('duplicates', []):
+        out.append(('Pharmacist confirmed a duplicate entry: ' + state['name'] + ' and ' + state['target_name'] + '. This does not record which entry is in use; use is as recorded on each entry.'
+                    + (' Pharmacist note: ' + ' '.join(state['note'].split()) if state['note'].strip() else ''))
+                   if state['current'] else ('An earlier duplicate confirmation for ' + state['name'] + ' is no longer current. Check by hand.'))
     if has_unconfirmed(scope):
         out.append('Medicine reconciliation is incomplete. Any interaction conclusion is limited to the confirmed medicine list.')
     return out
 
 
 def needs_statement(scope):
-    return scope['evidence'] != 'automated_current' or has_unconfirmed(scope)
+    return scope['evidence'] != 'automated_current' or has_unconfirmed(scope) or bool(scope.get('duplicates'))
 
 
 def row_tag(scope, name):
@@ -177,7 +181,7 @@ def for_patient(conn, p):
                 rows.append({'name': row[0], 'status': meta.get('use_status', ''), 'source': key, 'has_text': bool(row[col].strip()),
                              'note': _recorded_reason(meta)})
     names = [m[0] for m in confirmed['meds']] if isinstance(confirmed, dict) and isinstance(confirmed.get('meds'), list) else None
-    return compute(names, rows, evidence_state(conn, p), external_helpers.ingredient_names)
+    return compute(names, rows, evidence_state(conn, p), external_helpers.ingredient_names, interview.duplicate_state(data) if data is not None else [])
 
 
 def apply_to_report(conn, p, data):
