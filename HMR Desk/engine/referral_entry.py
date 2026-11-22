@@ -13,6 +13,7 @@ import db
 import app_paths
 import fitz
 import referral_page_audit
+import referral_source_text
 
 MAX_PDF = 25 * 1024 * 1024
 MAX_PAGES = 150
@@ -58,7 +59,7 @@ def review(conn, paths):
                 if doc.needs_pass: raise ValueError('PDF is password protected')
                 if not 1 <= doc.page_count <= MAX_PAGES:
                     raise ValueError('PDF page count exceeds the 150-page intake limit')
-                pages = [p.get_text()[:MAX_TEXT_PER_PAGE] for p in doc]
+                pages, excluded_overlays = referral_source_text.extract_original_pages(doc, max_chars=MAX_TEXT_PER_PAGE)
                 page_audits = [referral_page_audit.inspect_page(p) for p in doc]
             if not pages: raise ValueError('PDF has no pages')
             methods = ['text' if len(page.strip()) >= 25 else 'ocr' for page in pages]
@@ -75,6 +76,8 @@ def review(conn, paths):
                 if hashlib.sha256(read_pdf(source)).hexdigest() != digest: raise ValueError('Source changed during review; try again')
             kind, _, flags = module.classify('\n'.join(pages))
             flags.extend(ocr_flags)
+            if any(excluded_overlays):
+                flags.append('Identifiable typed PDF interview overlays excluded from the original-referral proposal. Verify ambiguous or flattened overlays against the original source.')
             for page_index, audit in enumerate(page_audits):
                 if audit['needs_image_review']:
                     flags.append('Page ' + str(page_index + 1) + ': substantial image content may contain unread clinical information. Inspect the original page; native text is incomplete evidence.')
