@@ -40,9 +40,10 @@ def test_mocked_link_is_not_admitted_even_without_windows_symlink_privilege(conn
     real_is_symlink = Path.is_symlink
     monkeypatch.setattr(Path, 'is_symlink',
                         lambda self: True if self == entry else real_is_symlink(self))
-    assert records.import_folder(conn, 11, folder) == {}
+    assert records.import_folder(conn, 11, folder) == {'interview.json': 'blocked'}
     assert records.get(conn, 11, 'interview.json') is None
-    assert records.import_file(conn, 11, 'interview.json', entry) is None
+    with pytest.raises(records.LinkedPathBlocked):
+        records.import_file(conn, 11, 'interview.json', entry)
 
 
 def test_real_link_to_other_patient_is_never_imported(conn, tmp_path):
@@ -55,8 +56,9 @@ def test_real_link_to_other_patient_is_never_imported(conn, tmp_path):
         link.symlink_to(other)
     except (OSError, NotImplementedError):
         pytest.skip('real symlink needs privileges on this host')
-    assert records.import_folder(conn, 11, folder) == {}
-    assert records.import_file(conn, 11, 'interview.json', link) is None
+    assert records.import_folder(conn, 11, folder) == {'interview.json': 'blocked'}
+    with pytest.raises(records.LinkedPathBlocked):
+        records.import_file(conn, 11, 'interview.json', link)
     assert records.get(conn, 11, 'interview.json') is None
     assert other.read_bytes() == b'{"notes":"invented private source belonging elsewhere"}'
 
@@ -70,7 +72,8 @@ def test_linked_parent_directory_is_not_imported(conn, tmp_path):
         linked_folder.symlink_to(source, target_is_directory=True)
     except (OSError, NotImplementedError):
         pytest.skip('real directory symlink needs privileges on this host')
-    assert records.import_folder(conn, 11, linked_folder) == {}
+    with pytest.raises(records.LinkedPathBlocked):
+        records.import_folder(conn, 11, linked_folder)
     assert records.get(conn, 11, 'report_spec.json') is None
 
 
@@ -110,3 +113,48 @@ def test_status_does_not_traverse_linked_patient_directory(conn, tmp_path, monke
     state = records.status(conn, lambda p: folder)
     assert state['plain_files_differing_or_not_stored'] >= 1
     assert not state['saved_records_protected']
+
+
+def test_migration_reports_blocked_source_instead_of_successfully_empty(conn, tmp_path, monkeypatch):
+    folder = tmp_path / 'fictional-patient'
+    folder.mkdir()
+    record = folder / 'interview.json'
+    record.write_bytes(b'{"medicines":"invented"}')
+    conn.execute('CREATE TABLE patients(id INTEGER PRIMARY KEY)')
+    conn.execute('INSERT INTO patients(id) VALUES (11)')
+    original = Path.is_symlink
+    monkeypatch.setattr(Path, 'is_symlink',
+                        lambda self: True if self == folder else original(self))
+    result = records.migrate_all(conn, lambda _: folder)
+    assert result['blocked'] == 1
+    assert result['imported'] == 0
+    assert result['errors'] == 0
+    assert records.get(conn, 11, 'interview.json') is None
+    assert record.read_bytes() == b'{"medicines":"invented"}'
+
+
+def test_migration_reports_blocked_extra_and_never_reads_it(conn, tmp_path, monkeypatch):
+    folder = tmp_path / 'fictional-patient'
+    folder.mkdir()
+    external = tmp_path / 'fictional-linked.json'
+    external.write_bytes(b'{"notes":"outside"}')
+    conn.execute('CREATE TABLE patients(id INTEGER PRIMARY KEY)')
+    conn.execute('INSERT INTO patients(id) VALUES (11)')
+    old = Path.is_symlink
+    monkeypatch.setattr(Path, 'is_symlink',
+                        lambda self: True if self == external else old(self))
+    result = records.migrate_all(conn, lambda _: folder,
+                                 lambda _: [(11, 'interview.json', external)])
+    assert result['blocked'] == 1
+    assert records.get(conn, 11, 'interview.json') is None
+
+
+def test_mock_windows_junction_parent_is_rejected_without_following(conn, tmp_path, monkeypatch):
+    folder = tmp_path / 'junction-folder'
+    folder.mkdir()
+    (folder / 'interview.json').write_bytes(b'{"notes":"junction source"}')
+    monkeypatch.setattr(Path, 'is_junction',
+                        lambda self: self == folder, raising=False)
+    with pytest.raises(records.LinkedPathBlocked):
+        records.import_folder(conn, 11, folder)
+    assert records.get(conn, 11, 'interview.json') is None
